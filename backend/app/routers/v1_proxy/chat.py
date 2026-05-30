@@ -19,8 +19,8 @@ from app.services.proxy import (
     calculate_cooldown,
     mark_connection_unavailable,
 )
-from app.services.usage_tracking import save_request_detail, save_request_usage
-from app.routers.usage_stream import notify_usage_update
+from app.services.usage_tracking import save_request_tracking
+from app.services.active_requests import track_request_start, track_request_end
 from app.models.provider import ProviderConnection
 from sqlalchemy import select
 
@@ -103,6 +103,7 @@ async def chat_completions(
 
         try:
             request_start_time: float = time.time()
+            active_request_id: str = track_request_start(target.provider, target.model)
             if stream:
                 resp = await _stream_response(
                     target, forward_body, request_id,
@@ -127,7 +128,7 @@ async def chat_completions(
                 usage: dict = (resp_data or {}).get("usage", {})
                 prompt_tokens: int = usage.get("prompt_tokens", 0)
                 completion_tokens: int = usage.get("completion_tokens", 0)
-                await save_request_usage(
+                await save_request_tracking(
                     db,
                     provider=target.provider,
                     model=target.model,
@@ -136,19 +137,8 @@ async def chat_completions(
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     tokens_json=usage,
-                )
-                notify_usage_update()
-
-                await save_request_detail(
-                    db,
-                    provider=target.provider,
-                    model=target.model,
-                    connection_id=target.connection_id,
-                    status="ok",
                     latency_ttft=total_latency_ms,
                     latency_total=total_latency_ms,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
                     request_body=body,
                     provider_request_body=forward_body,
                     provider_response_body=resp_data,
@@ -156,9 +146,11 @@ async def chat_completions(
                 )
             # Streaming: usage tracking happens inside _stream_response generator
 
+            track_request_end(active_request_id)
             return resp
 
         except httpx.HTTPStatusError as e:
+            track_request_end(active_request_id)
             last_error_detail = e.response.text[:500]
             last_error_status = e.response.status_code
             if not _should_fallback_on_error(e.response.status_code, e.response.text):
@@ -187,6 +179,7 @@ async def chat_completions(
             continue
 
         except httpx.ConnectError as e:
+            track_request_end(active_request_id)
             last_error_detail = str(e)
             last_error_status = 503
             if target.connection_id:
@@ -194,6 +187,7 @@ async def chat_completions(
             continue
 
         except Exception as e:
+            track_request_end(active_request_id)
             last_error_detail = str(e)
             last_error_status = 500
             if target.connection_id:

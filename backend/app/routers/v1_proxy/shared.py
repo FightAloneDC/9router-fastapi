@@ -8,8 +8,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.proxy import should_fallback_on_error
-from app.services.usage_tracking import save_request_detail, save_request_usage
-from app.routers.usage_stream import notify_usage_update
+from app.services.usage_tracking import save_request_tracking
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -155,6 +154,7 @@ async def _stream_response(
 
     async def generate():  # type: ignore[no-untyped-def]
         usage: dict = {}
+        chunk_count: int = 0
         async with httpx.AsyncClient(timeout=300.0) as client:
             try:
                 async with client.stream(
@@ -163,6 +163,7 @@ async def _stream_response(
                     **send_kwargs,
                 ) as resp:
                     async for chunk in resp.aiter_bytes():
+                        chunk_count += 1
                         if is_qoder:
                             # Qoder sends wrapped SSE: {"statusCodeValue":200,"body":"..."}
                             # Unwrap each line before forwarding
@@ -203,6 +204,15 @@ async def _stream_response(
                 yield b"data: [DONE]\n\n"
 
         # Save usage tracking AFTER stream is consumed (usage is now available)
+        # If no usage captured from stream, estimate from chunk count
+        if not usage.get("prompt_tokens") and not usage.get("completion_tokens"):
+            usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": chunk_count * 10,
+                "total_tokens": chunk_count * 10,
+                "_estimated": True,
+            }
+
         if db and provider and request_start_time:
             try:
                 from app.database import async_session
@@ -210,7 +220,7 @@ async def _stream_response(
                     total_latency_ms = int((time.time() - request_start_time) * 1000)
                     prompt_tokens = usage.get("prompt_tokens", 0)
                     completion_tokens = usage.get("completion_tokens", 0)
-                    await save_request_usage(
+                    await save_request_tracking(
                         tracking_db,
                         provider=provider,
                         model=model,
@@ -219,23 +229,13 @@ async def _stream_response(
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
                         tokens_json=usage,
-                    )
-                    await save_request_detail(
-                        tracking_db,
-                        provider=provider,
-                        model=model,
-                        connection_id=connection_id,
-                        status="ok",
                         latency_ttft=total_latency_ms,
                         latency_total=total_latency_ms,
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
                         request_body=request_body,
                         provider_request_body=body,
                         provider_response_body={"_note": "Streaming response — raw not captured"},
                         response_body={"_note": "Streaming response"},
                     )
-                    notify_usage_update()
             except Exception as e:
                 print(f"[STREAM TRACKING ERROR] {e}", flush=True)
 

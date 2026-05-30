@@ -20,8 +20,8 @@ from app.services.proxy import (
     calculate_cooldown,
     mark_connection_unavailable,
 )
-from app.services.usage_tracking import save_request_detail, save_request_usage
-from app.routers.usage_stream import notify_usage_update
+from app.services.usage_tracking import save_request_tracking
+from app.services.active_requests import track_request_start, track_request_end
 from app.models.provider import ProviderConnection
 
 from .shared import _build_embeddings_url, _build_embeddings_body, _should_fallback_on_error
@@ -86,6 +86,7 @@ async def embeddings(
 
         try:
             request_start_time: float = time.time()
+            active_request_id: str = track_request_start(target.provider, target.model)
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     upstream_url,
@@ -110,7 +111,7 @@ async def embeddings(
 
                 # Track usage
                 usage: dict = data.get("usage", {})
-                await save_request_usage(
+                await save_request_tracking(
                     db,
                     provider=target.provider,
                     model=target.model,
@@ -119,26 +120,15 @@ async def embeddings(
                     prompt_tokens=usage.get("prompt_tokens", 0),
                     completion_tokens=usage.get("completion_tokens", 0),
                     tokens_json=usage,
-                )
-                notify_usage_update()
-
-                # Save full request detail
-                await save_request_detail(
-                    db,
-                    provider=target.provider,
-                    model=target.model,
-                    connection_id=target.connection_id,
-                    status="ok",
                     latency_ttft=total_latency_ms,
                     latency_total=total_latency_ms,
-                    prompt_tokens=usage.get("prompt_tokens", 0),
-                    completion_tokens=usage.get("completion_tokens", 0),
                     request_body=body,
                     provider_request_body=forward_body,
                     provider_response_body=data,
                     response_body=data,
                 )
 
+                track_request_end(active_request_id)
                 return JSONResponse(
                     status_code=resp.status_code,
                     content=data,
@@ -146,6 +136,7 @@ async def embeddings(
                 )
 
         except httpx.HTTPStatusError as e:
+            track_request_end(active_request_id)
             last_error_detail = e.response.text[:500]
             last_error_status = e.response.status_code
             if not _should_fallback_on_error(e.response.status_code, e.response.text):
@@ -170,12 +161,14 @@ async def embeddings(
                 exclude_ids.add(target.connection_id)
             continue
         except httpx.ConnectError as e:
+            track_request_end(active_request_id)
             last_error_detail = str(e)
             last_error_status = 503
             if target.connection_id:
                 exclude_ids.add(target.connection_id)
             continue
         except Exception as e:
+            track_request_end(active_request_id)
             last_error_detail = str(e)
             last_error_status = 500
             if target.connection_id:

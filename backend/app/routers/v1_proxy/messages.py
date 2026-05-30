@@ -25,8 +25,8 @@ from app.services.message_translator import (
     openai_to_claude_response,
     ClaudeStreamTranslator,
 )
-from app.services.usage_tracking import save_request_detail, save_request_usage
-from app.routers.usage_stream import notify_usage_update
+from app.services.usage_tracking import save_request_tracking
+from app.services.active_requests import track_request_start, track_request_end
 from app.models.provider import ProviderConnection
 
 from .shared import _should_fallback_on_error
@@ -123,6 +123,7 @@ async def messages_endpoint(
 
         try:
             request_start_time: float = time.time()
+            active_request_id: str = track_request_start(target.provider, target.model)
             if is_stream:
                 resp = await _messages_stream_response(
                     target, forward_body, request_id,
@@ -172,7 +173,7 @@ async def messages_endpoint(
                 usage: dict = (resp_data or {}).get("usage", {})
                 prompt_tokens: int = usage.get("prompt_tokens", usage.get("input_tokens", 0))
                 completion_tokens: int = usage.get("completion_tokens", usage.get("output_tokens", 0))
-                await save_request_usage(
+                await save_request_tracking(
                     db,
                     provider=target.provider,
                     model=target.model,
@@ -181,19 +182,8 @@ async def messages_endpoint(
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     tokens_json=usage,
-                )
-                notify_usage_update()
-
-                await save_request_detail(
-                    db,
-                    provider=target.provider,
-                    model=target.model,
-                    connection_id=target.connection_id,
-                    status="ok",
                     latency_ttft=total_latency_ms,
                     latency_total=total_latency_ms,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
                     request_body=body,
                     provider_request_body=forward_body,
                     provider_response_body=resp_data,
@@ -201,9 +191,11 @@ async def messages_endpoint(
                 )
             # Streaming: usage tracking happens inside _messages_stream_response generator
 
+            track_request_end(active_request_id)
             return resp
 
         except httpx.HTTPStatusError as e:
+            track_request_end(active_request_id)
             last_error_detail = e.response.text[:500]
             last_error_status = e.response.status_code
             if not _should_fallback_on_error(e.response.status_code, e.response.text):
@@ -240,12 +232,14 @@ async def messages_endpoint(
                 exclude_ids.add(target.connection_id)
             continue
         except httpx.ConnectError as e:
+            track_request_end(active_request_id)
             last_error_detail = str(e)
             last_error_status = 503
             if target.connection_id:
                 exclude_ids.add(target.connection_id)
             continue
         except Exception as e:
+            track_request_end(active_request_id)
             last_error_detail = str(e)
             last_error_status = 500
             if target.connection_id:
@@ -387,7 +381,7 @@ async def _messages_stream_response(
                     usage = usage_ref["usage"]
                     prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens", 0))
                     completion_tokens = usage.get("completion_tokens", usage.get("output_tokens", 0))
-                    await save_request_usage(
+                    await save_request_tracking(
                         tracking_db,
                         provider=provider,
                         model=model,
@@ -396,23 +390,13 @@ async def _messages_stream_response(
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
                         tokens_json=usage,
-                    )
-                    await save_request_detail(
-                        tracking_db,
-                        provider=provider,
-                        model=model,
-                        connection_id=connection_id,
-                        status="ok",
                         latency_ttft=total_latency_ms,
                         latency_total=total_latency_ms,
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
                         request_body=request_body,
                         provider_request_body=body,
                         provider_response_body={"_note": "Streaming response — raw not captured"},
                         response_body={"_note": "Streaming response"},
                     )
-                    notify_usage_update()
             except Exception as e:
                 print(f"[MESSAGES STREAM TRACKING ERROR] {e}", flush=True)
 

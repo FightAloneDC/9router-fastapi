@@ -18,8 +18,7 @@ from app.services.search_adapters import (
     _NOAUTH_SEARCH_PROVIDERS,
     execute_search,
 )
-from app.services.usage_tracking import save_request_detail, save_request_usage
-from app.routers.usage_stream import notify_usage_update
+from app.services.usage_tracking import save_request_tracking
 from app.models.provider import ProviderConnection
 
 router = APIRouter()
@@ -149,22 +148,12 @@ async def search_endpoint(
     search_result["metrics"]["response_time_ms"] = elapsed_ms
 
     # Track usage (search — no token counts)
-    await save_request_usage(
+    await save_request_tracking(
         db,
         provider=provider_id,
         model=provider_id,
         connection_id=str(conn.id) if conn else None,
         endpoint="/v1/search",
-    )
-    notify_usage_update()
-
-    # Save full request detail
-    await save_request_detail(
-        db,
-        provider=provider_id,
-        model=provider_id,
-        connection_id=str(conn.id) if conn else None,
-        status="ok",
         latency_ttft=elapsed_ms,
         latency_total=elapsed_ms,
         request_body=body,

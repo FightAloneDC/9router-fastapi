@@ -1,11 +1,13 @@
 """SSE endpoint for real-time usage stats updates."""
 
 import asyncio
+import json
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.routers.auth import get_current_user
+from app.services.active_requests import get_active_requests
 
 router = APIRouter(tags=["usage-stream"])
 
@@ -28,10 +30,12 @@ async def _event_generator(queue: asyncio.Queue):
         while True:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=25)
-                yield f"event: {event}\ndata: {{}}\n\n"
+                active = get_active_requests()
+                yield f"event: {event}\ndata: {json.dumps({'activeRequests': active})}\n\n"
             except asyncio.TimeoutError:
-                # Send keepalive ping
-                yield ": keepalive\n\n"
+                # Send keepalive with active requests
+                active = get_active_requests()
+                yield f"event: keepalive\ndata: {json.dumps({'activeRequests': active})}\n\n"
     except asyncio.CancelledError:
         pass
 

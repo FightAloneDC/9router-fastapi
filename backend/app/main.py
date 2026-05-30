@@ -107,7 +107,7 @@ def create_app() -> FastAPI:
     app.include_router(models_router.router)
     app.include_router(oauth_router.router)
     app.include_router(media_providers_router.router)
-    app.include_router(usage_stream_router.router, prefix="/api")
+    app.include_router(usage_stream_router.router)
 
     @app.get("/health")
     async def health():

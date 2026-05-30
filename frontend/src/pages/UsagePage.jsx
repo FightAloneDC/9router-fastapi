@@ -1155,6 +1155,9 @@ export default function UsagePage() {
   const [chartData, setChartData] = useState([])
   const [loading, setLoading] = useState(true)
   const [hasData, setHasData] = useState(false)
+  const [activeRequests, setActiveRequests] = useState([])
+  const [lastProvider, setLastProvider] = useState('')
+  const [errorProvider, setErrorProvider] = useState('')
 
   // Table view & sort from URL
   const tabParam = searchParams.get('tab')
@@ -1202,26 +1205,50 @@ export default function UsagePage() {
     }
   }, [period, fetchData, activeTab])
 
-  // SSE for real-time updates (disabled — endpoint not yet implemented)
-  // useEffect(() => {
-  //   if (activeTab !== 'overview') return
-  //   const token = localStorage.getItem('token')
-  //   if (!token) return
-  //   let eventSource
-  //   let reconnectTimer
-  //   const connect = () => {
-  //     eventSource = new EventSource(`/api/usage/stream?token=${token}`)
-  //     eventSource.addEventListener('update', () => { fetchData(period) })
-  //     eventSource.onerror = () => {
-  //       eventSource.close()
-  //       reconnectTimer = setTimeout(connect, 5000)
-  //     }
-  //   }
-  //   connect()
-  //   return () => {
-  //     if (eventSource) eventSource.close()
-  //     if (reconnectTimer) clearTimeout(reconnectTimer)
-  //   }
+  // SSE for real-time updates
+  useEffect(() => {
+    if (activeTab !== 'overview') return
+    const token = localStorage.getItem('token')
+    if (!token) return
+
+    let eventSource
+    let reconnectTimer
+
+    const connect = () => {
+      eventSource = new EventSource(`/api/usage/stream?token=${token}`)
+
+      eventSource.addEventListener('update', (e) => {
+        try {
+          const data = JSON.parse(e.data || '{}')
+          if (data.activeRequests) {
+            setActiveRequests(data.activeRequests)
+          }
+        } catch { /* ignore parse errors */ }
+        fetchData(period)
+      })
+
+      eventSource.addEventListener('keepalive', (e) => {
+        try {
+          const data = JSON.parse(e.data || '{}')
+          if (data.activeRequests) {
+            setActiveRequests(data.activeRequests)
+          }
+        } catch { /* ignore parse errors */ }
+      })
+
+      eventSource.onerror = () => {
+        eventSource.close()
+        reconnectTimer = setTimeout(connect, 5000)
+      }
+    }
+
+    connect()
+
+    return () => {
+      if (eventSource) eventSource.close()
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+    }
+  }, [activeTab, period, fetchData])
   // }, [activeTab, period, fetchData])
 
   return (
@@ -1280,7 +1307,12 @@ export default function UsagePage() {
               {/* Split layout: Topology + Recent Requests */}
               <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
                 <div className="lg:col-span-3">
-                  <ProviderTopology providers={stats?.byProvider || []} />
+                  <ProviderTopology
+                    providers={stats?.byProvider || []}
+                    activeRequests={activeRequests}
+                    lastProvider={lastProvider}
+                    errorProvider={errorProvider}
+                  />
                 </div>
                 <div className="lg:col-span-2 min-h-[400px]">
                   <RecentRequests requests={stats?.recentRequests || []} />

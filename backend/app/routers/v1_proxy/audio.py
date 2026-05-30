@@ -25,8 +25,7 @@ from app.services.proxy import (
     _resolve_base_url,
 )
 from app.services.tts_adapters import TTS_ADAPTERS, _format_to_mime
-from app.services.usage_tracking import save_request_detail, save_request_usage
-from app.routers.usage_stream import notify_usage_update
+from app.services.usage_tracking import save_request_tracking
 from app.models.provider import ProviderConnection
 from app.services.stt_adapters import (
     STT_ADAPTERS,
@@ -203,22 +202,12 @@ async def audio_speech(
                 await update_connection_usage(db, conn_id)
 
             # Track usage (TTS — no token counts)
-            await save_request_usage(
+            await save_request_tracking(
                 db,
                 provider=provider_id,
                 model=tts_model,
                 connection_id=conn_id,
                 endpoint="/v1/audio/speech",
-            )
-            notify_usage_update()
-
-            # Save full request detail
-            await save_request_detail(
-                db,
-                provider=provider_id,
-                model=tts_model,
-                connection_id=conn_id,
-                status="ok",
                 latency_ttft=total_latency_ms,
                 latency_total=total_latency_ms,
                 request_body=body,
@@ -462,22 +451,12 @@ async def audio_transcriptions(
                 await update_connection_usage(db, conn_id)
 
             # Track usage (STT — no token counts)
-            await save_request_usage(
+            await save_request_tracking(
                 db,
                 provider=provider_id,
                 model=model_id,
                 connection_id=conn_id,
                 endpoint="/v1/audio/transcriptions",
-            )
-            notify_usage_update()
-
-            # Save full request detail
-            await save_request_detail(
-                db,
-                provider=provider_id,
-                model=model_id,
-                connection_id=conn_id,
-                status="ok",
                 latency_ttft=total_latency_ms,
                 latency_total=total_latency_ms,
                 request_body={"model": model_str, "language": language, "response_format": response_format_str},

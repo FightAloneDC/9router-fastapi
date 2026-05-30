@@ -11,8 +11,7 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.services.api_key_auth import validate_api_key
-from app.services.usage_tracking import save_request_detail, save_request_usage
-from app.routers.usage_stream import notify_usage_update
+from app.services.usage_tracking import save_request_tracking
 from app.models.provider import ProviderConnection
 from app.routers.providers.constants import PROVIDER_DEFAULTS
 
@@ -151,20 +150,11 @@ async def web_fetch(
             content: str = resp.text
 
             # Track usage (web fetch — no token counts)
-            await save_request_usage(
+            await save_request_tracking(
                 db,
                 provider=provider_id,
                 model=provider_id,
                 endpoint="/v1/web/fetch",
-            )
-            notify_usage_update()
-
-            # Save full request detail
-            await save_request_detail(
-                db,
-                provider=provider_id,
-                model=provider_id,
-                status="ok",
                 latency_ttft=total_latency_ms,
                 latency_total=total_latency_ms,
                 request_body=body,

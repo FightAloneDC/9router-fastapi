@@ -301,18 +301,18 @@ async def get_usage_stats(
         cost_change = ((current_cost - prior_cost) / prior_cost) * 100
     cost_per_request = current_cost / row.total_requests if row.total_requests > 0 else 0.0
 
-    # Recent requests (last 20)
+    # Recent requests (last 20) — from request_details for consistency with Details tab
     recent_result = await db.execute(
         select(
-            UsageHistory.timestamp,
-            UsageHistory.model,
-            UsageHistory.provider,
-            UsageHistory.prompt_tokens,
-            UsageHistory.completion_tokens,
-            UsageHistory.status,
+            RequestDetail.timestamp,
+            RequestDetail.model,
+            RequestDetail.provider,
+            RequestDetail.prompt_tokens,
+            RequestDetail.completion_tokens,
+            RequestDetail.status,
         )
-        .where(UsageHistory.timestamp >= since)
-        .order_by(UsageHistory.timestamp.desc())
+        .where(RequestDetail.timestamp >= since)
+        .order_by(RequestDetail.timestamp.desc())
         .limit(20)
     )
     recent_requests = [
