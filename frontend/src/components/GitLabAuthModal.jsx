@@ -1,0 +1,228 @@
+import { useState } from 'react'
+import { Lock, Key } from 'lucide-react'
+import Modal from './ui/Modal'
+import Button from './ui/Button'
+import Input from './ui/Input'
+import OAuthModal from './OAuthModal'
+
+const GITLAB_COM = 'https://gitlab.com'
+
+function getRedirectUri() {
+  if (typeof window === 'undefined') return 'http://localhost/callback'
+  const port = window.location.port || (window.location.protocol === 'https:' ? '443' : '80')
+  return `http://localhost:${port}/callback`
+}
+
+export default function GitLabAuthModal({ isOpen, providerInfo, onSuccess, onClose }) {
+  const [mode, setMode] = useState(null) // null | 'oauth' | 'pat'
+  const [baseUrl, setBaseUrl] = useState(GITLAB_COM)
+  const [clientId, setClientId] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
+  const [pat, setPat] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [showOAuth, setShowOAuth] = useState(false)
+  const [oauthMeta, setOauthMeta] = useState(null)
+
+  const reset = () => {
+    setMode(null)
+    setBaseUrl(GITLAB_COM)
+    setClientId('')
+    setClientSecret('')
+    setPat('')
+    setError(null)
+    setLoading(false)
+    setShowOAuth(false)
+    setOauthMeta(null)
+  }
+
+  const handleClose = () => {
+    reset()
+    onClose()
+  }
+
+  const handleOAuthStart = () => {
+    if (!clientId.trim()) {
+      setError('Client ID is required')
+      return
+    }
+    setError(null)
+    setOauthMeta({
+      baseUrl: baseUrl.trim() || GITLAB_COM,
+      clientId: clientId.trim(),
+      clientSecret: clientSecret.trim(),
+    })
+    setShowOAuth(true)
+  }
+
+  const handlePATSubmit = async () => {
+    if (!pat.trim()) {
+      setError('Personal Access Token is required')
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/oauth/gitlab/pat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: pat.trim(), baseUrl: baseUrl.trim() || GITLAB_COM }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Authentication failed')
+      onSuccess?.()
+      handleClose()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (!isOpen) return null
+
+  // Sub-modal for OAuth PKCE flow
+  if (showOAuth && oauthMeta) {
+    return (
+      <OAuthModal
+        isOpen
+        provider="gitlab"
+        providerInfo={providerInfo}
+        oauthMeta={oauthMeta}
+        onSuccess={() => {
+          onSuccess?.()
+          handleClose()
+        }}
+        onClose={() => {
+          setShowOAuth(false)
+          setOauthMeta(null)
+        }}
+      />
+    )
+  }
+
+  return (
+    <Modal isOpen={isOpen} title="Connect GitLab Duo" onClose={handleClose}>
+      <div className="flex flex-col gap-4">
+        {/* Mode selection */}
+        {!mode && (
+          <>
+            <p className="text-sm text-zinc-400">
+              Choose how to authenticate with GitLab Duo:
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setMode('oauth')}
+                className="flex flex-col items-center gap-2 p-4 rounded-lg border border-zinc-700 hover:border-blue-400 hover:bg-blue-400/5 transition-colors text-left"
+              >
+                <Lock className="w-6 h-6 text-blue-400" />
+                <div>
+                  <p className="text-sm font-medium">OAuth App</p>
+                  <p className="text-xs text-zinc-400">Use a GitLab OAuth application</p>
+                </div>
+              </button>
+              <button
+                onClick={() => setMode('pat')}
+                className="flex flex-col items-center gap-2 p-4 rounded-lg border border-zinc-700 hover:border-blue-400 hover:bg-blue-400/5 transition-colors text-left"
+              >
+                <Key className="w-6 h-6 text-blue-400" />
+                <div>
+                  <p className="text-sm font-medium">Personal Access Token</p>
+                  <p className="text-xs text-zinc-400">Use a GitLab PAT with api scope</p>
+                </div>
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* OAuth mode */}
+        {mode === 'oauth' && (
+          <>
+            <p className="text-xs text-zinc-400">
+              Create an OAuth app at{' '}
+              <a
+                href={`${baseUrl.trim() || GITLAB_COM}/-/profile/applications`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-blue-400 underline"
+              >
+                GitLab Applications
+              </a>{' '}
+              with redirect URI{' '}
+              <code className="bg-zinc-800 px-1 rounded text-xs">{getRedirectUri()}</code>
+            </p>
+            <Input
+              label="GitLab Base URL"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder={GITLAB_COM}
+            />
+            <Input
+              label="Client ID"
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              placeholder="Your OAuth application client ID"
+            />
+            <Input
+              label="Client Secret (optional for PKCE)"
+              value={clientSecret}
+              onChange={(e) => setClientSecret(e.target.value)}
+              placeholder="Leave empty for public PKCE app"
+            />
+            {error && <p className="text-sm text-red-500">{error}</p>}
+            <div className="flex gap-2">
+              <Button onClick={handleOAuthStart} fullWidth disabled={!clientId.trim()}>
+                Authorize
+              </Button>
+              <Button onClick={() => { setMode(null); setError(null) }} variant="ghost" fullWidth>
+                Back
+              </Button>
+            </div>
+          </>
+        )}
+
+        {/* PAT mode */}
+        {mode === 'pat' && (
+          <>
+            <p className="text-xs text-zinc-400">
+              Create a PAT at{' '}
+              <a
+                href={`${baseUrl.trim() || GITLAB_COM}/-/user_settings/personal_access_tokens`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-blue-400 underline"
+              >
+                GitLab Access Tokens
+              </a>{' '}
+              with scopes: <code className="bg-zinc-800 px-1 rounded text-xs">api</code>,{' '}
+              <code className="bg-zinc-800 px-1 rounded text-xs">read_user</code>, and{' '}
+              <code className="bg-zinc-800 px-1 rounded text-xs">ai_features</code>.
+            </p>
+            <Input
+              label="GitLab Base URL"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder={GITLAB_COM}
+            />
+            <Input
+              label="Personal Access Token"
+              value={pat}
+              onChange={(e) => setPat(e.target.value)}
+              placeholder="glpat-xxxxxxxxxxxxxxxxxxxx"
+              type="password"
+            />
+            {error && <p className="text-sm text-red-500">{error}</p>}
+            <div className="flex gap-2">
+              <Button onClick={handlePATSubmit} fullWidth disabled={!pat.trim() || loading} loading={loading}>
+                Connect
+              </Button>
+              <Button onClick={() => { setMode(null); setError(null) }} variant="ghost" fullWidth>
+                Back
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
+  )
+}

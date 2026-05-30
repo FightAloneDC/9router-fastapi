@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: 9router-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dev_9route
+      POSTGRES_PASSWORD: dev_9route_pass
+      POSTGRES_DB: db_9route
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dev_9route -d db_9route"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: prod
+    container_name: 9router-backend
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://dev_9route:dev_9route_pass@db:5432/db_9route"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: prod
+    container_name: 9router-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
