@@ -873,7 +873,14 @@ async def build_qoder_request(
     model = body.get("model", "")
 
     # Get model config from cache — if missing, force-refresh catalog first
-    qoder_key = model.replace("qoder/", "")
+    # Resolve model ID: "qd/qoder/auto" → alias "qd" resolves to "qoder" → strip → "auto"
+    if "/" in model:
+        parts = model.split("/", 1)
+        resolved = ALIAS_TO_ID.get(parts[0], parts[0])
+        remainder = parts[1]
+        qoder_key = remainder[len(resolved) + 1:] if remainder.startswith(resolved + "/") else remainder
+    else:
+        qoder_key = model
     model_config = get_qoder_model_config(user_id, access_token, qoder_key)
     if model_config is None:
         from app.services.qoder.models import resolve_qoder_models
@@ -890,6 +897,7 @@ async def build_qoder_request(
         body=body,
         credentials={"provider_specific": {"userId": user_id, "machineId": machine_id}},
         model_config=model_config,
+        qoder_key=qoder_key,
     )
 
     # JSON → WAF-bypass encode (matching Node.js: JSON.stringify → qoderEncodeBody)
