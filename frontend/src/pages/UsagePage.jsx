@@ -916,6 +916,10 @@ function RequestDetailsTab() {
 
   useEffect(() => {
     fetchDetails() // eslint-disable-line react-hooks/set-state-in-effect
+
+    // Polling fallback: refresh details every 30s
+    const pollTimer = setInterval(fetchDetails, 30000)
+    return () => clearInterval(pollTimer)
   }, [fetchDetails])
 
   const [detailLoading, setDetailLoading] = useState(false)
@@ -1244,7 +1248,13 @@ export default function UsagePage() {
 
     connect()
 
+    // Polling fallback: refresh data every 30s in case SSE misses events
+    const pollTimer = setInterval(() => {
+      fetchData(period)
+    }, 30000)
+
     return () => {
+      clearInterval(pollTimer)
       if (eventSource) eventSource.close()
       if (reconnectTimer) clearTimeout(reconnectTimer)
     }
