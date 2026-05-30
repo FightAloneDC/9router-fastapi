@@ -103,6 +103,7 @@ def build_qoder_request_body(
     body: dict[str, Any],
     credentials: dict[str, Any],
     model_config: dict[str, Any] | None = None,
+    qoder_key: str = "",
 ) -> dict[str, Any]:
     """Transform OpenAI-format request to Qoder format.
 
@@ -111,12 +112,13 @@ def build_qoder_request_body(
         body: OpenAI-format request body
         credentials: Connection credentials
         model_config: Model config from catalog (optional, will use defaults if not provided)
+        qoder_key: Resolved model key (e.g., "auto"). If empty, derived from model string.
 
     Returns:
         Qoder-format request body
     """
-    # Strip "qoder/" prefix
-    qoder_key = model.replace("qoder/", "") if model.startswith("qoder/") else model
+    if not qoder_key:
+        qoder_key = model.replace("qoder/", "") if model.startswith("qoder/") else model
 
     # Validate model
     if qoder_key not in QODER_MODEL_MAP:
