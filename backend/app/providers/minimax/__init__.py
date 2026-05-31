@@ -1,0 +1,1 @@
+"""Minimax Coding provider."""

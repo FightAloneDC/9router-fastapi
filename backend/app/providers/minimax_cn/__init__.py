@@ -1,0 +1,1 @@
+"""Minimax (China) provider."""
