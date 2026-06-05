@@ -13,7 +13,7 @@ from app.database import get_db
 from app.services.api_key_auth import validate_api_key
 from app.services.usage_tracking import save_request_tracking
 from app.models.provider import ProviderConnection
-from app.routers.providers.constants import PROVIDER_DEFAULTS
+from app.routers.providers.helpers import _get_provider_config
 
 router = APIRouter()
 
@@ -73,7 +73,7 @@ async def _resolve_webfetch_connection(
 
     # Auto-detect: find first active webFetch provider
     for conn in connections:
-        defaults: dict = PROVIDER_DEFAULTS.get(conn.provider, {})
+        defaults: dict = _get_provider_config(conn.provider)
         kinds: list[str] = defaults.get("serviceKinds", ["llm"])
         if "webFetch" in kinds:
             data: dict = json.loads(conn.data) if conn.data else {}

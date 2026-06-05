@@ -8,7 +8,22 @@ from sqlalchemy import select
 
 from app.models.provider import ProviderConnection, ProviderNode
 from app.models.proxy_pool import ProxyPool
-from app.routers.providers.constants import _DATA_INTERNAL_KEYS, PROVIDER_DEFAULTS, MODEL_TYPE_OVERRIDES, infer_model_type, normalize_models_list
+from app.providers.provider import Provider
+from app.routers.providers.constants import _DATA_INTERNAL_KEYS, MODEL_TYPE_OVERRIDES, infer_model_type, normalize_models_list
+
+
+def _get_provider_config(provider: str) -> dict:
+    """Get provider config dict from Provider class, with fallback."""
+    try:
+        p = Provider(provider)
+        c = p.config()
+        return {
+            "baseUrl": c.BASE_URL,
+            "validationType": c.VALIDATION_TYPE,
+            "serviceKinds": c.SERVICE_KINDS or ["llm"],
+        }
+    except (ValueError, ModuleNotFoundError):
+        return {}
 
 
 def _get_base_url(provider: str, body_base_url: Optional[str] = None, extra_data: Optional[dict] = None) -> str:
@@ -29,13 +44,14 @@ def _get_base_url(provider: str, body_base_url: Optional[str] = None, extra_data
     if extra_data and extra_data.get("baseUrl"):
         return extra_data["baseUrl"].rstrip("/")
 
-    defaults = PROVIDER_DEFAULTS.get(provider, {})
+    defaults = _get_provider_config(provider)
     return defaults.get("baseUrl", "").rstrip("/")
 
 
 def _get_validation_type(provider: str) -> str:
     """Get the validation strategy for a provider."""
-    return PROVIDER_DEFAULTS.get(provider, {}).get("validationType", "openai")
+    defaults = _get_provider_config(provider)
+    return defaults.get("validationType", "openai")
 
 
 def _connection_to_out(conn: ProviderConnection) -> dict:
@@ -53,6 +69,8 @@ def _connection_to_out(conn: ProviderConnection) -> dict:
 
     # Extract provider-specific data (everything not in _DATA_INTERNAL_KEYS)
     provider_specific = {k: v for k, v in data.items() if k not in _DATA_INTERNAL_KEYS}
+
+    defaults = _get_provider_config(conn.provider)
 
     return {
         "id": conn.id,
@@ -79,7 +97,7 @@ def _connection_to_out(conn: ProviderConnection) -> dict:
         "providerSpecificData": provider_specific or None,
         "created_at": conn.created_at,
         "updated_at": conn.updated_at,
-        "serviceKinds": PROVIDER_DEFAULTS.get(conn.provider, {}).get("serviceKinds", ["llm"]),
+        "serviceKinds": defaults.get("serviceKinds", ["llm"]),
     }
 
 

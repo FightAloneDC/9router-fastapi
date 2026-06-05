@@ -26,7 +26,7 @@ from app.services.proxy import (
 from app.services.image_adapters import IMAGE_ADAPTERS, image_comfyui, _stub_adapter
 from app.services.usage_tracking import save_request_tracking
 from app.models.provider import ProviderConnection
-from app.routers.providers.constants import PROVIDER_DEFAULTS
+from app.routers.providers.helpers import _get_provider_config
 
 from .shared import _should_fallback_on_error
 
@@ -155,7 +155,7 @@ async def images_generations(
             continue
 
         if not base_url and provider_id in _NOAUTH_PROVIDERS:
-            defaults: dict = PROVIDER_DEFAULTS.get(provider_id, {})
+            defaults: dict = _get_provider_config(provider_id)
             base_url = defaults.get("baseUrl", "http://localhost:7860")
 
         try:

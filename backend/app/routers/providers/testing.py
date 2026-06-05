@@ -15,7 +15,8 @@ from app.database import get_db
 from app.models.provider import ProviderConnection, ProviderNode
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
-from app.routers.providers.constants import PROVIDER_DEFAULTS, infer_model_type
+from app.routers.providers.constants import infer_model_type
+from app.routers.providers.helpers import _get_provider_config
 from app.routers.providers.helpers import _get_base_url, _get_validation_type
 from app.routers.providers.validation import (
     _validate_anthropic,
@@ -215,7 +216,8 @@ async def _test_provider_connection(conn: ProviderConnection, db: AsyncSession) 
         return {"valid": vr.valid, "error": vr.error, "latencyMs": 0, "models": vr.models}
 
     # Try from defaults
-    default_url = PROVIDER_DEFAULTS.get(provider, {}).get("baseUrl", "")
+    defaults = _get_provider_config(provider)
+    default_url = defaults.get("baseUrl", "")
     if default_url:
         vr = await _validate_openai_compatible(api_key, default_url)
         return {"valid": vr.valid, "error": vr.error, "latencyMs": 0, "models": vr.models}

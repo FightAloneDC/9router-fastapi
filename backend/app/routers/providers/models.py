@@ -15,7 +15,8 @@ from app.providers.model_helpers import fetch_models_header_auth
 from app.providers.provider import Provider
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
-from app.routers.providers.constants import PROVIDER_DEFAULTS, normalize_models_list
+from app.routers.providers.constants import normalize_models_list
+from app.routers.providers.helpers import _get_provider_config
 from app.routers.providers.helpers import _normalize_model, _parse_openai_models
 
 
@@ -75,7 +76,7 @@ async def _fetch_builtin_models(
     try:
         p: Provider = Provider(provider)
     except (ValueError, ModuleNotFoundError):
-        # Provider not in new system — fallback to PROVIDER_DEFAULTS
+        # Provider not in new system — fallback to config
         return await _fetch_fallback(provider, api_key)
 
     token: str = data.get("accessToken") or api_key
@@ -103,7 +104,8 @@ async def _fetch_builtin_models(
 
 async def _fetch_fallback(provider: str, api_key: str) -> list[dict]:
     """Fallback for providers not yet migrated to Provider class."""
-    default_url: str = PROVIDER_DEFAULTS.get(provider, {}).get("baseUrl", "")
+    defaults: dict = _get_provider_config(provider)
+    default_url: str = defaults.get("baseUrl", "")
     if not default_url or not api_key:
         raise HTTPException(
             status_code=400,

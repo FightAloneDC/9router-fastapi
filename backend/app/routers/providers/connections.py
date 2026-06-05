@@ -12,7 +12,8 @@ from app.database import get_db
 from app.models.provider import ProviderConnection, ProviderNode
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
-from app.routers.providers.constants import PROVIDER_DEFAULTS, SUGGESTED_MODELS_FILTERS, normalize_models_list
+from app.routers.providers.constants import SUGGESTED_MODELS_FILTERS, normalize_models_list
+from app.routers.providers.helpers import _get_provider_config
 from app.routers.providers.helpers import (
     _connection_to_out,
     _get_base_url,
@@ -56,7 +57,7 @@ async def list_providers(
     """List all provider connections (sensitive data hidden).
 
     When `kind` is provided, only return connections for providers that support
-    that service kind (based on PROVIDER_DEFAULTS serviceKinds). Providers
+    that service kind (based on provider config SERVICE_KINDS). Providers
     without explicit serviceKinds default to ["llm"].
     """
     result = await db.execute(
@@ -68,7 +69,7 @@ async def list_providers(
 
     if kind is not None:
         def _matches_kind(conn):
-            defaults = PROVIDER_DEFAULTS.get(conn.provider, {})
+            defaults = _get_provider_config(conn.provider)
             kinds = defaults.get("serviceKinds", ["llm"])
             return kind in kinds
         connections = [c for c in connections if _matches_kind(c)]
@@ -147,7 +148,8 @@ async def create_provider(
     if body.baseUrl:
         data["baseUrl"] = body.baseUrl
     else:
-        default_url = PROVIDER_DEFAULTS.get(body.provider, {}).get("baseUrl")
+        defaults = _get_provider_config(body.provider)
+        default_url = defaults.get("baseUrl")
         if default_url:
             data["baseUrl"] = default_url
 
