@@ -18,8 +18,8 @@ from app.services.proxy import (
     update_connection_usage,
     calculate_cooldown,
     mark_connection_unavailable,
-    PROVIDER_CONFIGS,
 )
+from app.services.proxy import _get_provider_proxy_config
 from app.services.message_translator import (
     claude_to_openai_request,
     openai_to_claude_response,
@@ -109,7 +109,7 @@ async def messages_endpoint(
         target = targets[0]
 
         # Determine if the upstream is Claude-format or OpenAI-format
-        provider_cfg: dict = PROVIDER_CONFIGS.get(target.provider, {})
+        provider_cfg: dict = _get_provider_proxy_config(target.provider)
         upstream_format: str = provider_cfg.get("format", "openai")
         is_claude_upstream: bool = upstream_format == "claude" or target.provider in _CLAUDE_FORMAT_PROVIDERS
 

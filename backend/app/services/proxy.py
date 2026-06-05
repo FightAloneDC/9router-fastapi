@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.combo import Combo
 from app.models.provider import ProviderConnection, ProviderNode
 from app.models.settings import SettingsModel
+from app.providers.provider import Provider
 
 # ──────────────────────────────────────────────
 # Frontend alias → backend provider ID mapping
@@ -104,257 +105,30 @@ ID_TO_ALIAS: dict[str, str] = {v: k for k, v in ALIAS_TO_ID.items()}
 # Provider URL/header configuration
 # ──────────────────────────────────────────────
 
-PROVIDER_CONFIGS: dict[str, dict] = {
-    "openai": {
-        "base_url": "https://api.openai.com/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "opencode-go": {
-        "base_url": "https://opencode.ai/zen/go/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "openrouter": {
-        "base_url": "https://openrouter.ai/api/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "kilocode": {
-        "base_url": "https://api.kilo.ai/api/openrouter",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "anthropic": {
-        "base_url": "https://api.anthropic.com/v1",
-        "format": "claude",
-        "auth_header": "x-api-key",
-        "auth_prefix": "",
-        "extra_headers": {"anthropic-version": "2023-06-01"},
-    },
-    "askcodi": {
-        "base_url": "https://api.askcodi.com/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "deepseek": {
-        "base_url": "https://api.deepseek.com/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "google": {
-        "base_url": "https://generativelanguage.googleapis.com/v1beta",
-        "format": "gemini",
-        "auth_header": "x-goog-api-key",
-        "auth_prefix": "",
-    },
-    "groq": {
-        "base_url": "https://api.groq.com/openai/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "together": {
-        "base_url": "https://api.together.xyz/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "mistral": {
-        "base_url": "https://api.mistral.ai/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "cohere": {
-        "base_url": "https://api.cohere.com/compatibility/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "fireworks": {
-        "base_url": "https://api.fireworks.ai/inference/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "xai": {
-        "base_url": "https://api.x.ai/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "qwen": {
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    # ── Claude-format providers ─────────────────────────────────────────
-    "glm": {
-        "base_url": "https://api.z.ai/api/anthropic/v1",
-        "format": "claude",
-        "auth_header": "x-api-key",
-        "auth_prefix": "",
-        "extra_headers": {"anthropic-version": "2023-06-01"},
-    },
-    "kimi": {
-        "base_url": "https://api.kimi.com/coding/v1",
-        "format": "claude",
-        "auth_header": "x-api-key",
-        "auth_prefix": "",
-        "extra_headers": {"anthropic-version": "2023-06-01"},
-    },
-    "minimax": {
-        "base_url": "https://api.minimax.io/anthropic/v1",
-        "format": "claude",
-        "auth_header": "x-api-key",
-        "auth_prefix": "",
-        "extra_headers": {"anthropic-version": "2023-06-01"},
-    },
-    "minimax-cn": {
-        "base_url": "https://api.minimaxi.com/anthropic/v1",
-        "format": "claude",
-        "auth_header": "x-api-key",
-        "auth_prefix": "",
-        "extra_headers": {"anthropic-version": "2023-06-01"},
-    },
-    # ── OpenAI-format providers ─────────────────────────────────────────
-    "glm-cn": {
-        "base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "xiaomi-mimo": {
-        "base_url": "https://api.xiaomimimo.com/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "xiaomi-tokenplan": {
-        "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "cerebras": {
-        "base_url": "https://api.cerebras.ai/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "nvidia": {
-        "base_url": "https://integrate.api.nvidia.com/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "siliconflow": {
-        "base_url": "https://api.siliconflow.com/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "volcengine-ark": {
-        "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "volcengine": {
-        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "byteplus": {
-        "base_url": "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "alicode": {
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "alicode-intl": {
-        "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "huggingface": {
-        "base_url": "https://api-inference.huggingface.co/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "perplexity": {
-        "base_url": "https://api.perplexity.ai",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "nebius": {
-        "base_url": "https://api.studio.nebius.ai/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "hyperbolic": {
-        "base_url": "https://api.hyperbolic.xyz/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    # ── Azure OpenAI (special format, data-driven URL) ───────────────
-    "azure": {
-        "base_url": "",
-        "format": "azure",
-        "auth_header": "api-key",
-        "auth_prefix": "",
-    },
-    # ── Cloudflare AI (data-driven URL with accountId) ───────────────
-    "cloudflare-ai": {
-        "base_url": "https://api.cloudflare.com/client/v4",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "kilo-gateway": {
-        "base_url": "https://api.kilo.ai/api/gateway",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "qoder": {
-        "base_url": "https://api3.qoder.sh",
-        "format": "qoder",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer COSY.",
-    },
-    "voyage-ai": {
-        "base_url": "https://api.voyageai.com/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-    "jina-ai": {
-        "base_url": "https://api.jina.ai/v1",
-        "format": "openai",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-    },
-}
+def _get_provider_proxy_config(provider: str) -> dict:
+    """Get provider proxy config from Provider class.
+
+    Returns dict with keys: base_url, format, auth_header, auth_prefix, extra_headers.
+    """
+    try:
+        p = Provider(provider)
+        c = p.config()
+        return {
+            "base_url": c.BASE_URL,
+            "format": c.FORMAT,
+            "auth_header": c.AUTH_HEADER,
+            "auth_prefix": c.AUTH_PREFIX,
+            "extra_headers": c.EXTRA_HEADERS or {},
+        }
+    except (ValueError, ModuleNotFoundError):
+        # Fallback for providers not in new system
+        return {
+            "base_url": "",
+            "format": "openai",
+            "auth_header": "Authorization",
+            "auth_prefix": "Bearer ",
+            "extra_headers": {},
+        }
 
 
 @dataclass
@@ -762,12 +536,13 @@ def _resolve_base_url(provider: str, data: dict | None = None) -> str:
     if data.get("baseUrl"):
         return data["baseUrl"]
 
-    # Fallback to PROVIDER_CONFIGS
-    return PROVIDER_CONFIGS.get(provider, {}).get("base_url", "")
+    # Fallback to provider config
+    cfg = _get_provider_proxy_config(provider)
+    return cfg.get("base_url", "")
 
 def _build_upstream_url(provider: str, base_url: str, stream: bool = False, data: dict | None = None, model: str = "") -> str:
     """Build the upstream URL for a provider."""
-    cfg = PROVIDER_CONFIGS.get(provider, PROVIDER_CONFIGS["openai"])
+    cfg = _get_provider_proxy_config(provider)
     fmt = cfg["format"]
     base = base_url.rstrip("/")
     if data is None:
@@ -830,7 +605,7 @@ def _build_headers(provider: str, api_key: str, stream: bool = False, data: dict
         return cosy_headers
 
     # ── Standard providers ──────────────────────────────────────────────────
-    cfg = PROVIDER_CONFIGS.get(provider, PROVIDER_CONFIGS["openai"])
+    cfg = _get_provider_proxy_config(provider)
     headers = {"Content-Type": "application/json"}
 
     # Auth header

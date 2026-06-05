@@ -404,7 +404,6 @@ async def test_connection_models(
     Returns per-model results with latency and error info.
     """
     from app.services.proxy import resolve_model_to_target, build_upstream_request
-    from app.routers.providers.constants import PROVIDER_CONFIGS
 
     # Get the connection
     result = await db.execute(
