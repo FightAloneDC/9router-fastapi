@@ -21,72 +21,27 @@ from app.providers.provider import Provider
 # Matches the alias definitions in frontend/src/constants/providers.js
 # ──────────────────────────────────────────────
 
-ALIAS_TO_ID: dict[str, str] = {
-    "kr": "kiro",
-    "qw": "qwen",
-    "gc": "gemini-cli",
-    "if": "iflow",
-    "oc": "opencode",
-    "ocg": "opencode-go",
-    "openrouter": "openrouter",
-    "nvidia": "nvidia",
-    "ollama": "ollama",
-    "vx": "vertex",
-    "gemini": "gemini",
-    "cf": "cloudflare-ai",
-    "bpm": "byteplus",
-    "cc": "claude",
-    "ag": "antigravity",
-    "ac": "askcodi",
-    "cx": "codex",
-    "gh": "github",
-    "cu": "cursor",
-    "kc": "kilocode",
-    "cl": "cline",
-    "glm": "glm",
-    "glm-cn": "glm-cn",
-    "kimi": "kimi",
-    "minimax": "minimax",
-    "minimax-cn": "minimax-cn",
-    "alicode": "alicode",
-    "alicode-intl": "alicode-intl",
-    "mimo": "xiaomi-mimo",
-    "xmtp": "xiaomi-tokenplan",
-    "ark": "volcengine-ark",
-    "openai": "openai",
-    "vag": "vercel-ai-gateway",
-    "ds": "deepseek",
-    "gq": "groq",
-    "mi": "mistral",
-    "tg": "together",
-    "fw": "fireworks",
-    "px": "perplexity",
-    "co": "cohere",
-    "cb": "cerebras",
-    "hf": "huggingface",
-    "sf": "siliconflow",
-    "an": "anthropic",
-    "az": "azure",
-    "bedrock": "amazon-bedrock",
-    "xai": "xai",
-    "ollama-local": "ollama-local",
-    "vxp": "vertex-partner",
-    "vk": "volcengine",
-    "tavily": "tavily",
-    "brave": "brave-search",
-    "serper": "serper",
-    "exa": "exa",
-    "fal": "fal-ai",
-    "stability": "stability-ai",
-    "jina": "jina-ai",
-    "gw": "grok-web",
-    "pw": "perplexity-web",
-    "nanobanana": "nanobanana",
-    "chutes": "chutes",
-    "assemblyai": "assemblyai",
-    "kg": "kilo-gateway",
-    "qd": "qoder",
-}
+def _build_alias_to_id() -> dict[str, str]:
+    """Build alias → provider ID mapping from Provider class.
+
+    Each provider's config has an ALIAS field. Also includes provider ID itself
+    as a key (for cases like "openrouter" → "openrouter").
+    """
+    from app.providers import AVAILABLE_PROVIDERS
+    mapping: dict[str, str] = {}
+    for name in AVAILABLE_PROVIDERS:
+        try:
+            p = Provider(name)
+            alias: str = p.config().ALIAS
+            if alias:
+                mapping[alias] = name
+            # Also map provider ID to itself (for "openrouter" → "openrouter")
+            mapping[name] = name
+        except (ValueError, ModuleNotFoundError):
+            pass
+    return mapping
+
+ALIAS_TO_ID: dict[str, str] = _build_alias_to_id()
 
 
 def _resolve_provider_alias(provider_name: str) -> str:
