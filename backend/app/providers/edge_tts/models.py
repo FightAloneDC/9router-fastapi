@@ -1,46 +1,14 @@
-"""Edge TTS model fetching.
+"""Edge TTS model fetching — no auth, uses espeak/edge-tts."""
 
-Fetches available models from Edge TTS API.
-"""
+from app.providers.edge_tts.config import EdgeTtsConfig
 
-import httpx
-
-from app.providers.edge_tts.config import EdgeTTSConfig
-from app.utils.url import url_path_join
-
-_config = EdgeTTSConfig()
-
-MODEL_FETCH_URL = url_path_join(_config.BASE_URL, "models")
-AUTH_HEADER = _config.AUTH_HEADER
-AUTH_PREFIX = _config.AUTH_PREFIX
-TIMEOUT = 15.0
+_config: EdgeTtsConfig = EdgeTtsConfig()
 
 
-def parse_response(data: dict) -> list:
-    """Extract models list from Edge TTS API response."""
-    return data.get("data", [])
+def parse_response(data: dict) -> list[dict]:
+    return []
 
 
 async def fetch_models(api_key: str) -> list[dict]:
-    """Fetch available models from Edge TTS.
-
-    Args:
-        api_key: Edge TTS API key.
-
-    Returns:
-        List of raw model dicts from API.
-
-    Raises:
-        httpx.HTTPStatusError: If API returns non-success status.
-        httpx.ConnectError: If cannot connect to Edge TTS.
-        httpx.TimeoutException: If request times out.
-    """
-    headers = {
-        "Content-Type": "application/json",
-        AUTH_HEADER: f"{AUTH_PREFIX}{api_key}",
-    }
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(MODEL_FETCH_URL, headers=headers)
-        resp.raise_for_status()
-        return parse_response(resp.json())
+    """Edge TTS voices are fetched via voice_fetchers, not model listing."""
+    return []

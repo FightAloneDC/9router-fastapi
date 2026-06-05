@@ -1,27 +1,23 @@
-"""AssemblyAI model fetching.
+"""AssemblyAI model fetching — no API listing, hardcoded models."""
 
-AssemblyAI does not expose a standard /v1/models endpoint.
-"""
+from app.providers.assemblyai.config import AssemblyaiConfig
 
-from app.providers.assemblyai.config import AssemblyAIConfig
+_config: AssemblyaiConfig = AssemblyaiConfig()
 
-_config = AssemblyAIConfig()
+HARDCODED_MODELS: list[dict] = [
+    {"id": "universal-3-pro", "name": "universal-3-pro", "type": "stt"},
+    {"id": "universal-2", "name": "universal-2", "type": "stt"},
+    {"id": "nano", "name": "nano", "type": "stt"},
+    {"id": "best", "name": "best", "type": "stt"},
+    {"id": "slam-1", "name": "slam-1", "type": "stt"},
+]
 
-TIMEOUT = 15.0
 
-
-def parse_response(data: dict) -> list:
+def parse_response(data: dict) -> list[dict]:
     """No model listing available for AssemblyAI."""
     return []
 
 
 async def fetch_models(api_key: str) -> list[dict]:
-    """AssemblyAI does not expose a standard model listing endpoint.
-
-    Args:
-        api_key: AssemblyAI API key (unused — no model listing).
-
-    Returns:
-        Empty list.
-    """
-    return []
+    """AssemblyAI does not expose a standard model listing endpoint."""
+    return HARDCODED_MODELS

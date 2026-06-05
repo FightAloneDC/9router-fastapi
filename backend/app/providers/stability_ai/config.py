@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class StabilityAIConfig(BaseModel):
-    """Stability AI provider configuration template."""
+class StabilityAiConfig(BaseProviderConfig):
+    """Stability AI provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Stability AI"
     PROVIDER_ID: str = "stability-ai"
     ALIAS: str = "stability"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.stability.ai/v2beta"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['image']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["image"]
 
 
-class StabilityAIMetadata(BaseModel):
+class StabilityAiMetadata(BaseMetadata):
     """Stability AI UI display metadata."""
 
     name: str = "Stability AI"

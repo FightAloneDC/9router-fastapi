@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class GooglePSEConfig(BaseModel):
-    """Google PSE provider configuration template."""
+class GooglePseConfig(BaseProviderConfig):
+    """Google PSE provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Google PSE"
     PROVIDER_ID: str = "google-pse"
     ALIAS: str = "gpse"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://www.googleapis.com/customsearch/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['webSearch']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["webSearch"]
 
 
-class GooglePSEMetadata(BaseModel):
+class GooglePseMetadata(BaseMetadata):
     """Google PSE UI display metadata."""
 
     name: str = "Google PSE"

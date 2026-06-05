@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class NebiusConfig(BaseModel):
-    """Nebius AI provider configuration template."""
+class NebiusConfig(BaseProviderConfig):
+    """Nebius AI provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Nebius AI"
     PROVIDER_ID: str = "nebius"
     ALIAS: str = "nb"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.studio.nebius.ai/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm', 'embedding']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["llm", "embedding"]
 
 
-class NebiusMetadata(BaseModel):
+class NebiusMetadata(BaseMetadata):
     """Nebius AI UI display metadata."""
 
     name: str = "Nebius AI"

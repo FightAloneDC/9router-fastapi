@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class CommandCodeConfig(BaseModel):
-    """Command Code provider configuration template."""
+class CommandcodeConfig(BaseProviderConfig):
+    """Command Code provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Command Code"
     PROVIDER_ID: str = "commandcode"
     ALIAS: str = "cmc"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.commandcode.ai/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["llm"]
 
 
-class CommandCodeMetadata(BaseModel):
+class CommandcodeMetadata(BaseMetadata):
     """Command Code UI display metadata."""
 
     name: str = "Command Code"

@@ -4,33 +4,23 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class TortoiseConfig(BaseModel):
-    """Tortoise TTS provider configuration template."""
+class TortoiseConfig(BaseProviderConfig):
+    """Tortoise TTS provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Tortoise TTS"
     PROVIDER_ID: str = "tortoise"
     ALIAS: str = "tt"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "http://localhost"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['tts']
-
-    # ── Auth ────────────────────────────────────────────────────────────
+    SERVICE_KINDS: list[str] = ["tts"]
     AUTH_HEADER: str = ""
     AUTH_PREFIX: str = ""
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
 
 
-class TortoiseMetadata(BaseModel):
+class TortoiseMetadata(BaseMetadata):
     """Tortoise TTS UI display metadata."""
 
     name: str = "Tortoise TTS"

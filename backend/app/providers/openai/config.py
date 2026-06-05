@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class OpenAIConfig(BaseModel):
-    """OpenAI provider configuration template."""
+class OpenaiConfig(BaseProviderConfig):
+    """OpenAI provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "OpenAI"
     PROVIDER_ID: str = "openai"
     ALIAS: str = "openai"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.openai.com/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm', 'embedding', 'tts', 'stt', 'image', 'imageToText', 'webSearch']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["llm", "embedding", "tts", "stt", "image", "imageToText", "webSearch"]
 
 
-class OpenAIMetadata(BaseModel):
+class OpenaiMetadata(BaseMetadata):
     """OpenAI UI display metadata."""
 
     name: str = "OpenAI"

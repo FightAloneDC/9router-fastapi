@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class XiaomiMimoConfig(BaseModel):
-    """Xiaomi MiMo provider configuration template."""
+class XiaomiMimoConfig(BaseProviderConfig):
+    """Xiaomi MiMo provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Xiaomi MiMo"
     PROVIDER_ID: str = "xiaomi-mimo"
     ALIAS: str = "mimo"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.xiaomimimo.com/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["llm"]
 
 
-class XiaomiMimoMetadata(BaseModel):
+class XiaomiMimoMetadata(BaseMetadata):
     """Xiaomi MiMo UI display metadata."""
 
     name: str = "Xiaomi MiMo"

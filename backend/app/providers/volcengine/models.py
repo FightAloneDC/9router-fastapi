@@ -1,46 +1,16 @@
-"""Volcengine Ark model fetching.
-
-Fetches available models from Volcengine Ark API.
-"""
-
-import httpx
+"""Volcengine Ark model fetching — uses shared helper."""
 
 from app.providers.volcengine.config import VolcengineConfig
-from app.utils.url import url_path_join
+from app.providers.model_helpers import fetch_models_header_auth
 
-_config = VolcengineConfig()
-
-MODEL_FETCH_URL = url_path_join(_config.BASE_URL, "models")
-AUTH_HEADER = _config.AUTH_HEADER
-AUTH_PREFIX = _config.AUTH_PREFIX
-TIMEOUT = 15.0
+_config: VolcengineConfig = VolcengineConfig()
 
 
-def parse_response(data: dict) -> list:
+def parse_response(data: dict) -> list[dict]:
     """Extract models list from Volcengine Ark API response."""
     return data.get("data", [])
 
 
 async def fetch_models(api_key: str) -> list[dict]:
-    """Fetch available models from Volcengine Ark.
-
-    Args:
-        api_key: Volcengine Ark API key.
-
-    Returns:
-        List of raw model dicts from API.
-
-    Raises:
-        httpx.HTTPStatusError: If API returns non-success status.
-        httpx.ConnectError: If cannot connect to Volcengine Ark.
-        httpx.TimeoutException: If request times out.
-    """
-    headers = {
-        "Content-Type": "application/json",
-        AUTH_HEADER: f"{AUTH_PREFIX}{api_key}",
-    }
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(MODEL_FETCH_URL, headers=headers)
-        resp.raise_for_status()
-        return parse_response(resp.json())
+    """Fetch available models from Volcengine Ark."""
+    return await fetch_models_header_auth(_config, api_key)

@@ -1,46 +1,23 @@
-"""Amazon Bedrock model fetching.
-
-Fetches available models from Amazon Bedrock API.
-"""
-
-import httpx
+"""Amazon Bedrock model fetching — needs AWS region/signing."""
 
 from app.providers.amazon_bedrock.config import AmazonBedrockConfig
-from app.utils.url import url_path_join
 
-_config = AmazonBedrockConfig()
-
-MODEL_FETCH_URL = url_path_join(_config.BASE_URL, "models")
-AUTH_HEADER = _config.AUTH_HEADER
-AUTH_PREFIX = _config.AUTH_PREFIX
-TIMEOUT = 15.0
+_config: AmazonBedrockConfig = AmazonBedrockConfig()
 
 
-def parse_response(data: dict) -> list:
-    """Extract models list from Amazon Bedrock API response."""
-    return data.get("data", [])
+def parse_response(data: dict) -> list[dict]:
+    """Bedrock returns {modelSummaries: [...]}."""
+    models: list[dict] = []
+    for m in data.get("modelSummaries", []):
+        if isinstance(m, dict):
+            models.append({
+                "id": m.get("modelId", ""),
+                "name": m.get("modelName", ""),
+                "type": "llm",
+            })
+    return models
 
 
 async def fetch_models(api_key: str) -> list[dict]:
-    """Fetch available models from Amazon Bedrock.
-
-    Args:
-        api_key: Amazon Bedrock API key.
-
-    Returns:
-        List of raw model dicts from API.
-
-    Raises:
-        httpx.HTTPStatusError: If API returns non-success status.
-        httpx.ConnectError: If cannot connect to Amazon Bedrock.
-        httpx.TimeoutException: If request times out.
-    """
-    headers = {
-        "Content-Type": "application/json",
-        AUTH_HEADER: f"{AUTH_PREFIX}{api_key}",
-    }
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(MODEL_FETCH_URL, headers=headers)
-        resp.raise_for_status()
-        return parse_response(resp.json())
+    """Bedrock needs AWS signing — handled at endpoint level."""
+    return []

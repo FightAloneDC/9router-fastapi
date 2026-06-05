@@ -4,33 +4,23 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class OllamaLocalConfig(BaseModel):
-    """Ollama Local provider configuration template."""
+class OllamaLocalConfig(BaseProviderConfig):
+    """Ollama Local provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Ollama Local"
     PROVIDER_ID: str = "ollama-local"
     ALIAS: str = "ollama-local"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "http://localhost:11434"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm']
-
-    # ── Auth ────────────────────────────────────────────────────────────
+    SERVICE_KINDS: list[str] = ["llm"]
     AUTH_HEADER: str = ""
     AUTH_PREFIX: str = ""
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
 
 
-class OllamaLocalMetadata(BaseModel):
+class OllamaLocalMetadata(BaseMetadata):
     """Ollama Local UI display metadata."""
 
     name: str = "Ollama Local"

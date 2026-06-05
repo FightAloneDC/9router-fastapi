@@ -4,33 +4,27 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class GeminiConfig(BaseModel):
-    """Gemini provider configuration template."""
+class GeminiConfig(BaseProviderConfig):
+    """Gemini provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Gemini"
     PROVIDER_ID: str = "gemini"
     ALIAS: str = "gemini"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm', 'embedding', 'image', 'imageToText', 'webSearch', 'tts', 'stt']
+    SERVICE_KINDS: list[str] = ["llm", "embedding", "image", "imageToText", "webSearch", "tts", "stt"]
 
     # ── Auth ────────────────────────────────────────────────────────────
+    # Gemini uses query-param auth (?key=), not header auth
     AUTH_HEADER: str = ""
     AUTH_PREFIX: str = ""
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    AUTH_QUERY_PARAM: str = "key"
 
 
-class GeminiMetadata(BaseModel):
+class GeminiMetadata(BaseMetadata):
     """Gemini UI display metadata."""
 
     name: str = "Gemini"

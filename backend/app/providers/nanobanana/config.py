@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class NanobananaConfig(BaseModel):
-    """Nanobanana provider configuration template."""
+class NanobananaConfig(BaseProviderConfig):
+    """Nanobanana provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Nanobanana"
     PROVIDER_ID: str = "nanobanana"
     ALIAS: str = "nana"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.nanobananaapi.ai/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['image']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["image"]
 
 
-class NanobananaMetadata(BaseModel):
+class NanobananaMetadata(BaseMetadata):
     """Nanobanana UI display metadata."""
 
     name: str = "Nanobanana"

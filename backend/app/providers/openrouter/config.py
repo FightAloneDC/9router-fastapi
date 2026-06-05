@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class OpenrouterConfig(BaseModel):
-    """OpenRouter provider configuration template."""
+class OpenrouterConfig(BaseProviderConfig):
+    """OpenRouter provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "OpenRouter"
     PROVIDER_ID: str = "openrouter"
     ALIAS: str = "openrouter"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://openrouter.ai/api/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm', 'embedding', 'imageToText', 'tts']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["llm", "embedding", "imageToText", "tts"]
 
 
-class OpenrouterMetadata(BaseModel):
+class OpenrouterMetadata(BaseMetadata):
     """OpenRouter UI display metadata."""
 
     name: str = "OpenRouter"

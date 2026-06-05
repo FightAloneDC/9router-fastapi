@@ -1,46 +1,14 @@
-"""ComfyUI model fetching.
-
-Fetches available models from ComfyUI API.
-"""
-
-import httpx
+"""ComfyUI model fetching — local instance, no standard listing."""
 
 from app.providers.comfyui.config import ComfyuiConfig
-from app.utils.url import url_path_join
 
-_config = ComfyuiConfig()
-
-MODEL_FETCH_URL = url_path_join(_config.BASE_URL, "models")
-AUTH_HEADER = _config.AUTH_HEADER
-AUTH_PREFIX = _config.AUTH_PREFIX
-TIMEOUT = 15.0
+_config: ComfyuiConfig = ComfyuiConfig()
 
 
-def parse_response(data: dict) -> list:
-    """Extract models list from ComfyUI API response."""
-    return data.get("data", [])
+def parse_response(data: dict) -> list[dict]:
+    return []
 
 
 async def fetch_models(api_key: str) -> list[dict]:
-    """Fetch available models from ComfyUI.
-
-    Args:
-        api_key: ComfyUI API key.
-
-    Returns:
-        List of raw model dicts from API.
-
-    Raises:
-        httpx.HTTPStatusError: If API returns non-success status.
-        httpx.ConnectError: If cannot connect to ComfyUI.
-        httpx.TimeoutException: If request times out.
-    """
-    headers = {
-        "Content-Type": "application/json",
-        AUTH_HEADER: f"{AUTH_PREFIX}{api_key}",
-    }
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(MODEL_FETCH_URL, headers=headers)
-        resp.raise_for_status()
-        return parse_response(resp.json())
+    """ComfyUI does not expose a standard model listing endpoint."""
+    return []

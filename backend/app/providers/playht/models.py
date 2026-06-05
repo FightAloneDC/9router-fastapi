@@ -1,28 +1,16 @@
-"""PlayHT model fetching.
-
-PlayHT does not expose a standard model listing endpoint.
-API key is in "userId:apiKey" format — used only for TTS requests.
-"""
+"""PlayHT model fetching — uses shared helper."""
 
 from app.providers.playht.config import PlayhtConfig
+from app.providers.model_helpers import fetch_models_header_auth
 
-_config = PlayhtConfig()
-
-TIMEOUT = 15.0
+_config: PlayhtConfig = PlayhtConfig()
 
 
-def parse_response(data: dict) -> list:
-    """No model listing available for PlayHT."""
-    return []
+def parse_response(data: dict) -> list[dict]:
+    """Extract models list from PlayHT API response."""
+    return data.get("data", [])
 
 
 async def fetch_models(api_key: str) -> list[dict]:
-    """PlayHT does not expose a model listing endpoint.
-
-    Args:
-        api_key: PlayHT API key (unused — no model listing).
-
-    Returns:
-        Empty list.
-    """
-    return []
+    """Fetch available models from PlayHT."""
+    return await fetch_models_header_auth(_config, api_key)

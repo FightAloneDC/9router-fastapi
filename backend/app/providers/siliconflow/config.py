@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class SiliconflowConfig(BaseModel):
-    """SiliconFlow provider configuration template."""
+class SiliconflowConfig(BaseProviderConfig):
+    """SiliconFlow provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "SiliconFlow"
     PROVIDER_ID: str = "siliconflow"
     ALIAS: str = "sf"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.siliconflow.com/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm', 'embedding', 'image', 'tts']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["llm", "embedding", "image", "tts"]
 
 
-class SiliconflowMetadata(BaseModel):
+class SiliconflowMetadata(BaseMetadata):
     """SiliconFlow UI display metadata."""
 
     name: str = "SiliconFlow"

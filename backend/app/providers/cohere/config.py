@@ -1,36 +1,20 @@
-"""Cohere provider definition.
+"""Cohere provider definition."""
 
-Static provider characteristics — runtime data (API keys, custom baseUrl)
-come from ProviderConnection.data in the database.
-"""
-
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class CohereConfig(BaseModel):
-    """Cohere provider configuration template."""
+class CohereConfig(BaseProviderConfig):
+    """Cohere provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Cohere"
     PROVIDER_ID: str = "cohere"
     ALIAS: str = "co"
-
-    # ── Connection defaults ─────────────────────────────────────────────
-    BASE_URL: str = "https://api.cohere.ai/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm', 'embedding']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    BASE_URL: str = "https://api.cohere.com/compatibility/v1"
+    SERVICE_KINDS: list[str] = ["llm", "embedding"]
 
 
-class CohereMetadata(BaseModel):
+class CohereMetadata(BaseMetadata):
     """Cohere UI display metadata."""
 
     name: str = "Cohere"

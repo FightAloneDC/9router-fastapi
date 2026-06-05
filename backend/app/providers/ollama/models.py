@@ -1,46 +1,20 @@
-"""Ollama Cloud model fetching.
-
-Fetches available models from Ollama Cloud API.
-"""
-
-import httpx
+"""Ollama Cloud model fetching — custom parse (models key)."""
 
 from app.providers.ollama.config import OllamaConfig
-from app.utils.url import url_path_join
+from app.providers.model_helpers import fetch_models_header_auth
 
-_config = OllamaConfig()
-
-MODEL_FETCH_URL = url_path_join(_config.BASE_URL, "models")
-AUTH_HEADER = _config.AUTH_HEADER
-AUTH_PREFIX = _config.AUTH_PREFIX
-TIMEOUT = 15.0
+_config: OllamaConfig = OllamaConfig()
 
 
-def parse_response(data: dict) -> list:
-    """Extract models list from Ollama Cloud API response."""
-    return data.get("data", [])
+def parse_ollama(data: dict) -> list[dict]:
+    """Ollama returns {models: [...]}."""
+    return data.get("models", [])
+
+
+def parse_response(data: dict) -> list[dict]:
+    return parse_ollama(data)
 
 
 async def fetch_models(api_key: str) -> list[dict]:
-    """Fetch available models from Ollama Cloud.
-
-    Args:
-        api_key: Ollama Cloud API key.
-
-    Returns:
-        List of raw model dicts from API.
-
-    Raises:
-        httpx.HTTPStatusError: If API returns non-success status.
-        httpx.ConnectError: If cannot connect to Ollama Cloud.
-        httpx.TimeoutException: If request times out.
-    """
-    headers = {
-        "Content-Type": "application/json",
-        AUTH_HEADER: f"{AUTH_PREFIX}{api_key}",
-    }
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(MODEL_FETCH_URL, headers=headers)
-        resp.raise_for_status()
-        return parse_response(resp.json())
+    """Fetch available models from Ollama Cloud."""
+    return await fetch_models_header_auth(_config, api_key, parse_fn=parse_ollama)

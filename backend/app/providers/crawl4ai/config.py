@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class Crawl4AIConfig(BaseModel):
-    """Crawl4AI provider configuration template."""
+class Crawl4aiConfig(BaseProviderConfig):
+    """Crawl4AI provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Crawl4AI"
     PROVIDER_ID: str = "crawl4ai"
     ALIAS: str = "c4ai"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.crawl4ai.com"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['webFetch']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["webFetch"]
 
 
-class Crawl4AIMetadata(BaseModel):
+class Crawl4aiMetadata(BaseMetadata):
     """Crawl4AI UI display metadata."""
 
     name: str = "Crawl4AI"

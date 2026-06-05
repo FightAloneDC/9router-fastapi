@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class ComfyuiConfig(BaseModel):
-    """ComfyUI provider configuration template."""
+class ComfyuiConfig(BaseProviderConfig):
+    """ComfyUI provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "ComfyUI"
     PROVIDER_ID: str = "comfyui"
     ALIAS: str = "cfui"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "http://localhost:8188"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['image']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["image"]
 
 
-class ComfyuiMetadata(BaseModel):
+class ComfyuiMetadata(BaseMetadata):
     """ComfyUI UI display metadata."""
 
     name: str = "ComfyUI"

@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class NvidiaConfig(BaseModel):
-    """NVIDIA NIM provider configuration template."""
+class NvidiaConfig(BaseProviderConfig):
+    """NVIDIA NIM provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "NVIDIA NIM"
     PROVIDER_ID: str = "nvidia"
     ALIAS: str = "nvidia"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://integrate.api.nvidia.com/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm', 'tts', 'embedding']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["llm", "tts", "embedding"]
 
 
-class NvidiaMetadata(BaseModel):
+class NvidiaMetadata(BaseMetadata):
     """NVIDIA NIM UI display metadata."""
 
     name: str = "NVIDIA NIM"

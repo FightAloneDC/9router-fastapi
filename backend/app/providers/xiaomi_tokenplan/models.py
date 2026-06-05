@@ -1,46 +1,36 @@
-"""Xiaomi MiMo (Token Plan) model fetching.
-
-Fetches available models from Xiaomi MiMo (Token Plan) API.
-"""
+"""Xiaomi MiMo (Token Plan) model fetching — region-aware URLs."""
 
 import httpx
 
 from app.providers.xiaomi_tokenplan.config import XiaomiTokenplanConfig
-from app.utils.url import url_path_join
+from app.providers.model_helpers import fetch_models_header_auth
+from app.providers.base import BaseProviderConfig
 
-_config = XiaomiTokenplanConfig()
+_config: XiaomiTokenplanConfig = XiaomiTokenplanConfig()
 
-MODEL_FETCH_URL = url_path_join(_config.BASE_URL, "models")
-AUTH_HEADER = _config.AUTH_HEADER
-AUTH_PREFIX = _config.AUTH_PREFIX
-TIMEOUT = 15.0
+# Region-specific base URLs
+_REGION_URLS: dict[str, str] = {
+    "sgp": "https://token-plan-sgp.xiaomimimo.com/v1",
+    "cn": "https://token-plan-cn.xiaomimimo.com/v1",
+    "ams": "https://token-plan-ams.xiaomimimo.com/v1",
+}
 
 
-def parse_response(data: dict) -> list:
+def parse_response(data: dict) -> list[dict]:
     """Extract models list from Xiaomi MiMo (Token Plan) API response."""
     return data.get("data", [])
 
 
-async def fetch_models(api_key: str) -> list[dict]:
+async def fetch_models(api_key: str, region: str = "sgp") -> list[dict]:
     """Fetch available models from Xiaomi MiMo (Token Plan).
 
-    Args:
-        api_key: Xiaomi MiMo (Token Plan) API key.
-
-    Returns:
-        List of raw model dicts from API.
-
-    Raises:
-        httpx.HTTPStatusError: If API returns non-success status.
-        httpx.ConnectError: If cannot connect to Xiaomi MiMo (Token Plan).
-        httpx.TimeoutException: If request times out.
+    Supports region-specific URLs (sgp, cn, ams).
     """
-    headers = {
-        "Content-Type": "application/json",
-        AUTH_HEADER: f"{AUTH_PREFIX}{api_key}",
-    }
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(MODEL_FETCH_URL, headers=headers)
-        resp.raise_for_status()
-        return parse_response(resp.json())
+    base_url: str = _REGION_URLS.get(region, _REGION_URLS["sgp"])
+    config = BaseProviderConfig(
+        PROVIDER_NAME=_config.PROVIDER_NAME,
+        PROVIDER_ID=_config.PROVIDER_ID,
+        ALIAS=_config.ALIAS,
+        BASE_URL=base_url,
+    )
+    return await fetch_models_header_auth(config, api_key)

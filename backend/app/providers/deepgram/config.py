@@ -4,33 +4,23 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class DeepgramConfig(BaseModel):
-    """Deepgram provider configuration template."""
+class DeepgramConfig(BaseProviderConfig):
+    """Deepgram provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Deepgram"
     PROVIDER_ID: str = "deepgram"
     ALIAS: str = "dg"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.deepgram.com/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['tts', 'stt']
-
-    # ── Auth ────────────────────────────────────────────────────────────
+    SERVICE_KINDS: list[str] = ["tts", "stt"]
     AUTH_HEADER: str = "Authorization"
     AUTH_PREFIX: str = "Token "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
 
 
-class DeepgramMetadata(BaseModel):
+class DeepgramMetadata(BaseMetadata):
     """Deepgram UI display metadata."""
 
     name: str = "Deepgram"

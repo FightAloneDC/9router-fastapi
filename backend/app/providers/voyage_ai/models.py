@@ -1,46 +1,16 @@
-"""Voyage AI model fetching.
+"""Voyage AI model fetching — uses shared helper."""
 
-Fetches available models from Voyage AI API.
-"""
+from app.providers.voyage_ai.config import VoyageAiConfig
+from app.providers.model_helpers import fetch_models_header_auth
 
-import httpx
-
-from app.providers.voyage_ai.config import VoyageAIConfig
-from app.utils.url import url_path_join
-
-_config = VoyageAIConfig()
-
-MODEL_FETCH_URL = url_path_join(_config.BASE_URL, "models")
-AUTH_HEADER = _config.AUTH_HEADER
-AUTH_PREFIX = _config.AUTH_PREFIX
-TIMEOUT = 15.0
+_config: VoyageAiConfig = VoyageAiConfig()
 
 
-def parse_response(data: dict) -> list:
+def parse_response(data: dict) -> list[dict]:
     """Extract models list from Voyage AI API response."""
     return data.get("data", [])
 
 
 async def fetch_models(api_key: str) -> list[dict]:
-    """Fetch available models from Voyage AI.
-
-    Args:
-        api_key: Voyage AI API key.
-
-    Returns:
-        List of raw model dicts from API.
-
-    Raises:
-        httpx.HTTPStatusError: If API returns non-success status.
-        httpx.ConnectError: If cannot connect to Voyage AI.
-        httpx.TimeoutException: If request times out.
-    """
-    headers = {
-        "Content-Type": "application/json",
-        AUTH_HEADER: f"{AUTH_PREFIX}{api_key}",
-    }
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(MODEL_FETCH_URL, headers=headers)
-        resp.raise_for_status()
-        return parse_response(resp.json())
+    """Fetch available models from Voyage AI."""
+    return await fetch_models_header_auth(_config, api_key)

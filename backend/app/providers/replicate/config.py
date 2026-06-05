@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class ReplicateConfig(BaseModel):
-    """Replicate provider configuration template."""
+class ReplicateConfig(BaseProviderConfig):
+    """Replicate provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Replicate"
     PROVIDER_ID: str = "replicate"
     ALIAS: str = "rep"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.replicate.com/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['image']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["image"]
 
 
-class ReplicateMetadata(BaseModel):
+class ReplicateMetadata(BaseMetadata):
     """Replicate UI display metadata."""
 
     name: str = "Replicate"

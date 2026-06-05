@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class ExaConfig(BaseModel):
-    """Exa provider configuration template."""
+class ExaConfig(BaseProviderConfig):
+    """Exa provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Exa"
     PROVIDER_ID: str = "exa"
     ALIAS: str = "exa"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.exa.ai"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['webSearch', 'webFetch']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["webSearch", "webFetch"]
 
 
-class ExaMetadata(BaseModel):
+class ExaMetadata(BaseMetadata):
     """Exa UI display metadata."""
 
     name: str = "Exa"

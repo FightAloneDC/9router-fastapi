@@ -1,57 +1,24 @@
-"""ElevenLabs model fetching.
-
-Fetches available models from ElevenLabs API.
-"""
-
-import httpx
+"""ElevenLabs model fetching — custom parse (plain list, model_id)."""
 
 from app.providers.elevenlabs.config import ElevenlabsConfig
-from app.utils.url import url_path_join
+from app.providers.model_helpers import fetch_models_header_auth
 
-_config = ElevenlabsConfig()
-
-MODEL_FETCH_URL = url_path_join(_config.BASE_URL, "models")
-AUTH_HEADER = _config.AUTH_HEADER
-AUTH_PREFIX = _config.AUTH_PREFIX
-TIMEOUT = 15.0
+_config: ElevenlabsConfig = ElevenlabsConfig()
 
 
-def parse_response(data) -> list:
-    """Extract models list from ElevenLabs API response.
-
-    ElevenLabs returns a plain list of model objects.
-    Normalize to include 'id' key from 'model_id'.
-    """
-    if isinstance(data, list):
-        models = data
-    else:
-        models = data.get("data", [])
+def parse_elevenlabs(data: list | dict) -> list[dict]:
+    """ElevenLabs returns plain list, not {data: [...]}."""
+    models: list = data if isinstance(data, list) else data.get("data", [])
     for m in models:
-        if isinstance(m, dict) and "id" not in m and "model_id" in m:
-            m["id"] = m["model_id"]
+        if isinstance(m, dict) and "id" not in m and m.get("model_id"):
+            m["id"] = m.get("model_id")
     return models
 
 
+def parse_response(data: dict) -> list[dict]:
+    return parse_elevenlabs(data)
+
+
 async def fetch_models(api_key: str) -> list[dict]:
-    """Fetch available models from ElevenLabs.
-
-    Args:
-        api_key: ElevenLabs API key.
-
-    Returns:
-        List of raw model dicts from API.
-
-    Raises:
-        httpx.HTTPStatusError: If API returns non-success status.
-        httpx.ConnectError: If cannot connect to ElevenLabs.
-        httpx.TimeoutException: If request times out.
-    """
-    headers = {
-        "Content-Type": "application/json",
-        AUTH_HEADER: f"{AUTH_PREFIX}{api_key}",
-    }
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(MODEL_FETCH_URL, headers=headers)
-        resp.raise_for_status()
-        return parse_response(resp.json())
+    """Fetch available models from ElevenLabs."""
+    return await fetch_models_header_auth(_config, api_key, parse_fn=parse_elevenlabs)

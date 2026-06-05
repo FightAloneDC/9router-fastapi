@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class AlicodeConfig(BaseModel):
-    """Alibaba provider configuration template."""
+class AlicodeConfig(BaseProviderConfig):
+    """Alibaba provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Alibaba"
     PROVIDER_ID: str = "alicode"
     ALIAS: str = "alicode"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://coding.dashscope.aliyuncs.com/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["llm"]
 
 
-class AlicodeMetadata(BaseModel):
+class AlicodeMetadata(BaseMetadata):
     """Alibaba UI display metadata."""
 
     name: str = "Alibaba"

@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class VertexPartnerConfig(BaseModel):
-    """Vertex Partner provider configuration template."""
+class VertexPartnerConfig(BaseProviderConfig):
+    """Vertex Partner provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Vertex Partner"
     PROVIDER_ID: str = "vertex-partner"
     ALIAS: str = "vxp"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://aiplatform.googleapis.com/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["llm"]
 
 
-class VertexPartnerMetadata(BaseModel):
+class VertexPartnerMetadata(BaseMetadata):
     """Vertex Partner UI display metadata."""
 
     name: str = "Vertex Partner"

@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class SDWebUIConfig(BaseModel):
-    """Stable Diffusion WebUI provider configuration template."""
+class SdwebuiConfig(BaseProviderConfig):
+    """Stable Diffusion WebUI provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Stable Diffusion WebUI"
     PROVIDER_ID: str = "sdwebui"
     ALIAS: str = "sd"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "http://localhost:7860"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['image']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["image"]
 
 
-class SDWebUIMetadata(BaseModel):
+class SdwebuiMetadata(BaseMetadata):
     """Stable Diffusion WebUI UI display metadata."""
 
     name: str = "Stable Diffusion WebUI"

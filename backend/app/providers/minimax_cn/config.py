@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class MinimaxCnConfig(BaseModel):
-    """Minimax (China) provider configuration template."""
+class MinimaxCnConfig(BaseProviderConfig):
+    """Minimax (China) provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Minimax (China)"
     PROVIDER_ID: str = "minimax-cn"
     ALIAS: str = "minimax-cn"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.minimax.chat/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm', 'tts']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["llm", "tts"]
 
 
-class MinimaxCnMetadata(BaseModel):
+class MinimaxCnMetadata(BaseMetadata):
     """Minimax (China) UI display metadata."""
 
     name: str = "Minimax (China)"

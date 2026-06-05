@@ -2,7 +2,7 @@
 
 Tests pure functions (parse_response, URL derivation) without network.
 Integration tests (fetch_models) are skipped if no API key is available.
-API key resolution: env var → database ProviderConnection.data["apiKey"].
+API key resolution: env var -> database ProviderConnection.data["apiKey"].
 """
 
 import json
@@ -20,9 +20,8 @@ from app.providers import (
     PROVIDER_OPENROUTER,
 )
 from app.providers.provider import Provider
-from app.utils.url import url_path_join
 
-# Provider constants → env var name mapping for API key lookup
+# Provider constants -> env var name mapping for API key lookup
 _API_KEY_ENV_VARS: dict[str, str] = {
     PROVIDER_CEREBRAS: "CEREBRAS_API_KEY",
     PROVIDER_GROQ: "GROQ_API_KEY",
@@ -31,23 +30,13 @@ _API_KEY_ENV_VARS: dict[str, str] = {
 
 
 async def get_api_key(provider_id: str) -> str | None:
-    """Resolve API key: env var first, then database fallback.
-
-    Args:
-        provider_id: Provider constant (e.g. PROVIDER_CEREBRAS).
-
-    Returns:
-        API key string, or None if not found.
-    """
-    # 1. Env var takes priority
-    env_var = _API_KEY_ENV_VARS.get(provider_id)
+    """Resolve API key: env var first, then database fallback."""
+    env_var: str | None = _API_KEY_ENV_VARS.get(provider_id)
     if env_var:
-        key = os.environ.get(env_var)
+        key: str | None = os.environ.get(env_var)
         if key:
             return key
 
-    # 2. Fallback: query database for active connection
-    # Dispose engine first to clear stale connections from previous event loop
     await engine.dispose()
     try:
         async with async_session() as session:
@@ -57,53 +46,40 @@ async def get_api_key(provider_id: str) -> str | None:
                     ProviderConnection.is_active == True,
                 )
             )
-            conn = result.scalar_one_or_none()
+            conn: ProviderConnection | None = result.scalar_one_or_none()
             if not conn or not conn.data:
                 return None
-
-            data = json.loads(conn.data)
+            data: dict = json.loads(conn.data)
             return data.get("apiKey") or data.get("accessToken")
     except Exception:
         return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Test 1: URL derivation — all providers
+# Test 1: Base config inheritance
 # ─────────────────────────────────────────────────────────────────────────────
 
+def test_config_inherits_base():
+    """Every provider config must inherit BaseProviderConfig."""
+    from app.providers.base import BaseProviderConfig
 
-def test_model_fetch_url_derives_from_config():
-    """MODEL_FETCH_URL should derive from config.BASE_URL via url_path_join.
-
-    Some providers have custom model fetch URLs that differ from base_url + /models.
-    Providers without MODEL_FETCH_URL (non-LLM) are skipped.
-    """
     for name in AVAILABLE_PROVIDERS:
         p = Provider(name)
-        models_module = p._load_models()
-        # Skip providers without MODEL_FETCH_URL (non-LLM providers)
-        if not hasattr(models_module, "MODEL_FETCH_URL"):
-            continue
-        expected = url_path_join(p.base_url(), "models")
-        actual = models_module.MODEL_FETCH_URL
-        # Allow custom URLs — just verify it's a valid URL
-        assert actual.startswith("http"), f"{name}: MODEL_FETCH_URL missing scheme: {actual}"
+        config = p.config()
+        assert isinstance(config, BaseProviderConfig), f"{name}: config not inheriting BaseProviderConfig"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 2: parse_response — all providers
 # ─────────────────────────────────────────────────────────────────────────────
 
-
 def test_parse_response_normal():
     """parse_response extracts models from response."""
     for name in AVAILABLE_PROVIDERS:
         p = Provider(name)
-        # Try both 'data' and 'models' keys (Gemini uses 'models')
-        data_data = {"data": [{"id": "model-1"}, {"id": "model-2"}]}
-        models_data = {"models": [{"id": "model-1"}, {"id": "model-2"}]}
-        result = p.parse_response(data_data) or p.parse_response(models_data)
-        # Non-LLM providers return empty list — that's expected
+        data_data: dict = {"data": [{"id": "model-1"}, {"id": "model-2"}]}
+        models_data: dict = {"models": [{"id": "model-1"}, {"id": "model-2"}]}
+        result: list[dict] = p.parse_response(data_data) or p.parse_response(models_data)
         if not result:
             assert result == [], f"{name}: expected empty list for non-LLM provider"
         else:
@@ -127,15 +103,14 @@ def test_parse_response_empty_list():
 
 def test_parse_response_extra_keys_ignored():
     """parse_response ignores extra keys in response."""
-    data = {
+    data: dict = {
         "data": [{"id": "model-1"}],
         "object": "list",
         "has_more": False,
     }
     for name in AVAILABLE_PROVIDERS:
         p = Provider(name)
-        result = p.parse_response(data)
-        # Non-LLM providers return empty
+        result: list[dict] = p.parse_response(data)
         if not result:
             continue
         assert len(result) == 1, f"{name}: expected 1 model"
@@ -145,7 +120,6 @@ def test_parse_response_extra_keys_ignored():
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 3: Config consistency — base_url, alias, format
 # ─────────────────────────────────────────────────────────────────────────────
-
 
 def test_config_base_url_not_empty():
     """Every provider config must have a non-empty BASE_URL."""
@@ -170,23 +144,49 @@ def test_config_format_not_empty():
         assert config.FORMAT, f"{name}: FORMAT is empty"
 
 
+def test_config_metadata_exists():
+    """Every provider config must have a Metadata class."""
+    for name in AVAILABLE_PROVIDERS:
+        p = Provider(name)
+        meta = p.metadata()
+        assert meta.name, f"{name}: Metadata.name is empty"
+        assert meta.color, f"{name}: Metadata.color is empty"
+        assert meta.textIcon, f"{name}: Metadata.textIcon is empty"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Test 4: Integration tests — skipped if no API key (env or DB)
+# Test 4: Shared helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def test_parse_openai_models():
+    """parse_openai_models extracts data array."""
+    from app.providers.model_helpers import parse_openai_models
+
+    result: list[dict] = parse_openai_models({"data": [{"id": "m1"}]})
+    assert result == [{"id": "m1"}]
+
+    result = parse_openai_models({"data": []})
+    assert result == []
+
+    result = parse_openai_models({})
+    assert result == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test 5: Integration tests — skipped if no API key (env or DB)
+# ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider_id", AVAILABLE_PROVIDERS)
-async def test_fetch_models_integration(provider_id: str):
+async def test_fetch_models_integration(provider_id: str) -> None:
     """Fetch real models from provider API."""
-    api_key = await get_api_key(provider_id)
+    api_key: str | None = await get_api_key(provider_id)
     if not api_key:
         pytest.skip(f"No API key for {provider_id} in env or database")
 
-    p = Provider(provider_id)
-    models = await p.fetch_models(api_key)
+    p: Provider = Provider(provider_id)
+    models: list[dict] = await p.fetch_models(api_key)
     assert isinstance(models, list), f"{provider_id}: expected list"
-    # Some providers (assemblyai, playht, etc.) don't have model listing
     if len(models) == 0:
         pytest.skip(f"{provider_id}: no model listing endpoint")
     assert "id" in models[0], f"{provider_id}: model missing 'id' key"

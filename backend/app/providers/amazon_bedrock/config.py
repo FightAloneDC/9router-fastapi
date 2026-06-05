@@ -4,33 +4,23 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class AmazonBedrockConfig(BaseModel):
-    """Amazon Bedrock provider configuration template."""
+class AmazonBedrockConfig(BaseProviderConfig):
+    """Amazon Bedrock provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Amazon Bedrock"
     PROVIDER_ID: str = "amazon-bedrock"
     ALIAS: str = "bedrock"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://bedrock-runtime.{region}.amazonaws.com"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm']
-
-    # ── Auth ────────────────────────────────────────────────────────────
+    SERVICE_KINDS: list[str] = ["llm"]
     AUTH_HEADER: str = ""
     AUTH_PREFIX: str = ""
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
 
 
-class AmazonBedrockMetadata(BaseModel):
+class AmazonBedrockMetadata(BaseMetadata):
     """Amazon Bedrock UI display metadata."""
 
     name: str = "Amazon Bedrock"

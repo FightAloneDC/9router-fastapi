@@ -1,46 +1,20 @@
-"""Ollama Local model fetching.
-
-Fetches available models from Ollama Local API.
-"""
-
-import httpx
+"""Ollama Local model fetching — no auth, custom parse (models key)."""
 
 from app.providers.ollama_local.config import OllamaLocalConfig
-from app.utils.url import url_path_join
+from app.providers.model_helpers import fetch_models_header_auth
 
-_config = OllamaLocalConfig()
-
-MODEL_FETCH_URL = url_path_join(_config.BASE_URL, "models")
-AUTH_HEADER = _config.AUTH_HEADER
-AUTH_PREFIX = _config.AUTH_PREFIX
-TIMEOUT = 15.0
+_config: OllamaLocalConfig = OllamaLocalConfig()
 
 
-def parse_response(data: dict) -> list:
-    """Extract models list from Ollama Local API response."""
-    return data.get("data", [])
+def parse_ollama_local(data: dict) -> list[dict]:
+    """Ollama returns {models: [...]}."""
+    return data.get("models", [])
+
+
+def parse_response(data: dict) -> list[dict]:
+    return parse_ollama_local(data)
 
 
 async def fetch_models(api_key: str) -> list[dict]:
-    """Fetch available models from Ollama Local.
-
-    Args:
-        api_key: Ollama Local API key.
-
-    Returns:
-        List of raw model dicts from API.
-
-    Raises:
-        httpx.HTTPStatusError: If API returns non-success status.
-        httpx.ConnectError: If cannot connect to Ollama Local.
-        httpx.TimeoutException: If request times out.
-    """
-    headers = {
-        "Content-Type": "application/json",
-        AUTH_HEADER: f"{AUTH_PREFIX}{api_key}",
-    }
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(MODEL_FETCH_URL, headers=headers)
-        resp.raise_for_status()
-        return parse_response(resp.json())
+    """Fetch available models from Ollama Local."""
+    return await fetch_models_header_auth(_config, api_key, parse_fn=parse_ollama_local)

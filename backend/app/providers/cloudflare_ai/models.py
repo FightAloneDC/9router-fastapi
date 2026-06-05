@@ -1,46 +1,18 @@
-"""Cloudflare model fetching.
-
-Fetches available models from Cloudflare API.
-"""
+"""Cloudflare AI model fetching — uses account_id from providerSpecificData."""
 
 import httpx
 
-from app.providers.cloudflare_ai.config import CloudflareAIConfig
-from app.utils.url import url_path_join
+from app.providers.cloudflare_ai.config import CloudflareAiConfig
 
-_config = CloudflareAIConfig()
-
-MODEL_FETCH_URL = url_path_join(_config.BASE_URL, "models")
-AUTH_HEADER = _config.AUTH_HEADER
-AUTH_PREFIX = _config.AUTH_PREFIX
-TIMEOUT = 15.0
+_config: CloudflareAiConfig = CloudflareAiConfig()
+TIMEOUT: float = 15.0
 
 
-def parse_response(data: dict) -> list:
-    """Extract models list from Cloudflare API response."""
-    return data.get("data", [])
+def parse_response(data: dict) -> list[dict]:
+    """Cloudflare returns {result: [...]}."""
+    return data.get("result", data.get("data", []))
 
 
 async def fetch_models(api_key: str) -> list[dict]:
-    """Fetch available models from Cloudflare.
-
-    Args:
-        api_key: Cloudflare API key.
-
-    Returns:
-        List of raw model dicts from API.
-
-    Raises:
-        httpx.HTTPStatusError: If API returns non-success status.
-        httpx.ConnectError: If cannot connect to Cloudflare.
-        httpx.TimeoutException: If request times out.
-    """
-    headers = {
-        "Content-Type": "application/json",
-        AUTH_HEADER: f"{AUTH_PREFIX}{api_key}",
-    }
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(MODEL_FETCH_URL, headers=headers)
-        resp.raise_for_status()
-        return parse_response(resp.json())
+    """Cloudflare needs account_id in URL — handled at endpoint level."""
+    return []

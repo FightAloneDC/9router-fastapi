@@ -4,33 +4,23 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class ElevenlabsConfig(BaseModel):
-    """ElevenLabs provider configuration template."""
+class ElevenlabsConfig(BaseProviderConfig):
+    """ElevenLabs provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "ElevenLabs"
     PROVIDER_ID: str = "elevenlabs"
     ALIAS: str = "el"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.elevenlabs.io/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['tts']
-
-    # ── Auth ────────────────────────────────────────────────────────────
+    SERVICE_KINDS: list[str] = ["tts"]
     AUTH_HEADER: str = "xi-api-key"
     AUTH_PREFIX: str = ""
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
 
 
-class ElevenlabsMetadata(BaseModel):
+class ElevenlabsMetadata(BaseMetadata):
     """ElevenLabs UI display metadata."""
 
     name: str = "ElevenLabs"

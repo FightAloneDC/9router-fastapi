@@ -1,57 +1,31 @@
-"""Deepgram model fetching.
-
-Fetches available models from Deepgram API.
-"""
-
-import httpx
+"""Deepgram model fetching — custom parse (stt/tts sections, Token auth)."""
 
 from app.providers.deepgram.config import DeepgramConfig
-from app.utils.url import url_path_join
+from app.providers.model_helpers import fetch_models_header_auth
 
-_config = DeepgramConfig()
-
-MODEL_FETCH_URL = url_path_join(_config.BASE_URL, "models")
-AUTH_HEADER = _config.AUTH_HEADER
-AUTH_PREFIX = _config.AUTH_PREFIX
-TIMEOUT = 15.0
+_config: DeepgramConfig = DeepgramConfig()
 
 
-def parse_response(data: dict) -> list:
-    """Extract models list from Deepgram API response.
-
-    Deepgram returns {stt: [...], tts: [...], languages: [...]}.
-    Combine stt and tts into a single list.
-    Normalize to include 'id' key from 'canonical_name'.
-    """
-    models = []
-    models.extend(data.get("stt", []))
-    models.extend(data.get("tts", []))
-    for m in models:
-        if isinstance(m, dict) and "id" not in m:
-            m["id"] = m.get("canonical_name") or m.get("name") or m.get("uuid", "")
+def parse_deepgram(data: dict) -> list[dict]:
+    """Deepgram returns {stt: [...], tts: [...]}."""
+    models: list[dict] = []
+    for m in data.get("stt", []):
+        if isinstance(m, dict):
+            if "id" not in m:
+                m["id"] = m.get("canonical_name") or m.get("name", "")
+            models.append(m)
+    for m in data.get("tts", []):
+        if isinstance(m, dict):
+            if "id" not in m:
+                m["id"] = m.get("canonical_name") or m.get("name", "")
+            models.append(m)
     return models
 
 
+def parse_response(data: dict) -> list[dict]:
+    return parse_deepgram(data)
+
+
 async def fetch_models(api_key: str) -> list[dict]:
-    """Fetch available models from Deepgram.
-
-    Args:
-        api_key: Deepgram API key.
-
-    Returns:
-        List of raw model dicts from API.
-
-    Raises:
-        httpx.HTTPStatusError: If API returns non-success status.
-        httpx.ConnectError: If cannot connect to Deepgram.
-        httpx.TimeoutException: If request times out.
-    """
-    headers = {
-        "Content-Type": "application/json",
-        AUTH_HEADER: f"{AUTH_PREFIX}{api_key}",
-    }
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(MODEL_FETCH_URL, headers=headers)
-        resp.raise_for_status()
-        return parse_response(resp.json())
+    """Fetch available models from Deepgram."""
+    return await fetch_models_header_auth(_config, api_key, parse_fn=parse_deepgram)

@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class BlackboxConfig(BaseModel):
-    """Blackbox AI provider configuration template."""
+class BlackboxConfig(BaseProviderConfig):
+    """Blackbox AI provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Blackbox AI"
     PROVIDER_ID: str = "blackbox"
     ALIAS: str = "bb"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.blackbox.ai/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["llm"]
 
 
-class BlackboxMetadata(BaseModel):
+class BlackboxMetadata(BaseMetadata):
     """Blackbox AI UI display metadata."""
 
     name: str = "Blackbox AI"

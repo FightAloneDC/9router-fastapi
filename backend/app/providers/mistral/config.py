@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class MistralConfig(BaseModel):
-    """Mistral provider configuration template."""
+class MistralConfig(BaseProviderConfig):
+    """Mistral provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Mistral"
     PROVIDER_ID: str = "mistral"
     ALIAS: str = "mi"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.mistral.ai/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['llm', 'imageToText', 'embedding']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["llm", "imageToText", "embedding"]
 
 
-class MistralMetadata(BaseModel):
+class MistralMetadata(BaseMetadata):
     """Mistral UI display metadata."""
 
     name: str = "Mistral"

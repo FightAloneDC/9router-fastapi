@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class HuggingfaceConfig(BaseModel):
-    """Hugging Face provider configuration template."""
+class HuggingfaceConfig(BaseProviderConfig):
+    """Hugging Face provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Hugging Face"
     PROVIDER_ID: str = "huggingface"
     ALIAS: str = "hf"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api-inference.huggingface.co"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['image', 'imageToText', 'stt', 'tts']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["image", "imageToText", "stt", "tts"]
 
 
-class HuggingfaceMetadata(BaseModel):
+class HuggingfaceMetadata(BaseMetadata):
     """Hugging Face UI display metadata."""
 
     name: str = "Hugging Face"

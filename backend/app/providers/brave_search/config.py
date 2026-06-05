@@ -4,33 +4,21 @@ Static provider characteristics — runtime data (API keys, custom baseUrl)
 come from ProviderConnection.data in the database.
 """
 
-from pydantic import BaseModel
+from app.providers.base import BaseMetadata, BaseProviderConfig
 
 
-class BraveSearchConfig(BaseModel):
-    """Brave Search provider configuration template."""
+class BraveSearchConfig(BaseProviderConfig):
+    """Brave Search provider configuration."""
 
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Brave Search"
     PROVIDER_ID: str = "brave-search"
     ALIAS: str = "brave"
-
-    # ── Connection defaults ─────────────────────────────────────────────
     BASE_URL: str = "https://api.search.brave.com/res/v1"
-    FORMAT: str = "openai"
-    VALIDATION_TYPE: str = "openai"
-    SERVICE_KINDS: list[str] = ['webSearch']
-
-    # ── Auth ────────────────────────────────────────────────────────────
-    AUTH_HEADER: str = "Authorization"
-    AUTH_PREFIX: str = "Bearer "
-    EXTRA_HEADERS: dict[str, str] = {}
-
-    # ── Runtime (from DB connection, not .env) ──────────────────────────
-    API_KEY: str = ""
+    SERVICE_KINDS: list[str] = ["webSearch"]
 
 
-class BraveSearchMetadata(BaseModel):
+class BraveSearchMetadata(BaseMetadata):
     """Brave Search UI display metadata."""
 
     name: str = "Brave Search"

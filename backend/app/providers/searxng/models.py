@@ -1,46 +1,14 @@
-"""SearXNG model fetching.
-
-Fetches available models from SearXNG API.
-"""
-
-import httpx
+"""SearXNG model fetching — no standard API listing."""
 
 from app.providers.searxng.config import SearxngConfig
-from app.utils.url import url_path_join
 
-_config = SearxngConfig()
-
-MODEL_FETCH_URL = url_path_join(_config.BASE_URL, "models")
-AUTH_HEADER = _config.AUTH_HEADER
-AUTH_PREFIX = _config.AUTH_PREFIX
-TIMEOUT = 15.0
+_config: SearxngConfig = SearxngConfig()
 
 
-def parse_response(data: dict) -> list:
-    """Extract models list from SearXNG API response."""
-    return data.get("data", [])
+def parse_response(data: dict) -> list[dict]:
+    return []
 
 
 async def fetch_models(api_key: str) -> list[dict]:
-    """Fetch available models from SearXNG.
-
-    Args:
-        api_key: SearXNG API key.
-
-    Returns:
-        List of raw model dicts from API.
-
-    Raises:
-        httpx.HTTPStatusError: If API returns non-success status.
-        httpx.ConnectError: If cannot connect to SearXNG.
-        httpx.TimeoutException: If request times out.
-    """
-    headers = {
-        "Content-Type": "application/json",
-        AUTH_HEADER: f"{AUTH_PREFIX}{api_key}",
-    }
-
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(MODEL_FETCH_URL, headers=headers)
-        resp.raise_for_status()
-        return parse_response(resp.json())
+    """SearXNG does not expose a standard model listing endpoint."""
+    return []
