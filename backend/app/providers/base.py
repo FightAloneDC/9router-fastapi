@@ -119,7 +119,8 @@ class BaseProviderHandler:
         )
 
     async def _validate_openai_compatible(
-        self, api_key: str, base_url: str, data: dict | None = None
+        self, api_key: str, base_url: str, data: dict | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> ValidateResult:
         """Default validation: GET /models with Bearer auth."""
         import time
@@ -130,6 +131,8 @@ class BaseProviderHandler:
         headers = {"Authorization": f"Bearer {api_key}"}
         if self.config.EXTRA_HEADERS:
             headers.update(self.config.EXTRA_HEADERS)
+        if extra_headers:
+            headers.update(extra_headers)
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             try:
@@ -140,7 +143,18 @@ class BaseProviderHandler:
                 if resp.status_code == 403:
                     return ValidateResult(valid=False, error="API key forbidden", latency_ms=latency)
                 if resp.status_code >= 400:
-                    return ValidateResult(valid=False, error=f"HTTP {resp.status_code}", latency_ms=latency)
+                    error_msg = f"HTTP {resp.status_code}"
+                    try:
+                        error_data = resp.json()
+                        if isinstance(error_data, dict) and "error" in error_data:
+                            err = error_data["error"]
+                            if isinstance(err, dict) and "message" in err:
+                                error_msg = err["message"]
+                            elif isinstance(err, str):
+                                error_msg = err
+                    except Exception:
+                        pass
+                    return ValidateResult(valid=False, error=error_msg, latency_ms=latency)
                 data_resp = resp.json()
                 models = []
                 if isinstance(data_resp, dict) and "data" in data_resp:
@@ -148,6 +162,37 @@ class BaseProviderHandler:
                 return ValidateResult(valid=True, models=models or None, latency_ms=latency)
             except httpx.ConnectError:
                 return ValidateResult(valid=False, error=f"Cannot connect to {base_url}", latency_ms=int((time.monotonic() - start) * 1000))
+            except httpx.TimeoutException:
+                return ValidateResult(valid=False, error="Connection timed out", latency_ms=int((time.monotonic() - start) * 1000))
+            except Exception as e:
+                return ValidateResult(valid=False, error=str(e)[:200], latency_ms=int((time.monotonic() - start) * 1000))
+
+    async def _validate_anthropic_compatible(
+        self, api_key: str, base_url: str
+    ) -> ValidateResult:
+        """Anthropic-compatible validation: GET /models with x-api-key + anthropic-version."""
+        import time
+        import httpx
+
+        start = time.monotonic()
+        url = f"{base_url}/models"
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "Authorization": f"Bearer {api_key}",
+        }
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                resp = await client.get(url, headers=headers)
+                latency = int((time.monotonic() - start) * 1000)
+                if resp.status_code in (401, 403):
+                    return ValidateResult(valid=False, error="Invalid API key (unauthorized)", latency_ms=latency)
+                if resp.status_code >= 500:
+                    return ValidateResult(valid=False, error=f"Server error ({resp.status_code})", latency_ms=latency)
+                return ValidateResult(valid=True, latency_ms=latency)
+            except httpx.ConnectError:
+                return ValidateResult(valid=False, error="Cannot connect to provider", latency_ms=int((time.monotonic() - start) * 1000))
             except httpx.TimeoutException:
                 return ValidateResult(valid=False, error="Connection timed out", latency_ms=int((time.monotonic() - start) * 1000))
             except Exception as e:

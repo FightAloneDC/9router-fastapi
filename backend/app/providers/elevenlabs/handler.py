@@ -14,13 +14,14 @@ class ElevenlabsHandler(BaseProviderHandler):
         if not api_key:
             return ValidateResult(valid=False, error="API key is required for ElevenLabs")
 
+        base_url = self._resolve_base_url(data)
+        url = f"{base_url}/voices"
+        headers = {self.config.AUTH_HEADER: api_key}
+
         start = time.monotonic()
         async with httpx.AsyncClient(timeout=15.0) as client:
             try:
-                resp = await client.get(
-                    "https://api.elevenlabs.io/v1/voices",
-                    headers={"xi-api-key": api_key},
-                )
+                resp = await client.get(url, headers=headers)
                 latency = int((time.monotonic() - start) * 1000)
                 if resp.status_code in (401, 403):
                     return ValidateResult(valid=False, error="Invalid API key (unauthorized)", latency_ms=latency)

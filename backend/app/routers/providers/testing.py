@@ -19,7 +19,7 @@ from app.routers.auth import get_current_user
 from app.routers.providers._router import router
 from app.routers.providers.constants import infer_model_type
 from app.routers.providers.helpers import _get_provider_config, _get_base_url
-from app.routers.providers.validation import _validate_provider, _validate_openai_compatible
+from app.routers.providers.validation import _validate_provider, _validate_custom_openai
 from app.schemas.provider import (
     BatchTestRequest,
     BatchTestResponse,
@@ -134,7 +134,7 @@ async def validate_provider(
         # Fallback for custom providers
         base_url = _get_base_url(body.provider, body.baseUrl, extra)
         if base_url:
-            return await _validate_openai_compatible(body.apiKey, base_url, extra_headers)
+            return await _validate_custom_openai(body.apiKey, base_url, extra_headers)
         return ProviderValidateResponse(valid=False, error=f"Unknown provider: {body.provider}")
 
 

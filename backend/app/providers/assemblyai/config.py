@@ -14,7 +14,7 @@ class AssemblyaiConfig(BaseProviderConfig):
     PROVIDER_NAME: str = "AssemblyAI"
     PROVIDER_ID: str = "assemblyai"
     ALIAS: str = "aai"
-    BASE_URL: str = "https://api.assemblyai.com/v1"
+    BASE_URL: str = "https://api.assemblyai.com/v2"
     SERVICE_KINDS: list[str] = ["stt"]
     AUTH_HEADER: str = "Authorization"
     AUTH_PREFIX: str = ""

@@ -14,14 +14,17 @@ class VoyageAiHandler(BaseProviderHandler):
         if not api_key:
             return ValidateResult(valid=False, error="API key is required for Voyage AI")
 
+        base_url = self._resolve_base_url(data)
+        url = f"{base_url}/embeddings"
+        headers = {
+            self.config.AUTH_HEADER: f"{self.config.AUTH_PREFIX}{api_key}",
+            "Content-Type": "application/json",
+        }
+
         start = time.monotonic()
         async with httpx.AsyncClient(timeout=15.0) as client:
             try:
-                resp = await client.post(
-                    "https://api.voyageai.com/v1/embeddings",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={"input": "ping", "model": "voyage-3"},
-                )
+                resp = await client.post(url, headers=headers, json={"input": "ping", "model": "voyage-3"})
                 latency = int((time.monotonic() - start) * 1000)
                 if resp.status_code in (401, 403):
                     return ValidateResult(valid=False, error="Invalid API key (unauthorized)", latency_ms=latency)

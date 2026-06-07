@@ -16,6 +16,8 @@ class InworldConfig(BaseProviderConfig):
     ALIAS: str = "iw"
     BASE_URL: str = "https://api.inworld.ai"
     SERVICE_KINDS: list[str] = ["tts"]
+    AUTH_HEADER: str = "Authorization"
+    AUTH_PREFIX: str = "Basic "
 
     # ── Model type overrides ────────────────────────────────────────────
     MODEL_TYPE_OVERRIDES: dict[str, str] = {
