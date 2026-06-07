@@ -78,23 +78,14 @@ async def create_provider_node(
         else:
             node_id = f"{node_type}-{uid}"
 
-    # Sanitize base URL
+    # Sanitize base URL (now required by schema)
     data = {}
-    if body.base_url:
-        sanitized = body.base_url.strip().rstrip("/")
-        if node_type == "anthropic-compatible" and sanitized.endswith("/messages"):
-            sanitized = sanitized[:-9]
-        if node_type == "custom-embedding" and sanitized.endswith("/embeddings"):
-            sanitized = sanitized[: -len("/embeddings")]
-        data["baseUrl"] = sanitized
-    else:
-        # Apply defaults matching original Next.js
-        if node_type == "openai-compatible":
-            data["baseUrl"] = "https://api.openai.com/v1"
-        elif node_type == "anthropic-compatible":
-            data["baseUrl"] = "https://api.anthropic.com/v1"
-        elif node_type == "custom-embedding":
-            data["baseUrl"] = "https://api.openai.com/v1"
+    sanitized = body.base_url.strip().rstrip("/")
+    if node_type == "anthropic-compatible" and sanitized.endswith("/messages"):
+        sanitized = sanitized[:-9]
+    if node_type == "custom-embedding" and sanitized.endswith("/embeddings"):
+        sanitized = sanitized[: -len("/embeddings")]
+    data["baseUrl"] = sanitized
 
     if body.prefix:
         data["prefix"] = body.prefix.strip()

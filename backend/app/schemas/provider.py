@@ -187,7 +187,7 @@ class ProviderNodeCreate(BaseModel):
     id: Optional[str] = None
     type: str
     name: str
-    base_url: Optional[str] = None
+    base_url: str
     prefix: str
     api_type: Optional[str] = None
 
