@@ -108,7 +108,7 @@ def _sanitize_connection(conn_dict: dict) -> dict:
         "accessKeyId", "region", "projectId", "resourceUrl", "proxyPoolId",
         "connectionProxyEnabled", "connectionProxyUrl", "connectionNoProxy",
         "githubLogin", "githubName", "githubEmail", "githubUserId",
-        "username", "firstName", "lastName", "authMethod", "authKind",
+        "username", "firstName", "lastName", "authMethod", "authKind", "loginMethod",
     ]
 
     safe = {}

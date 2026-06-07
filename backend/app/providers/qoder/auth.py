@@ -133,19 +133,31 @@ async def poll_device_token(
     except Exception:
         raise Exception(f"Qoder device token poll: invalid JSON response")
 
-    access_token = data.get("accessToken") or data.get("access_token")
+    # Qoder returns 'token' (not 'accessToken' or 'access_token')
+    access_token = data.get("token") or data.get("accessToken") or data.get("access_token")
     if not access_token:
-        raise Exception("Qoder device token poll: no access_token in response")
+        raise Exception("Qoder device token poll: no token in response")
+
+    # Calculate expiry (matching Node.js parseExpiry logic)
+    expires_at = data.get("expires_at")
+    expires_in = data.get("expires_in")
+    
+    # If expires_at is a timestamp (ms), calculate remaining seconds
+    if expires_at and isinstance(expires_at, (int, float)):
+        remaining_seconds = max(0, int((expires_at - __import__('time').time() * 1000) / 1000))
+        expires_in = max(24 * 60 * 60, remaining_seconds)  # Minimum 1 day
+    elif expires_in is None:
+        expires_in = 30 * 24 * 60 * 60  # Default 30 days
 
     return {
         "status": "ok",
         "access_token": access_token,
-        "refresh_token": data.get("refreshToken") or data.get("refresh_token"),
-        "expires_in": data.get("expiresIn") or data.get("expires_in"),
+        "refresh_token": data.get("refresh_token"),
+        "expires_in": expires_in,
         "token_type": data.get("token_type", "Bearer"),
         "scope": data.get("scope"),
-        "user_id": data.get("userId") or data.get("user_id"),
-        "display_name": data.get("displayName") or data.get("display_name"),
+        "user_id": data.get("user_id"),
+        "display_name": data.get("display_name"),
         "email": data.get("email"),
     }
 

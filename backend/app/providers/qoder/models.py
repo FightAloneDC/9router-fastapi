@@ -8,6 +8,14 @@ On any error the live cache stays empty and chat requests surface the
 problem to the user as "model config not yet fetched, retry shortly".
 """
 
+def parse_response(data: dict) -> list[dict]:
+    """Extract models list from Qoder API response.
+
+    Qoder doesn't use this — models are fetched via handler.fetch_models().
+    This is a stub to satisfy the Provider class interface.
+    """
+    return []
+
 import hashlib
 import time
 from typing import Any
@@ -52,6 +60,9 @@ async def fetch_qoder_catalog(
 
     Returns:
         Dict with 'models' list and 'raw_configs' map, or None on error
+
+    Raises:
+        httpx.HTTPStatusError: If the API returns a non-200 status code (e.g. 403 for expired token)
     """
     creds = _cosy_creds_from_connection(credentials)
     if not creds["user_id"] or not creds["auth_token"]:
@@ -67,46 +78,52 @@ async def fetch_qoder_catalog(
         machine_id=creds["machine_id"],
     )
 
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(QODER_MODEL_LIST_URL, headers=headers)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.get(QODER_MODEL_LIST_URL, headers=headers)
 
-        if response.status_code != 200:
-            return None
+    if response.status_code != 200:
+        # Parse error message from Qoder API
+        try:
+            error_body = response.json()
+            error_message = error_body.get("message", error_body.get("errorMessage", f"HTTP {response.status_code}"))
+        except Exception:
+            error_message = f"HTTP {response.status_code}: {response.text[:200]}"
+        raise httpx.HTTPStatusError(
+            message=f"Qoder model list failed: {error_message}",
+            request=response.request,
+            response=response,
+        )
 
-        body = response.json()
-        if not isinstance(body.get("chat"), list):
-            return None
-
-        models = []
-        raw_configs = {}
-        for entry in body["chat"]:
-            # Qoder uses 'key' not 'modelId' or 'id'
-            model_id = entry.get("key") or entry.get("modelId") or entry.get("id")
-            if not model_id:
-                continue
-
-            model_info = {
-                "id": model_id,
-                "name": entry.get("display_name") or entry.get("name", model_id),
-                "context_length": entry.get("max_input_tokens") or entry.get("contextLength", 0),
-                "is_vl": entry.get("isVL") or entry.get("is_vl", False),
-                "is_reasoning": entry.get("isReasoning") or entry.get("is_reasoning", False),
-                "max_output_tokens": entry.get("maxOutputTokens") or entry.get("max_output_tokens", 0),
-                "description": entry.get("description", ""),
-                "format": entry.get("format", ""),
-                "source": entry.get("source", ""),
-                "price_factor": entry.get("price_factor", 1.0),
-            }
-            models.append(model_info)
-
-            # Store the full config for chat requests (Node.js uses the entire entry)
-            raw_configs[model_id] = entry
-
-        return {"models": models, "raw_configs": raw_configs}
-
-    except Exception:
+    body = response.json()
+    if not isinstance(body.get("chat"), list):
         return None
+
+    models = []
+    raw_configs = {}
+    for entry in body["chat"]:
+        # Qoder uses 'key' not 'modelId' or 'id'
+        model_id = entry.get("key") or entry.get("modelId") or entry.get("id")
+        if not model_id:
+            continue
+
+        model_info = {
+            "id": model_id,
+            "name": entry.get("display_name") or entry.get("name", model_id),
+            "context_length": entry.get("max_input_tokens") or entry.get("contextLength", 0),
+            "is_vl": entry.get("isVL") or entry.get("is_vl", False),
+            "is_reasoning": entry.get("isReasoning") or entry.get("is_reasoning", False),
+            "max_output_tokens": entry.get("maxOutputTokens") or entry.get("max_output_tokens", 0),
+            "description": entry.get("description", ""),
+            "format": entry.get("format", ""),
+            "source": entry.get("source", ""),
+            "price_factor": entry.get("price_factor", 1.0),
+        }
+        models.append(model_info)
+
+        # Store the full config for chat requests (Node.js uses the entire entry)
+        raw_configs[model_id] = entry
+
+    return {"models": models, "raw_configs": raw_configs}
 
 
 async def resolve_qoder_models(
@@ -121,6 +138,9 @@ async def resolve_qoder_models(
 
     Returns:
         Dict with 'models' list
+
+    Raises:
+        httpx.HTTPStatusError: If the API returns a non-200 status code (e.g. 403 for expired token)
     """
     psd = credentials.get("provider_specific", {})
     user_id = psd.get("userId") or credentials.get("user_id", "")
@@ -135,7 +155,7 @@ async def resolve_qoder_models(
         if cached.get("expires_at", 0) > now_ms and cached.get("fetched"):
             return {"models": cached["models"]}
 
-    # Fetch from API
+    # Fetch from API — may raise httpx.HTTPStatusError
     result = await fetch_qoder_catalog(credentials)
     if result and result["models"]:
         _catalog_cache[key] = {

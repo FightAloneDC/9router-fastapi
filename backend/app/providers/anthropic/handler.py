@@ -66,3 +66,7 @@ class AnthropicHandler(BaseProviderHandler):
         )
         models_raw = await fetch_models_header_auth(config, api_key)
         return [self._normalize_model(m) for m in models_raw if self._normalize_model(m).get("id")]
+
+    def build_upstream_url(self, base_url: str, stream: bool = False, data: dict | None = None, model: str = "") -> str:
+        """Anthropic uses /messages endpoint."""
+        return f"{base_url.rstrip('/')}/messages"

@@ -276,6 +276,7 @@ async def _save_connection(
     db: AsyncSession,
     provider: str,
     token_data: dict,
+    auth_type: str = "oauth",
 ) -> ProviderConnection:
     """Create or update a ProviderConnection from OAuth token data."""
     now = datetime.now(timezone.utc)
@@ -309,8 +310,8 @@ async def _save_connection(
 
     conn = ProviderConnection(
         provider=provider,
-        auth_type="oauth",
-        name=display_name or email or f"{provider} OAuth",
+        auth_type=auth_type,
+        name=display_name or email or f"{provider} {'PAT' if auth_type == 'apikey' else 'OAuth'}",
         email=email,
         data=json.dumps(data),
     )
@@ -424,7 +425,7 @@ async def device_code(
 
         # Prepare extra data for polling (e.g. kiro stores client credentials)
         extra = {}
-        for key in ("_clientId", "_clientSecret", "_region", "_authMethod", "_startUrl"):
+        for key in ("_clientId", "_clientSecret", "_region", "_authMethod", "_startUrl", "_qoderNonce", "_qoderMachineId"):
             if key in device_data:
                 extra[key] = device_data.pop(key)
 
@@ -435,7 +436,7 @@ async def device_code(
             verification_uri_complete=device_data.get("verification_uri_complete"),
             expires_in=device_data.get("expires_in"),
             interval=device_data.get("interval", 5),
-            codeVerifier=pkce["codeVerifier"],
+            codeVerifier=device_data.get("codeVerifier") or pkce["codeVerifier"],
             extra=extra if extra else None,
         )
     except ValueError as e:
@@ -465,6 +466,7 @@ async def poll(
 
         if result.get("success"):
             conn = await _save_connection(db, provider, result["tokens"])
+            await db.commit()
             return OAuthPollResponse(
                 success=True,
                 connection=ConnectionResponse(
@@ -809,7 +811,7 @@ async def qoder_pat_import(
     /api/v1/jobToken/exchange, then used for COSY-signed requests.
     """
     try:
-        from app.services.qoder.auth import import_pat
+        from app.providers.qoder.auth import import_pat
 
         # Import PAT: exchange for regular token + fetch user info
         result = await import_pat(body.personalToken)
@@ -828,7 +830,7 @@ async def qoder_pat_import(
             },
         }
 
-        conn = await _save_connection(db, "qoder", token_data)
+        conn = await _save_connection(db, "qoder", token_data, auth_type="apikey")
         return OAuthExchangeResponse(
             success=True,
             connection=ConnectionResponse(

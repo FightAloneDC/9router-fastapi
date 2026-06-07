@@ -99,6 +99,9 @@ PROVIDER_AZURE = "azure"
 PROVIDER_AMAZON_BEDROCK = "amazon-bedrock"
 PROVIDER_OLLAMA_LOCAL = "ollama-local"
 
+# Special providers (complex auth)
+PROVIDER_QODER = "qoder"
+
 # ── All implemented providers ──────────────────────────────────────────────
 AVAILABLE_PROVIDERS: list[str] = [
     # Free tier
@@ -186,6 +189,7 @@ AVAILABLE_PROVIDERS: list[str] = [
     PROVIDER_AMAZON_BEDROCK,
     PROVIDER_CLOUDFLARE_AI,
     PROVIDER_OLLAMA_LOCAL,
+    PROVIDER_QODER,
 ]
 
 

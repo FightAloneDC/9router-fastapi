@@ -45,3 +45,9 @@ class CloudflareAiHandler(BaseProviderHandler):
                 return ValidateResult(valid=False, error="Connection timed out", latency_ms=int((time.monotonic() - start) * 1000))
             except Exception as e:
                 return ValidateResult(valid=False, error=str(e)[:200], latency_ms=int((time.monotonic() - start) * 1000))
+
+    def build_upstream_url(self, base_url: str, stream: bool = False, data: dict | None = None, model: str = "") -> str:
+        """Cloudflare AI uses account-based URL."""
+        data = data or {}
+        account_id = data.get("accountId", "")
+        return f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1/chat/completions"

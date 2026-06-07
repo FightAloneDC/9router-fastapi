@@ -51,3 +51,11 @@ class AzureHandler(BaseProviderHandler):
                 return ValidateResult(valid=False, error="Connection timed out", latency_ms=int((time.monotonic() - start) * 1000))
             except Exception as e:
                 return ValidateResult(valid=False, error=str(e)[:200], latency_ms=int((time.monotonic() - start) * 1000))
+
+    def build_upstream_url(self, base_url: str, stream: bool = False, data: dict | None = None, model: str = "") -> str:
+        """Azure uses deployments format with api-version."""
+        data = data or {}
+        endpoint = data.get("azureEndpoint") or base_url
+        deployment = data.get("deployment", "gpt-4")
+        api_version = data.get("apiVersion", "2024-10-01-preview")
+        return f"{endpoint.rstrip('/')}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"

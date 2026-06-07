@@ -163,3 +163,57 @@ class BaseProviderHandler:
         name = m.get("name") or m.get("display_name") or m.get("displayName") or m.get("id", "")
         model_type = m.get("type") or _get_model_type_overrides().get(model_id) or infer_model_type(model_id)
         return {"id": model_id, "name": name, "type": model_type}
+
+    def build_upstream_url(self, base_url: str, stream: bool = False, data: dict | None = None, model: str = "") -> str:
+        """Build the full upstream URL for chat/completions requests.
+
+        Override in child class for provider-specific URL formats.
+        Default: OpenAI-compatible /chat/completions
+        """
+        return f"{base_url.rstrip('/')}/chat/completions"
+
+    def build_headers(self, api_key: str, stream: bool = False, data: dict | None = None) -> dict[str, str]:
+        """Build HTTP headers for upstream request.
+
+        Override in child class for provider-specific auth (e.g. Qoder COSY).
+        Default: standard auth header from config.
+        """
+        if not api_key:
+            raise ValueError(f"No API key configured for provider \"{self.config.PROVIDER_ID}\"")
+
+        headers = {"Content-Type": "application/json"}
+        headers[self.config.AUTH_HEADER] = f"{self.config.AUTH_PREFIX}{api_key}"
+        if self.config.EXTRA_HEADERS:
+            headers.update(self.config.EXTRA_HEADERS)
+        if stream:
+            headers["Accept"] = "text/event-stream"
+        return headers
+
+    def build_embeddings_url(self, chat_url: str) -> str:
+        """Transform chat/completions URL to embeddings URL.
+
+        Override in child class for provider-specific embeddings endpoints.
+        Default: /chat/completions → /embeddings
+        """
+        if chat_url.endswith("/chat/completions"):
+            return chat_url[:-len("/chat/completions")] + "/embeddings"
+        if "/chat/completions" in chat_url:
+            return chat_url.replace("/chat/completions", "/embeddings")
+        return chat_url.rstrip("/") + "/embeddings"
+
+    def build_embeddings_body(self, model: str, body: dict) -> dict:
+        """Transform embeddings request body for provider-specific formats.
+
+        Override in child class for non-OpenAI formats (e.g. Gemini).
+        Default: pass through with model override.
+        """
+        return {**body, "model": model}
+
+    def unwrap_response(self, response_text: str) -> dict:
+        """Unwrap provider-specific response envelope.
+
+        Override in child class for providers with custom envelopes (e.g. Qoder).
+        Default: standard JSON parse.
+        """
+        import json
+        return json.loads(response_text)

@@ -34,7 +34,7 @@ export default function OAuthModal({
   const [copiedField, setCopiedField] = useState(null)
   const [isLocalhost, setIsLocalhost] = useState(false)
   const [placeholderUrl, setPlaceholderUrl] = useState('/callback?code=...')
-  const [patMode, setPatMode] = useState(false)
+  const [authMethod, setAuthMethod] = useState(null) // null = not chosen, 'device' = device flow, 'pat' = PAT import
   const [patToken, setPatToken] = useState('')
   const [importingPat, setImportingPat] = useState(false)
 
@@ -170,18 +170,22 @@ export default function OAuthModal({
     [provider, onSuccess]
   )
 
-  const startOAuthFlow = useCallback(async () => {
+  const startOAuthFlow = useCallback(async (method = null) => {
+    const effectiveMethod = method || authMethod
+    console.log('[Qoder OAuth] startOAuthFlow called', { provider, authMethod, method, effectiveMethod })
     if (!provider) return
     try {
       setError(null)
 
       // For Qoder, show choice between device flow and PAT import
-      if (PAT_IMPORT_PROVIDERS.includes(provider) && !patMode) {
+      if (PAT_IMPORT_PROVIDERS.includes(provider) && effectiveMethod === null) {
+        console.log('[Qoder OAuth] Showing choice step (effectiveMethod is null)')
         setStep('choose')
         return
       }
 
       if (DEVICE_CODE_PROVIDERS.includes(provider)) {
+        console.log('[Qoder OAuth] Starting device code flow')
         setIsDeviceCode(true)
         setStep('waiting')
 
@@ -196,13 +200,16 @@ export default function OAuthModal({
           }
           deviceCodeUrl.searchParams.set('auth_method', 'idc')
         }
+        console.log('[Qoder OAuth] Fetching device code from:', deviceCodeUrl.toString())
         const res = await fetch(deviceCodeUrl.toString())
         const data = await res.json()
+        console.log('[Qoder OAuth] Device code response:', { status: res.status, data })
         if (!res.ok) throw new Error(data.error)
 
         setDeviceData(data)
 
         const verifyUrl = data.verification_uri_complete || data.verification_uri
+        console.log('[Qoder OAuth] Opening verification URL:', verifyUrl)
         if (verifyUrl) window.open(verifyUrl, '_blank', 'noopener,noreferrer')
 
         const extraData =
@@ -216,11 +223,12 @@ export default function OAuthModal({
               }
             : provider === 'qoder'
             ? {
-                _qoderNonce: data._qoderNonce,
-                _qoderMachineId: data._qoderMachineId,
+                _qoderNonce: data.extra?._qoderNonce || data.device_code,
+                _qoderMachineId: data.extra?._qoderMachineId,
                 _qoderVerifier: data.codeVerifier,
               }
             : null
+        console.log('[Qoder OAuth] Starting polling with:', { device_code: data.device_code, extraData })
         startPolling(data.device_code, data.codeVerifier, data.interval || 5, extraData)
         return
       }
@@ -284,10 +292,11 @@ export default function OAuthModal({
         }
       }
     } catch (err) {
+      console.error('[Qoder OAuth] Error in startOAuthFlow:', err)
       setError(err.message)
       setStep('error')
     }
-  }, [provider, isLocalhost, startPolling, oauthMeta, idcConfig])
+  }, [provider, isLocalhost, startPolling, oauthMeta, idcConfig, authMethod])
 
   useEffect(() => {
     if (isOpen && provider) {
@@ -297,7 +306,7 @@ export default function OAuthModal({
       setIsDeviceCode(false)
       setDeviceData(null)
       setPolling(false)
-      setPatMode(false)
+      setAuthMethod(null)
       setPatToken('')
       pollingAbortRef.current = false
       callbackProcessedRef.current = false
@@ -308,7 +317,8 @@ export default function OAuthModal({
         fetch('/api/oauth/codex/stop-proxy').catch(() => {})
       }
     }
-  }, [isOpen, provider, startOAuthFlow])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, provider])
 
   useEffect(() => {
     if (!authData?.codexServerSide || !authData?.state) return
@@ -613,8 +623,9 @@ export default function OAuthModal({
             </p>
             <Button
               onClick={() => {
-                setPatMode(false)
-                startOAuthFlow()
+                console.log('[Qoder OAuth] Button clicked - starting device flow')
+                setAuthMethod('device')
+                startOAuthFlow('device')
               }}
               fullWidth
             >
@@ -623,7 +634,7 @@ export default function OAuthModal({
             </Button>
             <Button
               onClick={() => {
-                setPatMode(true)
+                setAuthMethod('pat')
                 setStep('pat')
               }}
               variant="secondary"
@@ -699,7 +710,7 @@ export default function OAuthModal({
               </Button>
               <Button
                 onClick={() => {
-                  setPatMode(false)
+                  setAuthMethod(null)
                   setStep('choose')
                   setError(null)
                 }}

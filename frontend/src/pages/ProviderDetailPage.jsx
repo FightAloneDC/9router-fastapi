@@ -8,6 +8,7 @@ import {
   Cookie, Lock, TriangleAlert, Info, Plug,
 } from 'lucide-react'
 import Card, { CardContent, CardHeader, CardTitle } from '../components/ui/Card'
+import { useNotificationStore } from '../stores/notificationStore'
 import Button from '../components/ui/Button'
 import Badge from '../components/ui/Badge'
 import Modal from '../components/ui/Modal'
@@ -34,6 +35,14 @@ import GitLabAuthModal from '../components/GitLabAuthModal'
 import { useAuthStore } from '../stores/authStore'
 
 const COMPATIBLE_TYPES = new Set(['openai-compatible', 'anthropic-compatible'])
+
+// Per-connection OAuth detection (for providers that support both OAuth and PAT like qoder)
+function isConnectionOAuth(conn, providerId) {
+  // For qoder: both OAuth and PAT connections use OAuth-style editing (no API key field)
+  if (conn?.provider === 'qoder' || providerId === 'qoder') return true
+  if (conn?.auth_type) return conn.auth_type === 'oauth'
+  return !!OAUTH_PROVIDERS[providerId] || !!FREE_PROVIDERS[providerId]
+}
 
 const TYPE_BADGE_STYLES = {
   llm: 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25',
@@ -115,14 +124,16 @@ function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMo
 
   // OAuth display name logic
   const isEmail = (v) => typeof v === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
-  const displayName = isOAuth
+  const providerSpecific = connection.providerSpecificData || connection.provider_specific || {}
+  const _psd = connection.providerSpecificData || connection.provider_specific || {}
+  const _isOAuth = _psd.loginMethod === 'pat' ? false : (connection.auth_type ? connection.auth_type === 'oauth' : isOAuth)
+  const displayName = _isOAuth
     ? (isEmail(connection.email) ? connection.email
       : (isEmail(connection.name) ? connection.name
       : (connection.name || connection.email || connection.displayName || "OAuth Account")))
     : (connection.name || 'Unnamed Connection')
 
   // Cooldown detection from provider_specific fields
-  const providerSpecific = connection.provider_specific || {}
   const modelLockUntil = Object.entries(providerSpecific)
     .filter(([k]) => k.startsWith('modelLock_'))
     .map(([, v]) => v).filter(Boolean).sort()[0] || null
@@ -130,8 +141,8 @@ function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMo
 
   // Token expiry detection for OAuth
   const expiresAt = providerSpecific.expiresAt
-  const isTokenExpired = isOAuth && expiresAt && new Date(expiresAt).getTime() < Date.now()
-  const hasRefreshError = isOAuth && providerSpecific.lastError
+  const isTokenExpired = _isOAuth && expiresAt && new Date(expiresAt).getTime() < Date.now()
+  const hasRefreshError = _isOAuth && providerSpecific.lastError
 
   // Proxy info
   const boundProxyPoolId = connection.proxy_pool_id || null
@@ -184,7 +195,7 @@ function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMo
           </button>
         </div>
 
-        {isOAuth ? <Lock size={16} className="shrink-0 text-zinc-500" /> : <Key size={16} className="shrink-0 text-zinc-500" />}
+        {_isOAuth ? <Lock size={16} className="shrink-0 text-zinc-500" /> : <Key size={16} className="shrink-0 text-zinc-500" />}
 
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-zinc-200 truncate">
@@ -304,7 +315,7 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
         setApiKey('')
         setBaseUrl(editConnection.base_url || '')
         setDefaultModel(editConnection.default_model || '')
-        const ps = editConnection.provider_specific || {}
+        const ps = editConnection.providerSpecificData || editConnection.provider_specific || {}
         setOllamaHostUrl(ps.baseUrl || editConnection.base_url || '')
         setAzureData({
           azureEndpoint: ps.azureEndpoint || '',
@@ -1532,6 +1543,13 @@ export default function ProviderDetailPage() {
       await fetchConnections()
     } catch (err) {
       console.error('Failed to fetch models:', err)
+      // Show user-friendly error message
+      const errorMessage = err.response?.data?.detail || err.message || 'Failed to fetch models'
+      useNotificationStore.getState().addNotification({
+        type: 'error',
+        title: 'Failed to fetch models',
+        message: errorMessage,
+      })
     } finally {
       setFetchingModels(false)
     }
@@ -2421,7 +2439,7 @@ export default function ProviderDetailPage() {
 
       {/* ── Edit Connection Modal ── */}
       {selectedConnection && (
-        isOAuth ? (
+        isConnectionOAuth(selectedConnection, providerId) ? (
           <OAuthEditModal
             isOpen={showEditModal}
             connection={selectedConnection}

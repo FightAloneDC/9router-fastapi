@@ -304,7 +304,7 @@ async def test_model(
     start = time.time()
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             if body.kind == "embedding":
                 # For embeddings, use the embeddings endpoint
                 cfg_url = url.replace("/chat/completions", "/embeddings")
@@ -315,6 +315,8 @@ async def test_model(
                 )
             elif target.provider == "qoder":
                 # Qoder needs WAF-bypass encoding + COSY signing
+                # Qoder returns SSE streams even for non-streaming requests,
+                # so we must stream-read and parse incrementally.
                 from app.services.proxy import build_qoder_request
 
                 test_body = {
@@ -339,11 +341,72 @@ async def test_model(
                 raw_body, qoder_headers = await build_qoder_request(
                     target, test_body, conn_data
                 )
-                resp = await client.post(
-                    url,
-                    headers=qoder_headers,
-                    content=raw_body,
-                )
+
+
+                # Stream-read the SSE response to avoid timeout
+                # Qoder returns HTTP 200 even for errors, embedding the real status
+                # in the SSE envelope as statusCodeValue
+                qoder_ok = False
+                qoder_status = 0
+                qoder_error = None
+                async with client.stream("POST", url, headers=qoder_headers, content=raw_body) as resp:
+                    qoder_status = resp.status_code
+                    if resp.status_code >= 400:
+                        error_body = b""
+                        async for chunk in resp.aiter_bytes():
+                            error_body += chunk
+                            if len(error_body) > 2000:
+                                break
+                        latency_ms = int((time.time() - start) * 1000)
+                        return {"ok": False, "latencyMs": latency_ms, "error": f"Qoder HTTP {resp.status_code}: {error_body.decode(errors='replace')[:240]}", "status": resp.status_code}
+                    line_buf = ""
+                    async for raw_chunk in resp.aiter_text():
+                        line_buf += raw_chunk
+                        while "\n" in line_buf:
+                            line, line_buf = line_buf.split("\n", 1)
+                            line = line.strip()
+                            if not line.startswith("data:"):
+                                continue
+                            payload = line[5:].strip()
+                            if payload == "[DONE]":
+                                break
+                            if not payload:
+                                continue
+                            try:
+                                envelope = json.loads(payload)
+                            except (json.JSONDecodeError, TypeError):
+                                continue
+                            # Check for Qoder error in SSE envelope
+                            sse_status = envelope.get("statusCodeValue", 0)
+                            if sse_status and sse_status >= 400:
+                                err_body = envelope.get("body", "")
+                                try:
+                                    err_obj = json.loads(err_body) if isinstance(err_body, str) else err_body
+                                    qoder_error = f"Qoder {sse_status} ({envelope.get('statusCode', '')}): code={err_obj.get('code', '?')} {str(err_obj.get('message', ''))[:200]}"
+                                except (json.JSONDecodeError, TypeError):
+                                    qoder_error = f"Qoder {sse_status}: {str(err_body)[:200]}"
+                                break
+                            inner = envelope.get("body", "")
+                            if not inner:
+                                continue
+                            try:
+                                chunk_data = json.loads(inner)
+                            except (json.JSONDecodeError, TypeError):
+                                continue
+                            choices = chunk_data.get("choices", [])
+                            if choices:
+                                qoder_ok = True
+                        if qoder_ok or qoder_error:
+                            break
+
+                latency_ms = int((time.time() - start) * 1000)
+                if qoder_ok:
+                    return {"ok": True, "latencyMs": latency_ms, "error": None, "status": qoder_status}
+                elif qoder_error:
+                    return {"ok": False, "latencyMs": latency_ms, "status": qoder_status, "error": qoder_error}
+                else:
+                    return {"ok": False, "latencyMs": latency_ms, "status": qoder_status, "error": "Qoder returned no completion choices (timeout or empty response)"}
+
             else:
                 resp = await client.post(
                     url,
@@ -358,36 +421,6 @@ async def test_model(
 
         latency_ms = int((time.time() - start) * 1000)
         raw_text = resp.text
-
-        # Qoder returns SSE even for non-streaming — parse SSE chunks
-        if target.provider == "qoder":
-            has_choices = False
-            for line in raw_text.split("\n"):
-                line = line.strip()
-                if not line.startswith("data:"):
-                    continue
-                payload = line[5:].strip()
-                if payload == "[DONE]" or not payload:
-                    continue
-                try:
-                    envelope = json.loads(payload)
-                except (json.JSONDecodeError, TypeError):
-                    continue
-                # Unwrap envelope: {"headers":{...},"body":"..."} or {"statusCodeValue":200,"body":"..."}
-                inner = envelope.get("body", "")
-                if not inner:
-                    continue
-                try:
-                    chunk = json.loads(inner)
-                except (json.JSONDecodeError, TypeError):
-                    continue
-                choices = chunk.get("choices", [])
-                if choices:
-                    has_choices = True
-            if has_choices:
-                return {"ok": True, "latencyMs": latency_ms, "error": None, "status": resp.status_code}
-            else:
-                return {"ok": False, "latencyMs": latency_ms, "status": resp.status_code, "error": "Qoder returned no completion choices"}
 
         try:
             parsed = json.loads(raw_text) if raw_text else None
@@ -428,7 +461,7 @@ async def test_model(
         return {"ok": True, "latencyMs": latency_ms, "error": None, "status": resp.status_code}
 
     except httpx.TimeoutException:
-        return {"ok": False, "error": "Request timed out (15s)", "latencyMs": 15000}
+        return {"ok": False, "error": "Request timed out (60s)", "latencyMs": 60000}
     except httpx.ConnectError:
         return {"ok": False, "error": f"Cannot connect to {target.provider} at {url}. Check the base URL and network connectivity.", "latencyMs": 0}
     except Exception as e:

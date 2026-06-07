@@ -52,8 +52,10 @@ def _should_fallback_on_error(status_code: int, detail: str) -> bool:
 def _unwrap_qoder_sse_line(line: str) -> str | None:
     """Unwrap a single Qoder SSE line to OpenAI format.
 
-    Qoder sends: data: {"statusCodeValue":200,"body":"{...}"}
-    We need: data: {...}
+    Qoder may send:
+      - New: data: {"headers":{...},"body":"..."}
+      - Old: data: {"statusCodeValue":200,"body":"..."}
+      - Direct: data: {"choices":[...],...}
 
     Returns:
         Unwrapped line or None if should be skipped
@@ -71,11 +73,21 @@ def _unwrap_qoder_sse_line(line: str) -> str | None:
     except json.JSONDecodeError:
         return None
 
+    # New format: {"headers":{...},"body":"..."}
+    if "headers" in envelope and "body" in envelope:
+        inner = envelope.get("body", "")
+        if not inner:
+            return None
+        if inner == "[DONE]":
+            return "data: [DONE]"
+        sanitized = inner.replace("\r\n", "").replace("\n", "")
+        return f"data: {sanitized}"
+
+    # Old format: {"statusCodeValue":200,"body":"..."}
     status = envelope.get("statusCodeValue", 200)
     inner = envelope.get("body", "")
 
     if status != 200:
-        # Error - return error chunk
         error_chunk = json.dumps({
             "id": f"qoder-error-{int(time.time())}",
             "object": "chat.completion.chunk",
@@ -268,15 +280,18 @@ async def _non_stream_response(
         resp = await client.post(target.url, **send_kwargs)
         resp.raise_for_status()
 
+        # Unwrap provider-specific response envelope
         try:
-            data = resp.json()
+            from app.providers.provider import Provider
+            p = Provider(target.provider)
+            handler = p.handler()
+            data = handler.unwrap_response(resp.text)
         except Exception:
-            data = {"raw": resp.text[:2000]}
-
-        # Unwrap Qoder response envelope
-        if target.provider == "qoder":
-            from app.services.qoder.transform import unwrap_qoder_response
-            data = unwrap_qoder_response(resp.text)
+            # Fallback: standard JSON parse
+            try:
+                data = resp.json()
+            except Exception:
+                data = {"raw": resp.text[:2000]}
 
         response = JSONResponse(
             status_code=resp.status_code,
@@ -292,45 +307,29 @@ async def _non_stream_response(
 
 
 def _build_embeddings_url(target: ProxyTarget) -> str:
-    """Derive the embeddings endpoint URL from a resolved target.
-
-    resolve_model_to_targets() always builds a /chat/completions URL.
-    For embeddings we swap the path suffix.
-
-    Gemini uses a different format: ``/models/{model}:embedContent``
-    instead of the OpenAI-compatible ``/embeddings`` path.
-    """
-    url = target.url
-    # Gemini: /models/{model}:generateContent → /models/{model}:embedContent
-    if ":generateContent" in url:
-        return url.replace(":generateContent", ":embedContent")
-    # Standard OpenAI-compat: /chat/completions → /embeddings
-    if url.endswith("/chat/completions"):
-        return url[: -len("/chat/completions")] + "/embeddings"
-    # Azure: swap deployments/{dep}/chat/completions → deployments/{dep}/embeddings
-    if "/chat/completions" in url:
-        return url.replace("/chat/completions", "/embeddings")
-    # Fallback: append /embeddings to base
-    return url.rstrip("/") + "/embeddings"
+    """Derive the embeddings endpoint URL using handler."""
+    try:
+        from app.providers.provider import Provider
+        p = Provider(target.provider)
+        handler = p.handler()
+        return handler.build_embeddings_url(target.url)
+    except (ValueError, ModuleNotFoundError):
+        # Fallback: standard OpenAI-compat
+        if target.url.endswith("/chat/completions"):
+            return target.url[:-len("/chat/completions")] + "/embeddings"
+        return target.url.rstrip("/") + "/embeddings"
 
 
 def _build_embeddings_body(target: ProxyTarget, body: dict) -> dict:
-    """Transform the embeddings request body for provider-specific formats.
-
-    Standard OpenAI format: ``{"model": "...", "input": "text"}``
-    Gemini format: ``{"model": "...", "content": {"parts": [{"text": "..."}]}}``
-    """
-    # Gemini: needs content.parts format
-    if ":embedContent" in target.url:
-        input_text = body.get("input", "")
-        if isinstance(input_text, list):
-            input_text = " ".join(str(x) for x in input_text)
-        return {
-            "model": target.model,
-            "content": {"parts": [{"text": str(input_text)}]},
-        }
-    # Standard OpenAI-compatible: pass through as-is
-    return {**body, "model": target.model}
+    """Transform the embeddings request body using handler."""
+    try:
+        from app.providers.provider import Provider
+        p = Provider(target.provider)
+        handler = p.handler()
+        return handler.build_embeddings_body(target.model, body)
+    except (ValueError, ModuleNotFoundError):
+        # Fallback: standard OpenAI-compat
+        return {**body, "model": target.model}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

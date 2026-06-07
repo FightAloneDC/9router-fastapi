@@ -58,3 +58,28 @@ class GeminiHandler(BaseProviderHandler):
             if name:
                 normalized.append({"id": name, "name": name})
         return [self._normalize_model(m) for m in normalized if self._normalize_model(m).get("id")]
+
+    def build_upstream_url(self, base_url: str, stream: bool = False, data: dict | None = None, model: str = "") -> str:
+        """Gemini uses /models/{model}:generateContent format."""
+        base = base_url.rstrip("/")
+        action = "streamGenerateContent?alt=sse" if stream else "generateContent"
+        model_id = model.replace("models/", "") if model else ""
+        if model_id:
+            return f"{base}/models/{model_id}:{action}"
+        return f"{base}/models"
+
+    def build_embeddings_url(self, chat_url: str) -> str:
+        """Gemini uses embedContent instead of /embeddings."""
+        if ":generateContent" in chat_url:
+            return chat_url.replace(":generateContent", ":embedContent")
+        return super().build_embeddings_url(chat_url)
+
+    def build_embeddings_body(self, model: str, body: dict) -> dict:
+        """Gemini uses content.parts format for embeddings."""
+        input_text = body.get("input", "")
+        if isinstance(input_text, list):
+            input_text = " ".join(str(x) for x in input_text)
+        return {
+            "model": model,
+            "content": {"parts": [{"text": str(input_text)}]},
+        }

@@ -12,6 +12,12 @@ export default function OAuthEditModal({ isOpen, connection, proxyPools = [], on
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
+  // Determine connection type label — check loginMethod from providerSpecificData (for qoder dual-mode)
+  const psd = connection?.providerSpecificData || connection?.provider_specific || {}
+  const isPat = psd.loginMethod === 'pat' || connection?.auth_type === 'apikey'
+  const modalTitle = isPat ? 'Edit PAT Connection' : 'Edit OAuth Connection'
+  const typeLabel = isPat ? 'PAT Connection' : 'OAuth Connection'
+
   // Reset form when connection changes
   useEffect(() => {
     if (isOpen && connection) {
@@ -45,7 +51,7 @@ export default function OAuthEditModal({ isOpen, connection, proxyPools = [], on
 
   if (!connection) return null
 
-  const providerSpecific = connection.provider_specific || {}
+  const providerSpecific = connection.providerSpecificData || connection.provider_specific || {}
   const expiresAt = providerSpecific.expiresAt
   const lastError = providerSpecific.lastError
   const isExpired = expiresAt && new Date(expiresAt).getTime() < Date.now()
@@ -54,14 +60,14 @@ export default function OAuthEditModal({ isOpen, connection, proxyPools = [], on
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Edit OAuth Connection"
+      title={modalTitle}
       className="max-w-md"
     >
       <div className="space-y-4">
-        {/* OAuth indicator */}
+        {/* Connection type indicator */}
         <div className="flex items-center gap-2 p-3 rounded-lg bg-zinc-900/50 border border-zinc-700/40">
           <Lock size={16} className="text-zinc-400" />
-          <span className="text-sm text-zinc-300">OAuth Connection</span>
+          <span className="text-sm text-zinc-300">{typeLabel}</span>
           {isExpired && <Badge variant="danger" size="sm">Token Expired</Badge>}
         </div>
 
@@ -70,7 +76,7 @@ export default function OAuthEditModal({ isOpen, connection, proxyPools = [], on
           label="Name"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="OAuth Account"
+          placeholder={isPat ? "PAT Account" : "OAuth Account"}
           hint="Display name for this connection"
         />
 

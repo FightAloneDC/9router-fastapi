@@ -69,10 +69,6 @@ async def _fetch_builtin_models(
     provider: str, api_key: str, data: dict,
 ) -> list[dict]:
     """Fetch models from a built-in provider using the Provider handler."""
-    # Qoder has special COSY-signed handling
-    if provider == "qoder":
-        return await _fetch_qoder_models(api_key, data)
-
     token: str = data.get("accessToken") or api_key
     if not token:
         raise HTTPException(status_code=401, detail="No valid token found")
@@ -93,7 +89,13 @@ async def _fetch_builtin_models(
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Connection timed out")
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=f"Failed to fetch models: {e.response.status_code}")
+        # Try to extract a meaningful error message from the response
+        try:
+            error_body = e.response.json()
+            error_message = error_body.get("message", error_body.get("errorMessage", str(e)))
+        except Exception:
+            error_message = str(e)
+        raise HTTPException(status_code=e.response.status_code, detail=error_message)
 
 
 async def _fetch_fallback(provider: str, api_key: str) -> list[dict]:
@@ -121,29 +123,6 @@ async def _fetch_fallback(provider: str, api_key: str) -> list[dict]:
         raise HTTPException(status_code=504, detail="Connection timed out")
 
 
-async def _fetch_qoder_models(api_key: str, data: dict) -> list[dict]:
-    """Qoder has COSY-signed model fetching — keep as special case."""
-    from app.services.qoder.models import resolve_qoder_models
-
-    credentials: dict = {
-        "access_token": data.get("accessToken", ""),
-        "email": data.get("email", ""),
-        "display_name": data.get("name", ""),
-        "provider_specific": {
-            "userId": data.get("userId", ""),
-            "machineId": data.get("machineId", ""),
-        },
-    }
-    result: dict = await resolve_qoder_models(credentials, force_refresh=True)
-    models: list[dict] = []
-    for m in result.get("models", []):
-        models.append({
-            "id": f"qoder/{m.get('id')}",
-            "name": m.get("name", m.get("id")),
-            "type": "llm",
-            "contextLength": m.get("context_length", 0),
-        })
-    return [_normalize_model(m) for m in models if _normalize_model(m).get("id")]
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────

@@ -21,6 +21,7 @@ export default function Button({
   size = 'md',
   className = '',
   disabled = false,
+  fullWidth = false,
   ...props
 }) {
   return (
@@ -30,6 +31,7 @@ export default function Button({
           'inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 focus:ring-offset-zinc-900 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer',
           variants[variant],
           sizes[size],
+          fullWidth && 'w-full',
           className
         )
       )}

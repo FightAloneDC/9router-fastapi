@@ -225,7 +225,7 @@ async def test_connection_models(
     _user=Depends(get_current_user),
 ):
     """Test all models of a provider connection by making minimal chat completion calls."""
-    from app.services.proxy import resolve_model_to_target, build_upstream_request
+    from app.services.proxy import resolve_model_to_targets
 
     result = await db.execute(
         select(ProviderConnection).where(ProviderConnection.id == connection_id)
@@ -258,7 +258,7 @@ async def test_connection_models(
     async def ping_model(model_id: str) -> dict:
         start = time.monotonic()
         try:
-            targets = await resolve_model_to_target(db, f"{alias}/{model_id}")
+            targets = await resolve_model_to_targets(db, f"{alias}/{model_id}")
             if not targets:
                 return {
                     "modelId": model_id,

@@ -1158,7 +1158,7 @@ async def _refresh_codebuddy_token(config: dict, refresh_token: str) -> dict:
 
 async def _request_qoder_device_code(config: dict, code_challenge: str = "", options: Optional[dict] = None) -> dict:
     """Request device code for Qoder using custom device flow."""
-    from app.services.qoder.auth import initiate_device_flow
+    from app.providers.qoder.auth import initiate_device_flow
 
     flow = initiate_device_flow()
     # Match the device_code shape the OAuthModal expects
@@ -1177,7 +1177,7 @@ async def _request_qoder_device_code(config: dict, code_challenge: str = "", opt
 
 async def _poll_qoder_token(config: dict, device_code: str, code_verifier: str = "", extra_data: Optional[dict] = None) -> dict:
     """Poll for Qoder device token."""
-    from app.services.qoder.auth import poll_device_token
+    from app.providers.qoder.auth import poll_device_token
 
     nonce = device_code or (extra_data or {}).get("_qoderNonce")
     verifier = code_verifier or (extra_data or {}).get("_qoderVerifier")
@@ -1206,26 +1206,52 @@ async def _poll_qoder_token(config: dict, device_code: str, code_verifier: str =
                 "user_id": result.get("user_id"),
                 "display_name": result.get("display_name"),
                 "email": result.get("email"),
+                "_qoderMachineId": (extra_data or {}).get("_qoderMachineId"),
             },
         }
 
     return {"ok": False, "data": {"error": "authorization_pending"}}
 
 
+async def _post_exchange_qoder(tokens: dict) -> dict:
+    """Fetch user info after device token poll (like PAT flow)."""
+    from app.providers.qoder.auth import fetch_user_info
+    access_token = tokens.get("access_token")
+    if not access_token:
+        return {}
+    try:
+        user_info = await fetch_user_info(access_token)
+        return {"userInfo": user_info}
+    except Exception:
+        return {}
+
+
 def _map_qoder_tokens(tokens: dict, extra: Optional[dict] = None) -> dict:
     """Map Qoder tokens to standard format."""
     psd = {}
-    if tokens.get("user_id"):
-        psd["userId"] = tokens["user_id"]
-    if extra and extra.get("_qoderMachineId"):
-        psd["machineId"] = extra["_qoderMachineId"]
+    user_info = (extra or {}).get("userInfo", {})
+
+    # Extract userId: prefer token field, fallback to user_info.id
+    user_id = tokens.get("user_id") or user_info.get("id")
+    if user_id:
+        psd["userId"] = user_id
+
+    if tokens.get("_qoderMachineId"):
+        psd["machineId"] = tokens["_qoderMachineId"]
+
+    email = tokens.get("email") or user_info.get("email")
+    display_name = (
+        tokens.get("display_name")
+        or user_info.get("name")
+        or user_info.get("displayName")
+    )
 
     return {
         "accessToken": tokens.get("access_token"),
         "refreshToken": tokens.get("refresh_token"),
         "expiresIn": tokens.get("expires_in"),
-        "email": tokens.get("email"),
-        "displayName": tokens.get("display_name"),
+        "email": email,
+        "displayName": display_name,
         "providerSpecificData": psd if psd else None,
     }
 
@@ -1353,6 +1379,7 @@ PROVIDERS = {
         "flowType": "device_code",
         "requestDeviceCode": _request_qoder_device_code,
         "pollToken": _poll_qoder_token,
+        "postExchange": _post_exchange_qoder,
         "mapTokens": _map_qoder_tokens,
         "refreshToken": _refresh_qoder_token,
     },
