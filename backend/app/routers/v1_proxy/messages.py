@@ -19,7 +19,6 @@ from app.services.proxy import (
     calculate_cooldown,
     mark_connection_unavailable,
 )
-from app.services.proxy import _get_provider_proxy_config
 from app.services.message_translator import (
     claude_to_openai_request,
     openai_to_claude_response,
@@ -32,9 +31,6 @@ from app.models.provider import ProviderConnection
 from .shared import _should_fallback_on_error
 
 router = APIRouter()
-
-# Providers that natively speak Claude Messages API format
-_CLAUDE_FORMAT_PROVIDERS: set[str] = {"anthropic", "glm", "kimi", "minimax", "minimax-cn", "claude"}
 
 
 @router.post("/messages")
@@ -109,9 +105,14 @@ async def messages_endpoint(
         target = targets[0]
 
         # Determine if the upstream is Claude-format or OpenAI-format
-        provider_cfg: dict = _get_provider_proxy_config(target.provider)
-        upstream_format: str = provider_cfg.get("format", "openai")
-        is_claude_upstream: bool = upstream_format == "claude" or target.provider in _CLAUDE_FORMAT_PROVIDERS
+        is_claude_upstream: bool = False
+        try:
+            from app.providers.provider import Provider
+            p = Provider(target.provider)
+            c = p.config()
+            is_claude_upstream = c.FORMAT == "claude"
+        except (ValueError, ModuleNotFoundError):
+            pass
 
         # Prepare the request body for the upstream
         if is_claude_upstream:

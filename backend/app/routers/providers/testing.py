@@ -13,12 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.provider import ProviderConnection, ProviderNode
-from app.providers.base import BaseProviderConfig, BaseProviderHandler
 from app.providers.provider import Provider
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
-from app.routers.providers.constants import infer_model_type
-from app.routers.providers.helpers import _get_provider_config, _get_base_url
+from app.routers.providers.helpers import _get_base_url
+from app.routers.providers.nodes import _build_node_handler
 from app.routers.providers.validation import _validate_provider, _validate_custom_openai
 from app.schemas.provider import (
     BatchTestRequest,
@@ -54,26 +53,7 @@ async def _test_provider_connection(conn: ProviderConnection, db: AsyncSession) 
         except (json.JSONDecodeError, TypeError):
             pass
         node_base_url = node_data.get("baseUrl", "")
-        node_type = node.type
-
-        if node_type == "anthropic-compatible":
-            config = BaseProviderConfig(
-                PROVIDER_NAME=node.name or node.id,
-                PROVIDER_ID=node.id,
-                ALIAS=node.id,
-                BASE_URL=node_base_url,
-                AUTH_HEADER="x-api-key",
-                AUTH_PREFIX="",
-                EXTRA_HEADERS={"anthropic-version": "2023-06-01"},
-            )
-        else:
-            config = BaseProviderConfig(
-                PROVIDER_NAME=node.name or node.id,
-                PROVIDER_ID=node.id,
-                ALIAS=node.id,
-                BASE_URL=node_base_url,
-            )
-        handler = BaseProviderHandler(config)
+        handler = _build_node_handler(node.type, node_base_url, node.name, node.id)
         result = await handler.validate(api_key, data)
         return {"valid": result.valid, "error": result.error, "latencyMs": result.latency_ms, "models": result.models}
 
@@ -87,20 +67,7 @@ async def _test_provider_connection(conn: ProviderConnection, db: AsyncSession) 
         result = await handler.validate(api_key, data)
         return {"valid": result.valid, "error": result.error, "latencyMs": result.latency_ms, "models": result.models}
     except (ValueError, ModuleNotFoundError):
-        # Fallback for unknown providers
-        defaults = _get_provider_config(provider)
-        default_url = defaults.get("baseUrl", "")
-        if default_url:
-            config = BaseProviderConfig(
-                PROVIDER_NAME=provider,
-                PROVIDER_ID=provider,
-                ALIAS=provider,
-                BASE_URL=default_url,
-            )
-            handler = BaseProviderHandler(config)
-            result = await handler.validate(api_key, data)
-            return {"valid": result.valid, "error": result.error, "latencyMs": result.latency_ms, "models": result.models}
-        return {"valid": False, "error": f"Provider {provider} does not support connection testing", "latencyMs": 0, "models": None}
+        return {"valid": False, "error": f"Unknown provider: {provider}", "latencyMs": 0, "models": None}
 
 
 # --- Endpoints ---
@@ -113,13 +80,6 @@ async def validate_provider(
 ):
     """Validate provider credentials using provider handler."""
     extra = body.providerSpecificData or {}
-
-    # Special handling for OpenRouter extra headers
-    extra_headers = {}
-    if extra.get("httpReferer"):
-        extra_headers["HTTP-Referer"] = extra["httpReferer"]
-    if extra.get("xTitle"):
-        extra_headers["X-Title"] = extra["xTitle"]
 
     try:
         p = Provider(body.provider)
@@ -134,7 +94,7 @@ async def validate_provider(
         # Fallback for custom providers
         base_url = _get_base_url(body.provider, body.baseUrl, extra)
         if base_url:
-            return await _validate_custom_openai(body.apiKey, base_url, extra_headers)
+            return await _validate_custom_openai(body.apiKey, base_url)
         return ProviderValidateResponse(valid=False, error=f"Unknown provider: {body.provider}")
 
 
@@ -244,8 +204,7 @@ async def test_connection_models(
     api_key = data.get("apiKey", "")
     alias = data.get("alias", provider_id)
 
-    from app.routers.providers.models import get_provider_models
-    models = await get_provider_models(db, provider_id, alias)
+    models = data.get("models", [])
 
     if not models:
         return {

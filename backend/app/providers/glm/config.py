@@ -15,6 +15,7 @@ class GlmConfig(BaseProviderConfig):
     PROVIDER_ID: str = "glm"
     ALIAS: str = "glm"
     BASE_URL: str = "https://open.bigmodel.cn/api/paas/v4"
+    FORMAT: str = "claude"
     SERVICE_KINDS: list[str] = ["llm"]
 
 

@@ -409,20 +409,23 @@ async def audio_transcriptions(
             exclude_ids.add(conn_id)
             continue
 
-        # Azure deployment override (only relevant for azure provider).
+        # Provider-specific STT URL/auth override (e.g. Azure deployment)
         extra_url: str | None = None
-        if provider_id == "azure":
-            endpoint: str = conn_data.get("azureEndpoint") or base_url
-            deployment: str = conn_data.get("deployment", "whisper")
-            api_version: str = conn_data.get("apiVersion", "2024-06-01")
-            if not endpoint or not deployment:
-                last_error = {"status": 500, "detail": "Azure STT requires azureEndpoint and deployment"}
-                exclude_ids.add(conn_id)
-                continue
-            extra_url = (
-                f"{endpoint.rstrip('/')}/openai/deployments/{deployment}"
-                f"/audio/transcriptions?api-version={api_version}"
-            )
+        stt_auth_header: str = "Authorization"
+        stt_auth_prefix: str = "Bearer "
+        try:
+            from app.providers.provider import Provider
+            p = Provider(provider_id)
+            handler = p.handler()
+            if hasattr(handler, "build_stt_request"):
+                extra_url, stt_headers = handler.build_stt_request(conn_data, model_id)
+                if stt_headers:
+                    first_key = next(iter(stt_headers), None)
+                    if first_key:
+                        stt_auth_header = first_key
+                        stt_auth_prefix = ""
+        except (ValueError, ModuleNotFoundError):
+            pass
 
         try:
             request_start_time: float = time.time()
@@ -440,8 +443,8 @@ async def audio_transcriptions(
                     response_format=response_format_str or None,
                     temperature=temperature,
                     extra_url=extra_url,
-                    auth_header="api-key" if provider_id == "azure" else "Authorization",
-                    auth_prefix="" if provider_id == "azure" else "Bearer ",
+                    auth_header=stt_auth_header,
+                    auth_prefix=stt_auth_prefix,
                 )
             total_latency_ms: int = int((time.time() - request_start_time) * 1000)
 

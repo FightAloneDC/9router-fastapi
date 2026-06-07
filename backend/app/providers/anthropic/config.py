@@ -15,6 +15,7 @@ class AnthropicConfig(BaseProviderConfig):
     PROVIDER_ID: str = "anthropic"
     ALIAS: str = "an"
     BASE_URL: str = "https://api.anthropic.com/v1"
+    FORMAT: str = "claude"
     SERVICE_KINDS: list[str] = ["llm", "imageToText"]
     AUTH_HEADER: str = "x-api-key"
     AUTH_PREFIX: str = ""

@@ -15,6 +15,7 @@ class KimiConfig(BaseProviderConfig):
     PROVIDER_ID: str = "kimi"
     ALIAS: str = "kimi"
     BASE_URL: str = "https://api.moonshot.cn/v1"
+    FORMAT: str = "claude"
     SERVICE_KINDS: list[str] = ["llm", "webSearch"]
 
 

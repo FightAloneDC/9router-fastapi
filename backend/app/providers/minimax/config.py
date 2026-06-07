@@ -15,6 +15,7 @@ class MinimaxConfig(BaseProviderConfig):
     PROVIDER_ID: str = "minimax"
     ALIAS: str = "minimax"
     BASE_URL: str = "https://api.minimax.chat/v1"
+    FORMAT: str = "claude"
     SERVICE_KINDS: list[str] = ["llm", "image", "imageToText", "webSearch", "tts"]
 
     # ── Model type overrides ────────────────────────────────────────────

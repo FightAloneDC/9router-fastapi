@@ -10,48 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
+from app.providers.provider import Provider
 from app.services.api_key_auth import validate_api_key
 from app.services.usage_tracking import save_request_tracking
 from app.models.provider import ProviderConnection
-from app.routers.providers.helpers import _get_provider_config
 
 router = APIRouter()
-
-# Provider-specific fetch adapters
-_FETCH_ADAPTERS: dict[str, dict[str, str | None | object]] = {
-    "jina-reader": {
-        "base_url": "https://r.jina.ai",
-        "method": "GET",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-        "build_url": lambda base, url, fmt: f"{base}/{url}",
-        "build_body": None,
-    },
-    "tavily": {
-        "base_url": "https://api.tavily.com/extract",
-        "method": "POST",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-        "build_url": lambda base, url, fmt: base,
-        "build_body": lambda url, fmt: {"urls": [url], "format": fmt},
-    },
-    "exa": {
-        "base_url": "https://api.exa.ai/contents",
-        "method": "POST",
-        "auth_header": "x-api-key",
-        "auth_prefix": "",
-        "build_url": lambda base, url, fmt: base,
-        "build_body": lambda url, fmt: {"urls": [url], "text": True},
-    },
-    "firecrawl": {
-        "base_url": "https://api.firecrawl.dev/v1/scrape",
-        "method": "POST",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-        "build_url": lambda base, url, fmt: base,
-        "build_body": lambda url, fmt: {"url": url, "formats": [fmt]},
-    },
-}
 
 
 async def _resolve_webfetch_connection(
@@ -73,12 +37,16 @@ async def _resolve_webfetch_connection(
 
     # Auto-detect: find first active webFetch provider
     for conn in connections:
-        defaults: dict = _get_provider_config(conn.provider)
-        kinds: list[str] = defaults.get("serviceKinds", ["llm"])
-        if "webFetch" in kinds:
-            data: dict = json.loads(conn.data) if conn.data else {}
-            api_key: str = data.get("apiKey", "")
-            return (conn.provider, api_key)
+        try:
+            p = Provider(conn.provider)
+            c = p.config()
+            kinds: list[str] = c.SERVICE_KINDS or ["llm"]
+            if "webFetch" in kinds:
+                data: dict = json.loads(conn.data) if conn.data else {}
+                api_key: str = data.get("apiKey", "")
+                return (conn.provider, api_key)
+        except (ValueError, ModuleNotFoundError):
+            continue
 
     return None
 
@@ -118,27 +86,26 @@ async def web_fetch(
         )
 
     provider_id, api_key = resolved
-    adapter = _FETCH_ADAPTERS.get(provider_id)
-    if not adapter:
+
+    # Dispatch to handler's build_webfetch_request
+    try:
+        p = Provider(provider_id)
+        handler = p.handler()
+        method, headers, upstream_url, body_data = handler.build_webfetch_request(url, fmt, api_key)
+    except (ValueError, ModuleNotFoundError, AttributeError):
         return JSONResponse(
             status_code=501,
             content={"error": {"message": f"Provider {provider_id} does not have a web fetch adapter"}},
         )
 
-    upstream_url: str = adapter["build_url"](adapter["base_url"], url, fmt)  # type: ignore[operator]
-    headers: dict[str, str] = {}
-    if api_key and adapter["auth_header"]:
-        headers[adapter["auth_header"]] = f"{adapter['auth_prefix']}{api_key}"  # type: ignore[operator]
-
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             request_start_time: float = time.time()
-            if adapter["method"] == "GET":
+            if method == "GET":
                 resp = await client.get(upstream_url, headers=headers, follow_redirects=True)
             else:
-                body_data: dict = adapter["build_body"](url, fmt) if adapter["build_body"] else {}  # type: ignore[operator]
                 headers["Content-Type"] = "application/json"
-                resp = await client.post(upstream_url, headers=headers, json=body_data)
+                resp = await client.post(upstream_url, headers=headers, json=body_data or {})
             total_latency_ms: int = int((time.time() - request_start_time) * 1000)
 
             if resp.status_code >= 400:

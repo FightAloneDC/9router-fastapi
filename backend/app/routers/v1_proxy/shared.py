@@ -45,6 +45,35 @@ def _should_fallback_on_error(status_code: int, detail: str) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Provider-specific request builder (generic dispatch)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def _build_provider_request(
+    target: ProxyTarget, body: dict, conn_data: dict,
+) -> tuple[bytes | None, dict[str, str] | None]:
+    """Build provider-specific request body if handler supports it.
+
+    Dispatches to handler.build_request_body() for providers that need
+    custom request encoding (e.g. Qoder's WAF-bypass + COSY signing).
+
+    Returns:
+        (raw_body_bytes, signed_headers) for providers with custom encoding,
+        (None, None) for standard providers that use JSON body.
+    """
+    try:
+        from app.providers.provider import Provider
+        p = Provider(target.provider)
+        handler = p.handler()
+        if hasattr(handler, "build_request_body"):
+            raw_body, headers = await handler.build_request_body(target.model, body, conn_data)
+            return raw_body, headers
+    except (ValueError, ModuleNotFoundError):
+        pass
+    return None, None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Qoder SSE unwrapper
 # ─────────────────────────────────────────────────────────────────────────────
 

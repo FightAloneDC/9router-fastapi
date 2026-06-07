@@ -10,14 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.provider import ProviderConnection, ProviderNode
 from app.models.settings import SettingsModel
-from app.providers.base import BaseProviderConfig
-from app.providers.model_helpers import fetch_models_header_auth
 from app.providers.provider import Provider
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
 from app.routers.providers.constants import normalize_models_list
-from app.routers.providers.helpers import _get_provider_config
-from app.routers.providers.helpers import _normalize_model, _parse_openai_models
+from app.routers.providers.nodes import _build_node_handler
 
 
 # ── Node-based model fetching ─────────────────────────────────────────────
@@ -32,31 +29,10 @@ async def _fetch_node_models(node: ProviderNode, api_key: str) -> list[dict]:
     if not node_base_url:
         raise HTTPException(status_code=400, detail="No base URL configured")
 
-    if node.type == "anthropic-compatible":
-        normalized: str = node_base_url.rstrip("/")
-        if normalized.endswith("/messages"):
-            normalized = normalized[:-9]
-        config = BaseProviderConfig(
-            PROVIDER_NAME=node.name or node.id,
-            PROVIDER_ID=node.id,
-            ALIAS=node.id,
-            BASE_URL=normalized,
-            AUTH_HEADER="x-api-key",
-            AUTH_PREFIX="",
-            EXTRA_HEADERS={"anthropic-version": "2023-06-01"},
-        )
-    else:
-        config = BaseProviderConfig(
-            PROVIDER_NAME=node.name or node.id,
-            PROVIDER_ID=node.id,
-            ALIAS=node.id,
-            BASE_URL=node_base_url,
-        )
-
+    handler = _build_node_handler(node.type, node_base_url, node.name, node.id)
     try:
-        models_raw: list[dict] = await fetch_models_header_auth(config, api_key)
-        models: list[dict] = [_normalize_model(m) for m in models_raw if _normalize_model(m).get("id")]
-        return models
+        models_raw: list[dict] = await handler.fetch_models(api_key, node_data)
+        return models_raw
     except httpx.ConnectError:
         raise HTTPException(status_code=502, detail=f"Cannot connect to {node_base_url}")
     except httpx.TimeoutException:
@@ -76,51 +52,20 @@ async def _fetch_builtin_models(
     try:
         p = Provider(provider)
         handler = p.handler()
-        models_raw: list[dict] = await handler.fetch_models(token, data)
-        return [handler._normalize_model(m) for m in models_raw if handler._normalize_model(m).get("id")]
+        return await handler.fetch_models(token, data)
     except (ValueError, ModuleNotFoundError):
-        return await _fetch_fallback(provider, api_key)
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
     except httpx.ConnectError:
-        try:
-            p = Provider(provider)
-            raise HTTPException(status_code=502, detail=f"Cannot connect to {p.base_url()}")
-        except (ValueError, ModuleNotFoundError):
-            raise HTTPException(status_code=502, detail=f"Cannot connect to {provider}")
+        raise HTTPException(status_code=502, detail=f"Cannot connect to {provider}")
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Connection timed out")
     except httpx.HTTPStatusError as e:
-        # Try to extract a meaningful error message from the response
         try:
             error_body = e.response.json()
             error_message = error_body.get("message", error_body.get("errorMessage", str(e)))
         except Exception:
             error_message = str(e)
         raise HTTPException(status_code=e.response.status_code, detail=error_message)
-
-
-async def _fetch_fallback(provider: str, api_key: str) -> list[dict]:
-    """Fallback for providers not yet migrated to Provider class."""
-    defaults: dict = _get_provider_config(provider)
-    default_url: str = defaults.get("baseUrl", "")
-    if not default_url or not api_key:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Provider {provider} does not support model fetching",
-        )
-    config = BaseProviderConfig(
-        PROVIDER_NAME=provider,
-        PROVIDER_ID=provider,
-        ALIAS=provider,
-        BASE_URL=default_url,
-    )
-    try:
-        models_raw: list[dict] = await fetch_models_header_auth(config, api_key)
-        models: list[dict] = [_normalize_model(m) for m in models_raw if _normalize_model(m).get("id")]
-        return models
-    except httpx.ConnectError:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to {default_url}")
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Connection timed out")
 
 
 

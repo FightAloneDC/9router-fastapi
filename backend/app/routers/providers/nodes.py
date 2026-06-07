@@ -3,16 +3,16 @@
 import json
 import uuid as _uuid
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.provider import ProviderConnection, ProviderNode
+from app.providers.base import BaseProviderConfig, BaseProviderHandler
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
-from app.routers.providers.helpers import _get_chat_error_message, _get_models_error_message, _node_to_out
+from app.routers.providers.helpers import _node_to_out
 from app.schemas.provider import (
     ProviderNodeCreate,
     ProviderNodeOut,
@@ -20,6 +20,34 @@ from app.schemas.provider import (
     ProviderNodeValidateRequest,
     ProviderNodeValidateResponse,
 )
+
+
+def _build_node_handler(node_type: str, base_url: str, node_name: str = "", node_id: str = "") -> BaseProviderHandler:
+    """Build a BaseProviderHandler from node type and base URL.
+
+    Used for node validation and connection testing.
+    """
+    if node_type == "anthropic-compatible":
+        normalized = base_url.rstrip("/")
+        if normalized.endswith("/messages"):
+            normalized = normalized[:-9]
+        config = BaseProviderConfig(
+            PROVIDER_NAME=node_name or node_id,
+            PROVIDER_ID=node_id,
+            ALIAS=node_id,
+            BASE_URL=normalized,
+            AUTH_HEADER="x-api-key",
+            AUTH_PREFIX="",
+            EXTRA_HEADERS={"anthropic-version": "2023-06-01"},
+        )
+    else:
+        config = BaseProviderConfig(
+            PROVIDER_NAME=node_name or node_id,
+            PROVIDER_ID=node_id,
+            ALIAS=node_id,
+            BASE_URL=base_url,
+        )
+    return BaseProviderHandler(config)
 
 
 @router.get("/provider-nodes", response_model=list[ProviderNodeOut])
@@ -248,135 +276,62 @@ async def validate_provider_node(
     except Exception:
         return ProviderNodeValidateResponse(valid=False, error="Invalid URL format")
 
-    timeout = 10.0
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        # ── Custom Embedding ──
-        if body.type == "custom-embedding":
-            if not body.modelId:
-                return ProviderNodeValidateResponse(
-                    valid=False, error="Model ID required for embedding validation"
-                )
-            normalized = body.baseUrl.rstrip("/")
+    node_type = body.type or "openai-compatible"
+    handler = _build_node_handler(node_type, body.baseUrl)
+
+    async def _chat_fallback() -> ProviderNodeValidateResponse:
+        """Fallback: validate via chat/completions using handler's auth headers."""
+        import time
+        import httpx
+
+        start = time.monotonic()
+        url = f"{handler.config.BASE_URL}/chat/completions"
+        headers = handler.build_headers(body.apiKey)
+        async with httpx.AsyncClient(timeout=15.0) as client:
             try:
                 resp = await client.post(
-                    f"{normalized}/embeddings",
-                    headers={
-                        "Authorization": f"Bearer {body.apiKey}",
-                        "Content-Type": "application/json",
-                    },
-                    json={"model": body.modelId, "input": "ping"},
+                    url, headers=headers,
+                    json={"model": body.modelId, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1},
                 )
                 if resp.is_success:
-                    data = resp.json()
-                    dims = None
-                    if isinstance(data, dict):
-                        emb = data.get("data", [{}])
-                        if emb and isinstance(emb[0].get("embedding"), list):
-                            dims = len(emb[0]["embedding"])
-                    return ProviderNodeValidateResponse(
-                        valid=True, method="embeddings", dimensions=dims
-                    )
-                if resp.status_code in (401, 403):
-                    return ProviderNodeValidateResponse(valid=False, error="API key unauthorized")
-                return ProviderNodeValidateResponse(
-                    valid=False,
-                    error=f"Embeddings request failed ({resp.status_code})",
-                    method="embeddings",
-                )
-            except httpx.ConnectError:
-                return ProviderNodeValidateResponse(valid=False, error="Connection refused")
-            except httpx.TimeoutException:
-                return ProviderNodeValidateResponse(valid=False, error="Request timeout (>10s)")
-
-        # ── Anthropic Compatible ──
-        if body.type == "anthropic-compatible":
-            normalized = body.baseUrl.rstrip("/")
-            if normalized.endswith("/messages"):
-                normalized = normalized[:-9]
-            try:
-                resp = await client.get(
-                    f"{normalized}/models",
-                    headers={
-                        "x-api-key": body.apiKey,
-                        "anthropic-version": "2023-06-01",
-                        "Authorization": f"Bearer {body.apiKey}",
-                    },
-                )
-                if resp.is_success:
-                    return ProviderNodeValidateResponse(valid=True)
-                if resp.status_code in (401, 403):
-                    return ProviderNodeValidateResponse(valid=False, error="API key unauthorized")
-                # Fallback: chat/completions if modelId provided
-                if body.modelId:
-                    chat_resp = await client.post(
-                        f"{normalized}/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {body.apiKey}",
-                            "Content-Type": "application/json",
-                            "x-api-key": body.apiKey,
-                            "anthropic-version": "2023-06-01",
-                        },
-                        json={
-                            "model": body.modelId,
-                            "messages": [{"role": "user", "content": "ping"}],
-                            "max_tokens": 1,
-                        },
-                    )
-                    if chat_resp.is_success:
-                        return ProviderNodeValidateResponse(valid=True, method="chat")
-                    return ProviderNodeValidateResponse(
-                        valid=False,
-                        error=_get_chat_error_message(chat_resp.status_code),
-                        method="chat",
-                    )
-                return ProviderNodeValidateResponse(
-                    valid=False, error=_get_models_error_message(resp.status_code)
-                )
-            except httpx.ConnectError:
-                return ProviderNodeValidateResponse(valid=False, error="Connection refused")
-            except httpx.TimeoutException:
-                return ProviderNodeValidateResponse(valid=False, error="Request timeout (>10s)")
-
-        # ── OpenAI Compatible (default) ──
-        normalized = body.baseUrl.rstrip("/")
-        try:
-            resp = await client.get(
-                f"{normalized}/models",
-                headers={"Authorization": f"Bearer {body.apiKey}"},
-            )
-            if resp.is_success:
-                return ProviderNodeValidateResponse(valid=True)
-            if resp.status_code in (401, 403):
-                return ProviderNodeValidateResponse(valid=False, error="API key unauthorized")
-            # Fallback: chat/completions if modelId provided
-            if body.modelId:
-                chat_resp = await client.post(
-                    f"{normalized}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {body.apiKey}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": body.modelId,
-                        "messages": [{"role": "user", "content": "ping"}],
-                        "max_tokens": 1,
-                    },
-                )
-                if chat_resp.is_success:
                     return ProviderNodeValidateResponse(valid=True, method="chat")
-                return ProviderNodeValidateResponse(
-                    valid=False,
-                    error=_get_chat_error_message(chat_resp.status_code),
-                    method="chat",
-                )
+                error = f"Chat request failed ({resp.status_code})"
+                try:
+                    err_data = resp.json()
+                    error = err_data.get("error", {}).get("message", error)
+                except Exception:
+                    pass
+                return ProviderNodeValidateResponse(valid=False, error=error, method="chat")
+            except httpx.ConnectError:
+                return ProviderNodeValidateResponse(valid=False, error="Connection refused")
+            except httpx.TimeoutException:
+                return ProviderNodeValidateResponse(valid=False, error="Request timeout")
+
+    # ── Custom Embedding ──
+    if node_type == "custom-embedding":
+        if not body.modelId:
             return ProviderNodeValidateResponse(
-                valid=False, error=_get_models_error_message(resp.status_code)
+                valid=False, error="Model ID required for embedding validation"
             )
-        except httpx.ConnectError:
-            return ProviderNodeValidateResponse(valid=False, error="Connection refused")
-        except httpx.TimeoutException:
-            return ProviderNodeValidateResponse(valid=False, error="Request timeout (>10s)")
-        except Exception as e:
-            return ProviderNodeValidateResponse(
-                valid=False, error=f"Network connection failed: {str(e)[:200]}"
-            )
+        result = await handler._validate_embedding(body.apiKey, handler.config.BASE_URL, body.modelId)
+        return ProviderNodeValidateResponse(
+            valid=result.valid, error=result.error,
+            method=result.method, dimensions=result.dimensions,
+        )
+
+    # ── Anthropic Compatible ──
+    if node_type == "anthropic-compatible":
+        result = await handler._validate_anthropic_compatible(body.apiKey, handler.config.BASE_URL)
+        if result.valid:
+            return ProviderNodeValidateResponse(valid=True)
+        if body.modelId:
+            return await _chat_fallback()
+        return ProviderNodeValidateResponse(valid=False, error=result.error)
+
+    # ── OpenAI Compatible (default) ──
+    result = await handler._validate_openai_compatible(body.apiKey, handler.config.BASE_URL)
+    if result.valid:
+        return ProviderNodeValidateResponse(valid=True)
+    if body.modelId:
+        return await _chat_fallback()
+    return ProviderNodeValidateResponse(valid=False, error=result.error)

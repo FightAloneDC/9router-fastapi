@@ -60,6 +60,8 @@ class ValidateResult:
     error: str | None = None
     models: list[str] | None = None
     latency_ms: int = 0
+    method: str | None = None
+    dimensions: int | None = None
 
 
 class BaseProviderHandler:
@@ -195,6 +197,50 @@ class BaseProviderHandler:
                 return ValidateResult(valid=False, error="Cannot connect to provider", latency_ms=int((time.monotonic() - start) * 1000))
             except httpx.TimeoutException:
                 return ValidateResult(valid=False, error="Connection timed out", latency_ms=int((time.monotonic() - start) * 1000))
+            except Exception as e:
+                return ValidateResult(valid=False, error=str(e)[:200], latency_ms=int((time.monotonic() - start) * 1000))
+
+    async def _validate_embedding(
+        self, api_key: str, base_url: str, model_id: str
+    ) -> ValidateResult:
+        """Embedding validation: POST /embeddings with model + input."""
+        import time
+        import httpx
+
+        start = time.monotonic()
+        url = f"{base_url}/embeddings"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                resp = await client.post(
+                    url, headers=headers,
+                    json={"model": model_id, "input": "ping"},
+                )
+                latency = int((time.monotonic() - start) * 1000)
+                if resp.is_success:
+                    dims = None
+                    try:
+                        data = resp.json()
+                        emb = data.get("data", [{}])
+                        if emb and isinstance(emb[0].get("embedding"), list):
+                            dims = len(emb[0]["embedding"])
+                    except Exception:
+                        pass
+                    return ValidateResult(valid=True, method="embeddings", dimensions=dims, latency_ms=latency)
+                if resp.status_code in (401, 403):
+                    return ValidateResult(valid=False, error="API key unauthorized", latency_ms=latency)
+                return ValidateResult(
+                    valid=False, error=f"Embeddings request failed ({resp.status_code})",
+                    method="embeddings", latency_ms=latency,
+                )
+            except httpx.ConnectError:
+                return ValidateResult(valid=False, error="Connection refused", latency_ms=int((time.monotonic() - start) * 1000))
+            except httpx.TimeoutException:
+                return ValidateResult(valid=False, error="Request timeout", latency_ms=int((time.monotonic() - start) * 1000))
             except Exception as e:
                 return ValidateResult(valid=False, error=str(e)[:200], latency_ms=int((time.monotonic() - start) * 1000))
 

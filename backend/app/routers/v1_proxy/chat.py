@@ -24,7 +24,7 @@ from app.services.active_requests import track_request_start, track_request_end
 from app.models.provider import ProviderConnection
 from sqlalchemy import select
 
-from .shared import _stream_response, _non_stream_response, _should_fallback_on_error
+from .shared import _stream_response, _non_stream_response, _should_fallback_on_error, _build_provider_request
 
 router = APIRouter()
 
@@ -81,22 +81,20 @@ async def chat_completions(
         forward_body: dict = {**body, "model": target.model}
         raw_body: bytes | None = None
 
-        # ── Qoder: Transform request body and re-sign ────────────────────────
-        if target.provider == "qoder":
-            from app.services.proxy import build_qoder_request
-            import json as _json
-
-            # Get connection data for COSY signing
+        # ── Provider-specific request transform (e.g. Qoder WAF-bypass + COSY) ──
+        if target.connection_id:
             conn_result = await db.execute(
                 select(ProviderConnection).where(ProviderConnection.id == target.connection_id)
             )
             conn = conn_result.scalar_one_or_none()
             if conn:
-                conn_data = _json.loads(conn.data) if conn.data else {}
+                conn_data = json.loads(conn.data) if conn.data else {}
                 try:
-                    raw_body, target.headers = await build_qoder_request(target, body, conn_data)
+                    raw_body, signed_headers = await _build_provider_request(target, body, conn_data)
+                    if signed_headers:
+                        target.headers = signed_headers
                 except Exception as e:
-                    last_error_detail = f"Qoder request build failed: {str(e)}"
+                    last_error_detail = f"Provider request build failed: {str(e)}"
                     last_error_status = 500
                     exclude_ids.add(target.connection_id)
                     continue

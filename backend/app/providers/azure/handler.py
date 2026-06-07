@@ -59,3 +59,19 @@ class AzureHandler(BaseProviderHandler):
         deployment = data.get("deployment", "gpt-4")
         api_version = data.get("apiVersion", "2024-10-01-preview")
         return f"{endpoint.rstrip('/')}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+
+    def build_stt_request(self, data: dict, model: str) -> tuple[str, dict[str, str]]:
+        """Build STT URL and headers for Azure deployment.
+
+        Returns:
+            (url, headers) for the Azure STT endpoint.
+        """
+        endpoint = data.get("azureEndpoint") or self.config.BASE_URL
+        deployment = data.get("deployment", "whisper")
+        api_version = data.get("apiVersion", "2024-06-01")
+        url = (
+            f"{endpoint.rstrip('/')}/openai/deployments/{deployment}"
+            f"/audio/transcriptions?api-version={api_version}"
+        )
+        headers = {"api-key": data.get("apiKey", "")}
+        return url, headers

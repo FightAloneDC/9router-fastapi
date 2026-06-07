@@ -15,6 +15,7 @@ class MinimaxCnConfig(BaseProviderConfig):
     PROVIDER_ID: str = "minimax-cn"
     ALIAS: str = "minimax-cn"
     BASE_URL: str = "https://api.minimax.chat/v1"
+    FORMAT: str = "claude"
     SERVICE_KINDS: list[str] = ["llm", "tts"]
 
 
