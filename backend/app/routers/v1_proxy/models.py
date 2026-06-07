@@ -13,7 +13,7 @@ from app.models.provider import ProviderConnection
 from app.models.combo import Combo
 from app.models.settings import SettingsModel
 from app.services.proxy import ID_TO_ALIAS
-from app.routers.providers.constants import MODEL_TYPE_OVERRIDES, infer_model_type
+from app.routers.providers.constants import _get_model_type_overrides, infer_model_type
 
 router = APIRouter()
 
@@ -92,8 +92,8 @@ async def list_models(
                 model_type = model_types_override[model_id]
             elif isinstance(m, dict) and "type" in m:
                 model_type = m["type"]
-            elif model_id in MODEL_TYPE_OVERRIDES:
-                model_type = MODEL_TYPE_OVERRIDES[model_id]
+            elif model_id in _get_model_type_overrides():
+                model_type = _get_model_type_overrides()[model_id]
             else:
                 model_type = infer_model_type(model_id)
 
@@ -184,8 +184,8 @@ async def models_info(
                 model_type = model_types_override[model_id]
             elif isinstance(m, dict) and "type" in m:
                 model_type = m["type"]
-            elif model_id in MODEL_TYPE_OVERRIDES:
-                model_type = MODEL_TYPE_OVERRIDES[model_id]
+            elif model_id in _get_model_type_overrides():
+                model_type = _get_model_type_overrides()[model_id]
             else:
                 model_type = infer_model_type(model_id)
 

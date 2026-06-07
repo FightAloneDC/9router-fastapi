@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.models.provider import ProviderConnection, ProviderNode
 from app.models.proxy_pool import ProxyPool
 from app.providers.provider import Provider
-from app.routers.providers.constants import _DATA_INTERNAL_KEYS, MODEL_TYPE_OVERRIDES, infer_model_type, normalize_models_list
+from app.routers.providers.constants import _DATA_INTERNAL_KEYS, _get_model_type_overrides, infer_model_type, normalize_models_list
 
 
 def _get_provider_config(provider: str) -> dict:
@@ -27,25 +27,18 @@ def _get_provider_config(provider: str) -> dict:
 
 
 def _get_base_url(provider: str, body_base_url: Optional[str] = None, extra_data: Optional[dict] = None) -> str:
-    """Resolve the effective base URL for a provider."""
+    """Resolve the effective base URL for a provider using handler."""
     if body_base_url:
         return body_base_url.rstrip("/")
 
-    # Handle region-specific providers (region takes precedence over stored baseUrl)
-    if provider == "xiaomi-tokenplan" and extra_data:
-        region = extra_data.get("region", "sgp")
-        region_urls = {
-            "sgp": "https://token-plan-sgp.xiaomimimo.com/v1",
-            "cn": "https://token-plan-cn.xiaomimimo.com/v1",
-            "ams": "https://token-plan-ams.xiaomimimo.com/v1",
-        }
-        return region_urls.get(region, region_urls["sgp"]).rstrip("/")
-
-    if extra_data and extra_data.get("baseUrl"):
-        return extra_data["baseUrl"].rstrip("/")
-
-    defaults = _get_provider_config(provider)
-    return defaults.get("baseUrl", "").rstrip("/")
+    try:
+        p = Provider(provider)
+        return p.resolve_base_url(extra_data)
+    except (ValueError, ModuleNotFoundError):
+        if extra_data and extra_data.get("baseUrl"):
+            return extra_data["baseUrl"].rstrip("/")
+        defaults = _get_provider_config(provider)
+        return defaults.get("baseUrl", "").rstrip("/")
 
 
 def _get_validation_type(provider: str) -> str:
@@ -210,7 +203,7 @@ def _normalize_model(m):
         return {"id": m, "name": m, "type": infer_model_type(m)}
     model_id = m.get("id") or m.get("name") or m.get("model", "")
     name = m.get("name") or m.get("display_name") or m.get("displayName") or m.get("id", "")
-    model_type = m.get("type") or MODEL_TYPE_OVERRIDES.get(model_id) or infer_model_type(model_id)
+    model_type = m.get("type") or _get_model_type_overrides().get(model_id) or infer_model_type(model_id)
     return {"id": model_id, "name": name, "type": model_type}
 
 

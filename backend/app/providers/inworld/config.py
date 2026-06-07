@@ -17,6 +17,12 @@ class InworldConfig(BaseProviderConfig):
     BASE_URL: str = "https://api.inworld.ai"
     SERVICE_KINDS: list[str] = ["tts"]
 
+    # ── Model type overrides ────────────────────────────────────────────
+    MODEL_TYPE_OVERRIDES: dict[str, str] = {
+        "inworld-tts-1.5-mini": "tts",
+        "inworld-tts-1.5-max": "tts",
+    }
+
 
 class InworldMetadata(BaseMetadata):
     """Inworld AI UI display metadata."""

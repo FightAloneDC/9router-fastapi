@@ -23,6 +23,14 @@ class GeminiConfig(BaseProviderConfig):
     AUTH_PREFIX: str = ""
     AUTH_QUERY_PARAM: str = "key"
 
+    # ── Model type overrides ────────────────────────────────────────────
+    MODEL_TYPE_OVERRIDES: dict[str, str] = {
+        "gemini-2.5-flash-preview-tts": "tts",
+        "gemini-2.5-pro-preview-tts": "tts",
+        "text-embedding-004": "embedding",
+        "embedding-001": "embedding",
+    }
+
 
 class GeminiMetadata(BaseMetadata):
     """Gemini UI display metadata."""

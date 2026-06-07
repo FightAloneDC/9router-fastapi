@@ -17,6 +17,12 @@ class PlayhtConfig(BaseProviderConfig):
     BASE_URL: str = "https://api.play.ht/v2"
     SERVICE_KINDS: list[str] = ["tts"]
 
+    # ── Model type overrides ────────────────────────────────────────────
+    MODEL_TYPE_OVERRIDES: dict[str, str] = {
+        "PlayDialog": "tts",
+        "Play3.0-mini": "tts",
+    }
+
 
 class PlayhtMetadata(BaseMetadata):
     """PlayHT UI display metadata."""

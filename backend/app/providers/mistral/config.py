@@ -17,6 +17,11 @@ class MistralConfig(BaseProviderConfig):
     BASE_URL: str = "https://api.mistral.ai/v1"
     SERVICE_KINDS: list[str] = ["llm", "imageToText", "embedding"]
 
+    # ── Model type overrides ────────────────────────────────────────────
+    MODEL_TYPE_OVERRIDES: dict[str, str] = {
+        "mistral-embed": "embedding",
+    }
+
 
 class MistralMetadata(BaseMetadata):
     """Mistral UI display metadata."""

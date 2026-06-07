@@ -19,6 +19,13 @@ class TortoiseConfig(BaseProviderConfig):
     AUTH_HEADER: str = ""
     AUTH_PREFIX: str = ""
 
+    # ── Model type overrides ────────────────────────────────────────────
+    MODEL_TYPE_OVERRIDES: dict[str, str] = {
+        "tortoise-v2": "tts",
+        "facebook/mms-tts-eng": "tts",
+        "microsoft/speecht5_tts": "tts",
+    }
+
 
 class TortoiseMetadata(BaseMetadata):
     """Tortoise TTS UI display metadata."""

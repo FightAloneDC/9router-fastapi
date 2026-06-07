@@ -17,6 +17,13 @@ class JinaAiConfig(BaseProviderConfig):
     BASE_URL: str = "https://api.jina.ai/v1"
     SERVICE_KINDS: list[str] = ["embedding"]
 
+    # ── Model type overrides ────────────────────────────────────────────
+    MODEL_TYPE_OVERRIDES: dict[str, str] = {
+        "jina-embeddings-v3": "embedding",
+        "jina-embeddings-v2-base-en": "embedding",
+        "jina-embeddings-v2-base-code": "embedding",
+    }
+
 
 class JinaAiMetadata(BaseMetadata):
     """Jina AI UI display metadata."""

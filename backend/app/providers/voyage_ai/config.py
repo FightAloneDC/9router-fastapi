@@ -17,6 +17,17 @@ class VoyageAiConfig(BaseProviderConfig):
     BASE_URL: str = "https://api.voyageai.com/v1"
     SERVICE_KINDS: list[str] = ["embedding"]
 
+    # ── Model type overrides ────────────────────────────────────────────
+    MODEL_TYPE_OVERRIDES: dict[str, str] = {
+        "voyage-3-large": "embedding",
+        "voyage-3.5": "embedding",
+        "voyage-3.5-lite": "embedding",
+        "voyage-code-3": "embedding",
+        "voyage-finance-2": "embedding",
+        "voyage-law-2": "embedding",
+        "voyage-multilingual-2": "embedding",
+    }
+
 
 class VoyageAiMetadata(BaseMetadata):
     """Voyage AI UI display metadata."""

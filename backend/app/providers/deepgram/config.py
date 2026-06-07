@@ -19,6 +19,14 @@ class DeepgramConfig(BaseProviderConfig):
     AUTH_HEADER: str = "Authorization"
     AUTH_PREFIX: str = "Token "
 
+    # ── Model type overrides ────────────────────────────────────────────
+    MODEL_TYPE_OVERRIDES: dict[str, str] = {
+        "nova-3": "stt",
+        "nova-2": "stt",
+        "universal-3-pro": "stt",
+        "universal-2": "stt",
+    }
+
 
 class DeepgramMetadata(BaseMetadata):
     """Deepgram UI display metadata."""

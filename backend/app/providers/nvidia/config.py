@@ -17,6 +17,14 @@ class NvidiaConfig(BaseProviderConfig):
     BASE_URL: str = "https://integrate.api.nvidia.com/v1"
     SERVICE_KINDS: list[str] = ["llm", "tts", "embedding"]
 
+    # ── Model type overrides ────────────────────────────────────────────
+    MODEL_TYPE_OVERRIDES: dict[str, str] = {
+        "nvidia/nv-embedqa-e5-v5": "embedding",
+        "Qwen/Qwen3-Embedding-8B": "embedding",
+        "fastpitch": "tts",
+        "tacotron2": "tts",
+    }
+
 
 class NvidiaMetadata(BaseMetadata):
     """NVIDIA NIM UI display metadata."""

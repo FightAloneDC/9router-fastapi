@@ -17,6 +17,18 @@ class MinimaxConfig(BaseProviderConfig):
     BASE_URL: str = "https://api.minimax.chat/v1"
     SERVICE_KINDS: list[str] = ["llm", "image", "imageToText", "webSearch", "tts"]
 
+    # ── Model type overrides ────────────────────────────────────────────
+    MODEL_TYPE_OVERRIDES: dict[str, str] = {
+        "speech-2.8-hd": "tts",
+        "speech-2.8-turbo": "tts",
+        "speech-2.6-hd": "tts",
+        "speech-2.6-turbo": "tts",
+        "speech-02-hd": "tts",
+        "speech-02-turbo": "tts",
+        "speech-01-hd": "tts",
+        "speech-01-turbo": "tts",
+    }
+
 
 class MinimaxMetadata(BaseMetadata):
     """Minimax Coding UI display metadata."""

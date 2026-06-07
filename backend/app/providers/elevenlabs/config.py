@@ -19,6 +19,14 @@ class ElevenlabsConfig(BaseProviderConfig):
     AUTH_HEADER: str = "xi-api-key"
     AUTH_PREFIX: str = ""
 
+    # ── Model type overrides ────────────────────────────────────────────
+    MODEL_TYPE_OVERRIDES: dict[str, str] = {
+        "eleven_multilingual_v2": "tts",
+        "eleven_turbo_v2_5": "tts",
+        "sonic-2": "tts",
+        "sonic-3": "tts",
+    }
+
 
 class ElevenlabsMetadata(BaseMetadata):
     """ElevenLabs UI display metadata."""

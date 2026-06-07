@@ -17,6 +17,11 @@ class CoquiConfig(BaseProviderConfig):
     BASE_URL: str = "https://app.coqui.ai/api/v2"
     SERVICE_KINDS: list[str] = ["tts"]
 
+    # ── Model type overrides ────────────────────────────────────────────
+    MODEL_TYPE_OVERRIDES: dict[str, str] = {
+        "melo-tts": "tts",
+    }
+
 
 class CoquiMetadata(BaseMetadata):
     """Coqui TTS UI display metadata."""

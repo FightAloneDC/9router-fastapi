@@ -187,3 +187,25 @@ AVAILABLE_PROVIDERS: list[str] = [
     PROVIDER_CLOUDFLARE_AI,
     PROVIDER_OLLAMA_LOCAL,
 ]
+
+
+# ── Model type overrides aggregator ──────────────────────────────────────
+def get_all_model_type_overrides() -> dict[str, str]:
+    """Aggregate MODEL_TYPE_OVERRIDES from all providers.
+
+    Each provider can define MODEL_TYPE_OVERRIDES in its config to map
+    model_id → type (e.g. "whisper-1" → "stt"). This function collects
+    all overrides into a single dict.
+    """
+    from app.providers.provider import Provider
+
+    overrides: dict[str, str] = {}
+    for name in AVAILABLE_PROVIDERS:
+        try:
+            p = Provider(name)
+            config = p.config()
+            if hasattr(config, "MODEL_TYPE_OVERRIDES") and config.MODEL_TYPE_OVERRIDES:
+                overrides.update(config.MODEL_TYPE_OVERRIDES)
+        except (ValueError, ModuleNotFoundError):
+            pass
+    return overrides

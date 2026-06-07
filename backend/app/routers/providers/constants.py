@@ -2,6 +2,7 @@
 
 import re
 
+from app.providers import get_all_model_type_overrides
 
 # Fields stored in the data JSON blob that are NOT provider-specific config
 # (they have dedicated output schema fields or are sensitive)
@@ -42,72 +43,16 @@ SUGGESTED_MODELS_FILTERS = {
 
 # ── Model Type System ──────────────────────────────────────────────────
 
-MODEL_TYPE_OVERRIDES = {
-    "text-embedding-3-small": "embedding",
-    "text-embedding-3-large": "embedding",
-    "text-embedding-ada-002": "embedding",
-    "mistral-embed": "embedding",
-    "nomic-ai/nomic-embed-text-v1.5": "embedding",
-    "voyage-3-large": "embedding",
-    "voyage-3.5": "embedding",
-    "voyage-3.5-lite": "embedding",
-    "voyage-code-3": "embedding",
-    "voyage-finance-2": "embedding",
-    "voyage-law-2": "embedding",
-    "voyage-multilingual-2": "embedding",
-    "jina-embeddings-v3": "embedding",
-    "jina-embeddings-v2-base-en": "embedding",
-    "jina-embeddings-v2-base-code": "embedding",
-    "BAAI/bge-large-en-v1.5": "embedding",
-    "togethercomputer/m2-bert-80M-8k-retrieval": "embedding",
-    "Qwen/Qwen3-Embedding-8B": "embedding",
-    "nvidia/nv-embedqa-e5-v5": "embedding",
-    "whisper-1": "stt",
-    "whisper-large-v3": "stt",
-    "whisper-large-v3-turbo": "stt",
-    "distil-whisper-large-v3-en": "stt",
-    "whisper-large": "stt",
-    "nova-3": "stt",
-    "nova-2": "stt",
-    "universal-3-pro": "stt",
-    "universal-2": "stt",
-    "gpt-4o-transcribe": "stt",
-    "gpt-4o-mini-transcribe": "stt",
-    "tts-1": "tts",
-    "tts-1-hd": "tts",
-    "gpt-4o-mini-tts": "tts",
-    "fastpitch": "tts",
-    "tacotron2": "tts",
-    "eleven_multilingual_v2": "tts",
-    "eleven_turbo_v2_5": "tts",
-    "sonic-2": "tts",
-    "sonic-3": "tts",
-    "PlayDialog": "tts",
-    "Play3.0-mini": "tts",
-    "speech-2.8-hd": "tts",
-    "speech-2.8-turbo": "tts",
-    "speech-2.6-hd": "tts",
-    "speech-2.6-turbo": "tts",
-    "speech-02-hd": "tts",
-    "speech-02-turbo": "tts",
-    "speech-01-hd": "tts",
-    "speech-01-turbo": "tts",
-    "dall-e-3": "image",
-    "dall-e-2": "image",
-    "gemini-2.5-flash-preview-tts": "tts",
-    "gemini-2.5-pro-preview-tts": "tts",
-    "text-embedding-004": "embedding",
-    "embedding-001": "embedding",
-    "melo-tts": "tts",
-    "inworld-tts-1.5-mini": "tts",
-    "inworld-tts-1.5-max": "tts",
-    "tts_models/en/ljspeech/tacotron2-DDC": "tts",
-    "tortoise-v2": "tts",
-    "facebook/mms-tts-eng": "tts",
-    "microsoft/speecht5_tts": "tts",
-    "openai/whisper-large-v3": "stt",
-    "openai/whisper-small": "stt",
-}
+# Lazy-loaded aggregated overrides from all providers
+_MODEL_TYPE_OVERRIDES_CACHE: dict[str, str] | None = None
+
+
+def _get_model_type_overrides() -> dict[str, str]:
+    """Get aggregated MODEL_TYPE_OVERRIDES from all providers (cached)."""
+    global _MODEL_TYPE_OVERRIDES_CACHE
+    if _MODEL_TYPE_OVERRIDES_CACHE is None:
+        _MODEL_TYPE_OVERRIDES_CACHE = get_all_model_type_overrides()
+    return _MODEL_TYPE_OVERRIDES_CACHE
 
 
 def infer_model_type(model_id: str) -> str:
@@ -115,8 +60,9 @@ def infer_model_type(model_id: str) -> str:
     mid = model_id.lower()
 
     # Check overrides first
-    if model_id in MODEL_TYPE_OVERRIDES:
-        return MODEL_TYPE_OVERRIDES[model_id]
+    overrides = _get_model_type_overrides()
+    if model_id in overrides:
+        return overrides[model_id]
 
     # Embedding models
     if re.search(r"embed|e5-|bge-|gte-|nomic|cohere-embed|voyage-", mid):
