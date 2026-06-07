@@ -8,8 +8,6 @@ import json
 import uuid
 from typing import Any
 
-from .constants import QODER_MODEL_MAP
-
 
 def _stable_hash(prefix: str, *parts: str) -> str:
     """Generate a stable hash from prefix and parts."""
@@ -119,10 +117,6 @@ def build_qoder_request_body(
     """
     if not qoder_key:
         qoder_key = model.replace("qoder/", "") if model.startswith("qoder/") else model
-
-    # Validate model
-    if qoder_key not in QODER_MODEL_MAP:
-        raise ValueError(f"Unsupported qoder model: {qoder_key}")
 
     # Use provided model_config or create a minimal one
     if not model_config:
