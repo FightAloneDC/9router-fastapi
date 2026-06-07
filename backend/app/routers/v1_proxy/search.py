@@ -13,11 +13,8 @@ from sqlalchemy import select
 from app.database import get_db
 from app.services.api_key_auth import validate_api_key
 from app.services.proxy import _resolve_provider_alias
-from app.services.search_adapters import (
-    SEARCH_BUILDERS,
-    _NOAUTH_SEARCH_PROVIDERS,
-    execute_search,
-)
+from app.services.search_adapters import execute_search
+from app.providers.provider import Provider
 from app.services.usage_tracking import save_request_tracking
 from app.models.provider import ProviderConnection
 
@@ -73,12 +70,18 @@ async def search_endpoint(
     # Resolve alias
     provider_id = _resolve_provider_alias(provider_id)
 
-    # Check provider is supported
-    if provider_id not in SEARCH_BUILDERS:
-        supported: list[str] = sorted(SEARCH_BUILDERS.keys())
+    # Check provider supports search via handler
+    search_handler = None
+    try:
+        p = Provider(provider_id)
+        search_handler = p.handler()
+    except (ValueError, ModuleNotFoundError):
+        pass
+
+    if search_handler is None or not hasattr(search_handler, "execute_search"):
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=f"Search provider '{provider_id}' is not supported. Supported: {', '.join(supported)}",
+            detail=f"Search provider '{provider_id}' is not supported.",
         )
 
     # Normalize params
@@ -104,7 +107,9 @@ async def search_endpoint(
     )
     conn = result.scalars().first()
 
-    if not conn and provider_id not in _NOAUTH_SEARCH_PROVIDERS:
+    # Some providers (e.g. searxng) don't need a connection
+    needs_auth = search_handler.config.AUTH_HEADER != "" or search_handler.config.AUTH_QUERY_PARAM != ""
+    if not conn and needs_auth:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"No active connection for search provider: {provider_id}",

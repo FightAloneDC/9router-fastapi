@@ -519,26 +519,6 @@ def _build_headers(provider: str, api_key: str, stream: bool = False, data: dict
         return headers
 
 
-async def build_qoder_request(
-    target: ResolvedTarget,
-    body: dict,
-    data: dict,
-) -> tuple[bytes, dict[str, str]]:
-    """Build a Qoder-specific request using handler.
-
-    Args:
-        target: Resolved target with URL and headers
-        body: Original OpenAI-format request body
-        data: Connection data (with userId, machineId, etc.)
-
-    Returns:
-        (encoded_body_bytes, signed_headers) tuple
-    """
-    p = Provider("qoder")
-    handler = p.handler()
-    return await handler.build_request_body(target.model, body, data)
-
-
 async def resolve_model_to_targets(
     db: AsyncSession,
     model: str,

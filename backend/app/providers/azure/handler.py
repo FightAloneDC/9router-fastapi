@@ -1,6 +1,10 @@
 """Azure OpenAI provider handler — api-key header + deployment URL."""
 
+from __future__ import annotations
+
+import io
 import time
+from typing import Any
 
 import httpx
 
@@ -75,3 +79,52 @@ class AzureHandler(BaseProviderHandler):
         )
         headers = {"api-key": data.get("apiKey", "")}
         return url, headers
+
+    async def execute_stt(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        api_key: str,
+        model: str,
+        file_bytes: bytes,
+        filename: str,
+        content_type: str,
+        language: str | None = None,
+        prompt: str | None = None,
+        response_format: str | None = None,
+        temperature: float | None = None,
+        data: dict | None = None,
+        **_kwargs,
+    ) -> dict[str, Any]:
+        """Azure Whisper-compatible multipart transcription via deployment URL."""
+        if not model:
+            raise ValueError("STT model is required")
+
+        conn_data = data or {}
+        endpoint = conn_data.get("azureEndpoint") or self.config.BASE_URL
+        deployment = conn_data.get("deployment", "whisper")
+        api_version = conn_data.get("apiVersion", "2024-06-01")
+        url = (
+            f"{endpoint.rstrip('/')}/openai/deployments/{deployment}"
+            f"/audio/transcriptions?api-version={api_version}"
+        )
+        headers = {"api-key": api_key}
+
+        files = {"file": (filename, io.BytesIO(file_bytes), content_type)}
+        form_data: dict[str, str] = {"model": model}
+        if language:
+            form_data["language"] = language
+        if prompt:
+            form_data["prompt"] = prompt
+        if response_format:
+            form_data["response_format"] = response_format
+        if temperature is not None:
+            form_data["temperature"] = str(temperature)
+
+        resp = await client.post(url, headers=headers, files=files, data=form_data)
+        resp.raise_for_status()
+
+        if response_format in ("text", "srt", "vtt"):
+            return {"text": resp.text}
+
+        return resp.json()

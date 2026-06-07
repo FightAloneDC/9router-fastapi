@@ -24,21 +24,20 @@ from app.services.proxy import (
     _resolve_provider_alias,
     _resolve_base_url,
 )
-from app.services.tts_adapters import TTS_ADAPTERS, _format_to_mime
+from app.providers.provider import Provider
 from app.services.usage_tracking import save_request_tracking
 from app.models.provider import ProviderConnection
-from app.services.stt_adapters import (
-    STT_ADAPTERS,
-    _FIXED_URL_STT_PROVIDERS,
-    get_stt_adapter,
-    resolve_audio_mime,
-)
+from app.services.stt_adapters import resolve_audio_mime
 
 from .shared import _should_fallback_on_error
 
 router = APIRouter()
 
-_FIXED_URL_PROVIDERS: set[str] = {"gemini", "elevenlabs", "openrouter", "edge-tts"}
+
+_FORMAT_TO_MIME: dict[str, str] = {
+    "mp3": "audio/mpeg", "wav": "audio/wav", "opus": "audio/opus",
+    "aac": "audio/aac", "flac": "audio/flac", "pcm": "audio/L16",
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,15 +102,18 @@ async def audio_speech(
     provider_name, model_remainder = model_str.split("/", 1)
     provider_id: str = _resolve_provider_alias(provider_name)
 
-    # ── 2. Adapter must exist for this provider ──
-    adapter = TTS_ADAPTERS.get(provider_id)
-    if adapter is None:
+    # ── 2. Resolve handler ──
+    tts_handler = None
+    try:
+        p = Provider(provider_id)
+        tts_handler = p.handler()
+    except (ValueError, ModuleNotFoundError):
+        pass
+
+    if tts_handler is None or not hasattr(tts_handler, "execute_tts"):
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=(
-                f"TTS provider '{provider_id}' is not yet supported. "
-                f"Iterasi 1 supports: {', '.join(sorted(TTS_ADAPTERS.keys()))}"
-            ),
+            detail=f"TTS provider '{provider_id}' is not yet supported.",
         )
 
     # ── 3. Resolve tts_model + voice ──
@@ -169,11 +171,6 @@ async def audio_speech(
         base_url: str = conn_data.get("baseUrl") or _resolve_base_url(provider_id, conn_data)
         conn_id: str = str(conn.id)
 
-        if not base_url and provider_id not in _FIXED_URL_PROVIDERS:
-            last_error = {"status": 500, "detail": f"No base_url for provider {provider_id}"}
-            exclude_ids.add(conn_id)
-            continue
-
         # Pass body-level `language` through for gemini (TTS prompt prefix).
         extra: dict = {}
         body_language: str | None = body.get("language")
@@ -183,7 +180,7 @@ async def audio_speech(
         try:
             request_start_time: float = time.time()
             async with httpx.AsyncClient(timeout=120.0) as client:
-                audio_bytes, content_type = await adapter(
+                audio_bytes, content_type = await tts_handler.execute_tts(
                     client,
                     base_url=base_url,
                     api_key=api_key,
@@ -229,7 +226,7 @@ async def audio_speech(
                 )
             return Response(
                 content=audio_bytes,
-                media_type=content_type or _format_to_mime(fmt),
+                media_type=content_type or _FORMAT_TO_MIME.get(fmt, "audio/mpeg"),
                 headers={"X-Request-Id": request_id},
             )
 
@@ -339,15 +336,19 @@ async def audio_transcriptions(
     provider_name, model_id = model_str.split("/", 1)
     provider_id: str = _resolve_provider_alias(provider_name)
 
-    # ── 2. Adapter must exist ──
-    adapter = get_stt_adapter(provider_id)
-    if adapter is None:
+    # ── 2. Resolve handler ──
+    stt_handler = None
+    try:
+        from app.providers.provider import Provider
+        p = Provider(provider_id)
+        stt_handler = p.handler()
+    except (ValueError, ModuleNotFoundError):
+        pass
+
+    if stt_handler is None or not hasattr(stt_handler, "execute_stt"):
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=(
-                f"STT provider '{provider_id}' is not yet supported. "
-                f"Iterasi 1 supports: {', '.join(sorted(STT_ADAPTERS.keys()))}"
-            ),
+            detail=f"STT provider '{provider_id}' is not yet supported.",
         )
 
     # ── 3. Parse temperature (validation) ──
@@ -401,38 +402,13 @@ async def audio_transcriptions(
 
         conn_data: dict = json.loads(conn.data) if conn.data else {}
         api_key: str = conn_data.get("apiKey") or conn_data.get("api_key") or ""
-        base_url: str = conn_data.get("baseUrl") or _resolve_base_url(provider_id, conn_data)
         conn_id: str = str(conn.id)
-
-        if not base_url and provider_id not in _FIXED_URL_STT_PROVIDERS:
-            last_error = {"status": 500, "detail": f"No base_url for provider {provider_id}"}
-            exclude_ids.add(conn_id)
-            continue
-
-        # Provider-specific STT URL/auth override (e.g. Azure deployment)
-        extra_url: str | None = None
-        stt_auth_header: str = "Authorization"
-        stt_auth_prefix: str = "Bearer "
-        try:
-            from app.providers.provider import Provider
-            p = Provider(provider_id)
-            handler = p.handler()
-            if hasattr(handler, "build_stt_request"):
-                extra_url, stt_headers = handler.build_stt_request(conn_data, model_id)
-                if stt_headers:
-                    first_key = next(iter(stt_headers), None)
-                    if first_key:
-                        stt_auth_header = first_key
-                        stt_auth_prefix = ""
-        except (ValueError, ModuleNotFoundError):
-            pass
 
         try:
             request_start_time: float = time.time()
             async with httpx.AsyncClient(timeout=180.0) as client:
-                result_payload: dict = await adapter(
+                result_payload: dict = await stt_handler.execute_stt(
                     client,
-                    base_url=base_url,
                     api_key=api_key,
                     model=model_id,
                     file_bytes=file_bytes,
@@ -442,9 +418,7 @@ async def audio_transcriptions(
                     prompt=prompt or None,
                     response_format=response_format_str or None,
                     temperature=temperature,
-                    extra_url=extra_url,
-                    auth_header=stt_auth_header,
-                    auth_prefix=stt_auth_prefix,
+                    data=conn_data,
                 )
             total_latency_ms: int = int((time.time() - request_start_time) * 1000)
 
@@ -533,59 +507,43 @@ async def audio_voices(
 
     Plan: docs/plans/v1-audio-voices.md (Phase 4).
     """
-    from app.services.voice_fetchers import (
-        VOICE_FETCHER_PROVIDERS,
-        fetch_voices_cached,
-        is_no_key_provider,
-    )
+    from app.services.voice_fetchers import fetch_voices_cached
     from app.services.proxy import ID_TO_ALIAS
+    from app.providers.provider import Provider
 
-    if provider not in VOICE_FETCHER_PROVIDERS:
+    # Check if provider supports voice listing via handler
+    handler = None
+    try:
+        p = Provider(provider)
+        handler = p.handler()
+    except (ValueError, ModuleNotFoundError):
+        pass
+
+    has_voice_fetch = handler and hasattr(handler, "fetch_voices")
+    # local-device is not a provider but supports voice listing
+    if not has_voice_fetch and provider != "local-device":
         return JSONResponse(
             status_code=400,
             content={
                 "error": {
-                    "message": (
-                        f"provider must be one of: "
-                        f"{', '.join(sorted(VOICE_FETCHER_PROVIDERS))}"
-                    ),
+                    "message": f"Provider '{provider}' does not support voice listing",
                     "type": "invalid_request_error",
                 }
             },
         )
 
-    # Get API key from DB (not needed for edge-tts / local-device / gemini)
+    # Get API key from DB — best effort, not all providers need one
     api_key: str = ""
-    if not is_no_key_provider(provider):
-        result = await db.execute(
-            select(ProviderConnection).where(
-                ProviderConnection.provider == provider,
-                ProviderConnection.is_active == True,
-            ).order_by(ProviderConnection.priority)
-        )
-        conn = result.scalars().first()
-        if not conn:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": {
-                        "message": f"No {provider} connection found",
-                        "type": "invalid_request_error",
-                    }
-                },
-            )
+    result = await db.execute(
+        select(ProviderConnection).where(
+            ProviderConnection.provider == provider,
+            ProviderConnection.is_active == True,
+        ).order_by(ProviderConnection.priority)
+    )
+    conn = result.scalars().first()
+    if conn:
         data: dict = json.loads(conn.data) if conn.data else {}
         api_key = data.get("apiKey") or data.get("api_key") or ""
-        if not api_key:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": {
-                        "message": f"No API key stored for {provider}",
-                        "type": "invalid_request_error",
-                    }
-                },
-            )
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:

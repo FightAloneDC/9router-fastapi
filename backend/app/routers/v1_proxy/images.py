@@ -26,6 +26,7 @@ from app.services.proxy import (
 from app.services.image_adapters import IMAGE_ADAPTERS, image_comfyui, _stub_adapter
 from app.services.usage_tracking import save_request_tracking
 from app.models.provider import ProviderConnection
+from app.providers.provider import Provider
 from app.routers.providers.helpers import _get_provider_config
 
 from .shared import _should_fallback_on_error
@@ -92,9 +93,18 @@ async def images_generations(
     provider_name, image_model = model_str.split("/", 1)
     provider_id: str = _resolve_provider_alias(provider_name)
 
-    # ── 2. Adapter must exist for this provider ──
-    adapter = IMAGE_ADAPTERS.get(provider_id)
-    if adapter is None:
+    # ── 2. Resolve handler or adapter for this provider ──
+    handler = None
+    try:
+        p = Provider(provider_id)
+        handler = p.handler()
+    except (ValueError, ModuleNotFoundError):
+        pass
+
+    has_handler_image = handler and hasattr(handler, "build_image_request")
+
+    adapter = None if has_handler_image else IMAGE_ADAPTERS.get(provider_id)
+    if adapter is None and not has_handler_image:
         supported = sorted(
             k for k, v in IMAGE_ADAPTERS.items()
             if v is not image_comfyui and v is not _stub_adapter
@@ -155,25 +165,47 @@ async def images_generations(
             continue
 
         if not base_url and provider_id in _NOAUTH_PROVIDERS:
-            defaults: dict = _get_provider_config(provider_id)
-            base_url = defaults.get("baseUrl", "http://localhost:7860")
+            if handler:
+                base_url = handler.config.BASE_URL
+            else:
+                defaults: dict = _get_provider_config(provider_id)
+                base_url = defaults.get("baseUrl", "http://localhost:7860")
 
         try:
             request_start_time: float = time.time()
             async with httpx.AsyncClient(timeout=120.0) as client:
-                images = await adapter(
-                    client,
-                    base_url=base_url,
-                    api_key=api_key,
-                    model=image_model,
-                    prompt=prompt,
-                    n=n,
-                    size=size,
-                    response_format=response_format,
-                    quality=quality,
-                    style=style,
-                    extra_body=extra_body,
-                )
+                if has_handler_image and handler is not None:
+                    url, method, headers, req_body = handler.build_image_request(
+                        base_url=base_url,
+                        model=image_model,
+                        prompt=prompt,
+                        n=n,
+                        size=size,
+                        response_format=response_format,
+                        quality=quality,
+                        style=style,
+                        extra_body=extra_body,
+                    )
+                    if method == "GET":
+                        resp = await client.get(url, headers=headers)
+                    else:
+                        resp = await client.post(url, headers=headers, json=req_body)
+                    resp.raise_for_status()
+                    images = handler.parse_image_response(resp.json())
+                else:
+                    images = await adapter(
+                        client,
+                        base_url=base_url,
+                        api_key=api_key,
+                        model=image_model,
+                        prompt=prompt,
+                        n=n,
+                        size=size,
+                        response_format=response_format,
+                        quality=quality,
+                        style=style,
+                        extra_body=extra_body,
+                    )
             total_latency_ms: int = int((time.time() - request_start_time) * 1000)
 
             # Success — clear cooldown
