@@ -23,8 +23,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.provider import ProviderConnection
-from app.services import oauth_providers
-from app.services.oauth import kiro_handler, cursor_handler
+from app.services.oauth import (
+    generate_auth_data,
+    exchange_tokens,
+    request_device_code,
+    poll_for_token,
+    map_tokens,
+    get_oauth_handler,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +94,7 @@ class _CodexCallbackHandler(BaseHTTPRequestHandler):
                 loop = asyncio.new_event_loop()
                 try:
                     token_data = loop.run_until_complete(
-                        oauth_providers.exchange_tokens(
+                        exchange_tokens(
                             "codex", code, session["redirectUri"],
                             session["codeVerifier"], state or ""
                         )
@@ -327,7 +333,7 @@ async def _save_connection(
 async def authorize(provider: str, redirect_uri: str = "http://localhost:8080/callback"):
     """Generate OAuth authorization URL and PKCE data."""
     try:
-        auth_data = oauth_providers.generate_auth_data(provider, redirect_uri)
+        auth_data = generate_auth_data(provider, redirect_uri)
         return auth_data
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -355,7 +361,7 @@ async def exchange(
 
         # Special handling for cursor (import_token flow)
         if provider == "cursor":
-            token_data = oauth_providers.get_provider("cursor")["mapTokens"](
+            token_data = map_tokens("cursor",
                 {"accessToken": body.code, "machineId": body.meta.get("machineId", "") if body.meta else ""},
                 None,
             )
@@ -370,7 +376,7 @@ async def exchange(
                 ),
             )
 
-        token_data = await oauth_providers.exchange_tokens(
+        token_data = await exchange_tokens(
             provider, body.code, body.redirectUri, body.codeVerifier, body.state, body.meta
         )
 
@@ -400,8 +406,8 @@ async def device_code(
 ):
     """Request a device code for device_code flow providers."""
     try:
-        prov = oauth_providers.get_provider(provider)
-        if prov["flowType"] not in ("device_code", "polling"):
+        prov = get_oauth_handler(provider)
+        if prov.flow_type not in ("device_code", "polling"):
             raise HTTPException(status_code=400, detail="Provider does not support device code flow")
 
         # Generate PKCE data (needed for qwen)
@@ -421,7 +427,7 @@ async def device_code(
             if auth_method:
                 options["authMethod"] = auth_method
 
-        device_data = await oauth_providers.request_device_code(provider, code_challenge, options or None)
+        device_data = await request_device_code(provider, code_challenge, options or None)
 
         # Prepare extra data for polling (e.g. kiro stores client credentials)
         extra = {}
@@ -457,7 +463,7 @@ async def poll(
         # Providers that don't use PKCE
         no_pkce = ["github", "kimi-coding", "kilocode"]
 
-        result = await oauth_providers.poll_for_token(
+        result = await poll_for_token(
             provider,
             body.deviceCode,
             "" if provider in no_pkce else body.codeVerifier,
@@ -502,7 +508,7 @@ async def import_token(
         if provider != "cursor":
             raise HTTPException(status_code=400, detail="Import token only supported for cursor")
 
-        token_data = oauth_providers.get_provider("cursor")["mapTokens"](
+        token_data = map_tokens("cursor",
             {"accessToken": body.accessToken, "machineId": body.machineId},
             None,
         )
@@ -543,7 +549,7 @@ async def cursor_auto_import():
                     cursor_installed = True
             if not cursor_installed:
                 return {"found": False, "error": "Cursor config files found but Cursor IDE does not appear to be installed. Skipping auto-import."}
-        result = await cursor_handler.auto_import()
+        result = await get_oauth_handler("cursor").auto_import()
         return result
     except Exception as e:
         logger.exception("Cursor auto-import error")
@@ -558,7 +564,7 @@ async def cursor_import(body: CursorImportRequest, db: AsyncSession = Depends(ge
             raise HTTPException(status_code=400, detail="Access token is required")
         if not body.machineId or not isinstance(body.machineId, str):
             raise HTTPException(status_code=400, detail="Machine ID is required")
-        token_data = await cursor_handler.validate_import_token(body.accessToken.strip(), body.machineId.strip())
+        token_data = await get_oauth_handler("cursor").validate_import_token(body.accessToken.strip(), body.machineId.strip())
         conn = await _save_connection(db, "cursor", token_data)
         return OAuthExchangeResponse(success=True, connection=ConnectionResponse(id=str(conn.id), provider=conn.provider, email=conn.email, displayName=conn.name))
     except HTTPException:
@@ -618,8 +624,8 @@ async def kiro_import(body: KiroImportRequest, db: AsyncSession = Depends(get_db
     try:
         if not body.refreshToken or not isinstance(body.refreshToken, str):
             raise HTTPException(status_code=400, detail="Refresh token is required")
-        token_data = await kiro_handler.validate_import_token(body.refreshToken.strip())
-        email = kiro_handler.extract_email_from_jwt(token_data.get("accessToken", ""))
+        token_data = await get_oauth_handler("kiro").validate_import_token(body.refreshToken.strip())
+        email = get_oauth_handler("kiro").extract_email_from_jwt(token_data.get("accessToken", ""))
         save_data = {
             "accessToken": token_data.get("accessToken"),
             "refreshToken": token_data.get("refreshToken", body.refreshToken.strip()),
@@ -645,7 +651,7 @@ async def kiro_social_authorize(provider: str = ""):
             raise HTTPException(status_code=400, detail="Invalid provider. Use 'google' or 'github'")
         from app.utils.pkce import generate_pkce
         pkce = generate_pkce()
-        auth_url = kiro_handler.build_social_login_url(provider, pkce["codeChallenge"], pkce["state"])
+        auth_url = get_oauth_handler("kiro").build_social_login_url(provider, pkce["codeChallenge"], pkce["state"])
         return {"authUrl": auth_url, "state": pkce["state"], "codeVerifier": pkce["codeVerifier"], "codeChallenge": pkce["codeChallenge"], "provider": provider}
     except HTTPException:
         raise
@@ -662,8 +668,8 @@ async def kiro_social_exchange(body: KiroSocialExchangeRequest, db: AsyncSession
             raise HTTPException(status_code=400, detail="Missing required fields")
         if body.provider not in ("google", "github"):
             raise HTTPException(status_code=400, detail="Invalid provider")
-        token_data = await kiro_handler.exchange_social_code(body.code, body.codeVerifier)
-        email = kiro_handler.extract_email_from_jwt(token_data.get("accessToken", ""))
+        token_data = await get_oauth_handler("kiro").exchange_social_code(body.code, body.codeVerifier)
+        email = get_oauth_handler("kiro").extract_email_from_jwt(token_data.get("accessToken", ""))
         save_data = {
             **token_data,
             "email": email,

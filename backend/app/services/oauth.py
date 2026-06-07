@@ -1817,3 +1817,162 @@ async def refresh_access_token(
     config = get_provider_config(provider)
     svc = OAuthService(config)
     return await svc.refresh_access_token(provider, config, refresh_token, provider_specific_data)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 9. PS Handler Registry (Provider-Specific pattern)
+#    Dispatches to per-provider OAuth handlers in backend/app/providers/
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_HANDLER_CLASSES: dict[str, str] = {
+    "claude": "app.providers.claude.oauth.ClaudeOAuthHandler",
+    "codex": "app.providers.codex.oauth.CodexOAuthHandler",
+    "openai": "app.providers.openai.oauth.OpenaiOAuthHandler",
+    "gemini-cli": "app.providers.gemini.oauth.GeminiOAuthHandler",
+    "antigravity": "app.providers.antigravity.oauth.AntigravityOAuthHandler",
+    "iflow": "app.providers.iflow.oauth.IflowOAuthHandler",
+    "github": "app.providers.github.oauth.GithubOAuthHandler",
+    "qwen": "app.providers.qwen.oauth.QwenOAuthHandler",
+    "kiro": "app.providers.kiro.oauth.KiroOAuthHandler",
+    "cursor": "app.providers.cursor.oauth.CursorOAuthHandler",
+    "kimi-coding": "app.providers.kimi_coding.oauth.KimiCodingOAuthHandler",
+    "kilocode": "app.providers.kilocode.oauth.KilocodeOAuthHandler",
+    "cline": "app.providers.cline.oauth.ClineOAuthHandler",
+    "gitlab": "app.providers.gitlab.oauth.GitlabOAuthHandler",
+    "codebuddy": "app.providers.codebuddy.oauth.CodebuddyOAuthHandler",
+    "qoder": "app.providers.qoder.oauth.QoderOAuthHandler",
+}
+
+_handler_cache: dict[str, Any] = {}
+
+
+def get_oauth_handler(provider_name: str):
+    """Get OAuth handler instance for a provider (lazy-loaded, cached)."""
+    if provider_name in _handler_cache:
+        return _handler_cache[provider_name]
+
+    class_path = _HANDLER_CLASSES.get(provider_name)
+    if not class_path:
+        raise ValueError(f"Unknown OAuth provider: {provider_name}")
+
+    module_path, class_name = class_path.rsplit(".", 1)
+    import importlib
+    module = importlib.import_module(module_path)
+    handler_class = getattr(module, class_name)
+    handler = handler_class()
+    _handler_cache[provider_name] = handler
+    return handler
+
+
+def generate_auth_data(provider_name: str, redirect_uri: str, meta: Optional[dict] = None) -> dict:
+    """Generate auth data for a provider using handler dispatch.
+
+    Returns dict with: authUrl, state, codeVerifier, codeChallenge, redirectUri, flowType
+    """
+    from app.utils.pkce import generate_pkce
+
+    handler = get_oauth_handler(provider_name)
+    pkce = generate_pkce()
+
+    auth_url = None
+    if handler.flow_type in ("authorization_code_pkce",):
+        auth_url = handler.build_auth_url(redirect_uri, pkce["state"], pkce["codeChallenge"])
+    elif handler.flow_type in ("authorization_code",):
+        auth_url = handler.build_auth_url(redirect_uri, pkce["state"])
+    # device_code and import_token have no auth_url
+
+    return {
+        "authUrl": auth_url,
+        "state": pkce["state"],
+        "codeVerifier": pkce["codeVerifier"],
+        "codeChallenge": pkce["codeChallenge"],
+        "redirectUri": redirect_uri,
+        "flowType": handler.flow_type,
+    }
+
+
+async def exchange_tokens(
+    provider_name: str,
+    code: str,
+    redirect_uri: str,
+    code_verifier: str = "",
+    state: str = "",
+    meta: Optional[dict] = None,
+) -> dict:
+    """Exchange code for tokens using handler dispatch."""
+    handler = get_oauth_handler(provider_name)
+
+    tokens = await handler.exchange_code(code, redirect_uri, code_verifier, state)
+
+    extra = None
+    if hasattr(handler, "post_exchange"):
+        try:
+            extra = await handler.post_exchange(tokens)
+        except NotImplementedError:
+            pass
+
+    return handler.map_tokens(tokens, extra)
+
+
+async def request_device_code(
+    provider_name: str,
+    code_challenge: str = "",
+    options: Optional[dict] = None,
+) -> dict:
+    """Request device code using handler dispatch."""
+    handler = get_oauth_handler(provider_name)
+    if handler.flow_type not in ("device_code", "polling"):
+        raise ValueError(f"Provider {provider_name} does not support device code flow")
+    return await handler.request_device_code(code_challenge, options)
+
+
+async def poll_for_token(
+    provider_name: str,
+    device_code: str,
+    code_verifier: str = "",
+    extra_data: Optional[dict] = None,
+) -> dict:
+    """Poll for token using handler dispatch."""
+    handler = get_oauth_handler(provider_name)
+    if handler.flow_type not in ("device_code", "polling"):
+        raise ValueError(f"Provider {provider_name} does not support device code flow")
+
+    result = await handler.poll_token(device_code, code_verifier, extra_data)
+
+    if result.get("ok"):
+        data = result["data"]
+        if data.get("access_token"):
+            extra = None
+            if hasattr(handler, "post_exchange"):
+                try:
+                    extra = await handler.post_exchange(data)
+                except NotImplementedError:
+                    pass
+            return {"success": True, "tokens": handler.map_tokens(data, extra)}
+        else:
+            error = data.get("error", "")
+            if error in ("authorization_pending", "slow_down"):
+                return {
+                    "success": False,
+                    "error": error,
+                    "errorDescription": data.get("error_description") or data.get("message"),
+                    "pending": error == "authorization_pending",
+                }
+            return {
+                "success": False,
+                "error": error or "no_access_token",
+                "errorDescription": data.get("error_description") or data.get("message") or "No access token received",
+            }
+
+    data = result.get("data", {})
+    return {
+        "success": False,
+        "error": data.get("error", "unknown"),
+        "errorDescription": data.get("error_description"),
+    }
+
+
+def map_tokens(provider_name: str, token_data: dict) -> dict:
+    """Map provider tokens to standard format using handler dispatch."""
+    handler = get_oauth_handler(provider_name)
+    return handler.map_tokens(token_data)
