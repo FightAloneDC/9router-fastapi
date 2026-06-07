@@ -15,7 +15,7 @@ Usage:
 
 import importlib
 
-from app.providers.base import BaseMetadata, BaseProviderConfig
+from app.providers.base import BaseMetadata, BaseProviderConfig, BaseProviderHandler
 
 
 class Provider:
@@ -27,6 +27,7 @@ class Provider:
         self._config: BaseProviderConfig | None = None
         self._metadata: BaseMetadata | None = None
         self._models = None
+        self._handler: BaseProviderHandler | None = None
 
     def _load_config(self) -> BaseProviderConfig:
         if self._config is None:
@@ -87,6 +88,36 @@ class Provider:
         """Parse provider API response into model list."""
         return self._load_models().parse_response(data)
 
-    async def fetch_models(self, api_key: str) -> list[dict]:
+    async def fetch_models(self, api_key: str, **kwargs) -> list[dict]:
         """Fetch available models from provider API."""
-        return await self._load_models().fetch_models(api_key)
+        return await self._load_models().fetch_models(api_key, **kwargs)
+
+    def handler(self) -> BaseProviderHandler:
+        """Return the provider's handler instance.
+
+        Tries to load provider-specific handler class first.
+        Falls back to BaseProviderHandler with provider config.
+        """
+        if self._handler is None:
+            try:
+                module = importlib.import_module(
+                    f"app.providers.{self._module_name}.handler"
+                )
+                for attr in dir(module):
+                    cls = getattr(module, attr)
+                    if (
+                        isinstance(cls, type)
+                        and issubclass(cls, BaseProviderHandler)
+                        and cls is not BaseProviderHandler
+                    ):
+                        self._handler = cls(self.config())
+                        return self._handler
+            except (ModuleNotFoundError, ImportError):
+                pass
+            # Fallback: base handler with provider config
+            self._handler = BaseProviderHandler(self.config())
+        return self._handler
+
+    def resolve_base_url(self, data: dict | None = None) -> str:
+        """Resolve effective base URL using handler."""
+        return self.handler()._resolve_base_url(data)

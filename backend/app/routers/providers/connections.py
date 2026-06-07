@@ -16,29 +16,11 @@ from app.routers.providers.constants import SUGGESTED_MODELS_FILTERS, normalize_
 from app.routers.providers.helpers import _get_provider_config
 from app.routers.providers.helpers import (
     _connection_to_out,
-    _get_base_url,
-    _get_validation_type,
     _normalize_proxy_config,
     _normalize_proxy_pool_id,
     _sanitize_connection,
 )
-from app.routers.providers.validation import (
-    _validate_anthropic,
-    _validate_assemblyai,
-    _validate_azure,
-    _validate_cloudflare,
-    _validate_deepgram,
-    _validate_elevenlabs,
-    _validate_google,
-    _validate_inworld,
-    _validate_minimax,
-    _validate_noauth,
-    _validate_ollama,
-    _validate_openai_chat,
-    _validate_openai_compatible,
-    _validate_vertex,
-    _validate_voyage,
-)
+from app.routers.providers.validation import _validate_provider
 from app.schemas.provider import (
     ProviderConnectionCreate,
     ProviderConnectionOut,
@@ -188,45 +170,10 @@ async def create_provider(
     if is_no_auth:
         test_status = "connected"
     elif body.apiKey and test_status == "unknown":
-        # Auto-validate on create
+        # Auto-validate on create using handler dispatch
         try:
-            vtype = _get_validation_type(body.provider)
             extra = body.providerSpecificData or {}
-            base_url = _get_base_url(body.provider, body.baseUrl, extra)
-
-            if vtype == "cookie":
-                vr = None  # Cookie providers cannot be validated via API call
-            elif vtype == "anthropic":
-                vr = await _validate_anthropic(body.apiKey, base_url)
-            elif vtype == "google":
-                vr = await _validate_google(body.apiKey)
-            elif vtype == "azure":
-                vr = await _validate_azure(body.apiKey, extra)
-            elif vtype == "cloudflare":
-                vr = await _validate_cloudflare(body.apiKey, extra)
-            elif vtype == "openai-chat":
-                vr = await _validate_openai_chat(body.apiKey, base_url)
-            elif vtype == "noauth":
-                vr = _validate_noauth()
-            elif vtype == "elevenlabs":
-                vr = await _validate_elevenlabs(body.apiKey)
-            elif vtype == "deepgram":
-                vr = await _validate_deepgram(body.apiKey)
-            elif vtype == "inworld":
-                vr = await _validate_inworld(body.apiKey)
-            elif vtype == "voyage":
-                vr = await _validate_voyage(body.apiKey)
-            elif vtype == "assemblyai":
-                vr = await _validate_assemblyai(body.apiKey)
-            elif vtype in ("minimax", "minimax-cn"):
-                vr = await _validate_minimax(body.apiKey, vtype)
-            elif body.provider in ("ollama", "ollama-local"):
-                vr = await _validate_ollama(base_url or "http://localhost:11434")
-            elif base_url:
-                vr = await _validate_openai_compatible(body.apiKey, base_url)
-            else:
-                vr = None
-
+            vr = await _validate_provider(body.provider, body.apiKey, extra)
             if vr:
                 test_status = "connected" if vr.valid else "error"
         except Exception:

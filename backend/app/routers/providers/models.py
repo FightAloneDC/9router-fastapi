@@ -68,34 +68,28 @@ async def _fetch_node_models(node: ProviderNode, api_key: str) -> list[dict]:
 async def _fetch_builtin_models(
     provider: str, api_key: str, data: dict,
 ) -> list[dict]:
-    """Fetch models from a built-in provider using the Provider class."""
+    """Fetch models from a built-in provider using the Provider handler."""
     # Qoder has special COSY-signed handling
     if provider == "qoder":
         return await _fetch_qoder_models(api_key, data)
-
-    try:
-        p: Provider = Provider(provider)
-    except (ValueError, ModuleNotFoundError):
-        # Provider not in new system — fallback to config
-        return await _fetch_fallback(provider, api_key)
 
     token: str = data.get("accessToken") or api_key
     if not token:
         raise HTTPException(status_code=401, detail="No valid token found")
 
-    # Pass region for region-aware providers
-    psd: dict = data.get("providerSpecificData", {})
-    region: str = psd.get("region", "")
-
     try:
-        if region:
-            models_raw: list[dict] = await p.fetch_models(token, region=region)
-        else:
-            models_raw: list[dict] = await p.fetch_models(token)
-        models: list[dict] = [_normalize_model(m) for m in models_raw if _normalize_model(m).get("id")]
-        return models
+        p = Provider(provider)
+        handler = p.handler()
+        models_raw: list[dict] = await handler.fetch_models(token, data)
+        return [handler._normalize_model(m) for m in models_raw if handler._normalize_model(m).get("id")]
+    except (ValueError, ModuleNotFoundError):
+        return await _fetch_fallback(provider, api_key)
     except httpx.ConnectError:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to {p.base_url()}")
+        try:
+            p = Provider(provider)
+            raise HTTPException(status_code=502, detail=f"Cannot connect to {p.base_url()}")
+        except (ValueError, ModuleNotFoundError):
+            raise HTTPException(status_code=502, detail=f"Cannot connect to {provider}")
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Connection timed out")
     except httpx.HTTPStatusError as e:

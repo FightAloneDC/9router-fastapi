@@ -1,0 +1,36 @@
+"""Voyage AI handler — embedding test call for validation."""
+
+import time
+
+import httpx
+
+from app.providers.base import BaseProviderHandler, ValidateResult
+
+
+class VoyageAiHandler(BaseProviderHandler):
+    """Handler for Voyage AI provider."""
+
+    async def validate(self, api_key: str, data: dict | None = None) -> ValidateResult:
+        if not api_key:
+            return ValidateResult(valid=False, error="API key is required for Voyage AI")
+
+        start = time.monotonic()
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                resp = await client.post(
+                    "https://api.voyageai.com/v1/embeddings",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={"input": "ping", "model": "voyage-3"},
+                )
+                latency = int((time.monotonic() - start) * 1000)
+                if resp.status_code in (401, 403):
+                    return ValidateResult(valid=False, error="Invalid API key (unauthorized)", latency_ms=latency)
+                if resp.status_code >= 500:
+                    return ValidateResult(valid=False, error=f"Voyage returned {resp.status_code}", latency_ms=latency)
+                return ValidateResult(valid=True, latency_ms=latency)
+            except httpx.ConnectError:
+                return ValidateResult(valid=False, error="Cannot connect to Voyage AI API", latency_ms=int((time.monotonic() - start) * 1000))
+            except httpx.TimeoutException:
+                return ValidateResult(valid=False, error="Connection timed out", latency_ms=int((time.monotonic() - start) * 1000))
+            except Exception as e:
+                return ValidateResult(valid=False, error=str(e)[:200], latency_ms=int((time.monotonic() - start) * 1000))
