@@ -26,3 +26,5 @@ class AmazonBedrockMetadata(BaseMetadata):
     name: str = "Amazon Bedrock"
     color: str = "#FF9900"
     textIcon: str = "AB"
+    icon: str = "Cloud"
+    website: str = "https://aws.amazon.com/bedrock/"

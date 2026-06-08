@@ -24,3 +24,6 @@ class RunwaymlMetadata(BaseMetadata):
     name: str = "Runway ML"
     color: str = "#000000"
     textIcon: str = "RW"
+    icon: str = "Video"
+    website: str = "https://runwayml.com"
+    notice: dict | None = {"apiKeyUrl": "https://dev.runwayml.com"}

@@ -24,3 +24,6 @@ class CerebrasMetadata(BaseMetadata):
     name: str = "Cerebras"
     color: str = "#FF6B00"
     textIcon: str = "CB"
+    icon: str = "Cpu"
+    website: str = "https://cloud.cerebras.ai"
+    notice: dict | None = {"apiKeyUrl": "https://cloud.cerebras.ai/"}

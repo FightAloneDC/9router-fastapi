@@ -24,3 +24,6 @@ class BflMetadata(BaseMetadata):
     name: str = "Black Forest Labs"
     color: str = "#1E40AF"
     textIcon: str = "BF"
+    icon: str = "Image"
+    website: str = "https://bfl.ai"
+    notice: dict | None = {"apiKeyUrl": "https://bfl.ai/dashboard"}

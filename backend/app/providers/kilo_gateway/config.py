@@ -24,3 +24,6 @@ class KiloGatewayMetadata(BaseMetadata):
     name: str = "Kilo Gateway"
     color: str = "#FF6B35"
     textIcon: str = "KG"
+    icon: str = "Code"
+    website: str = "https://kilo.ai"
+    notice: dict | None = {"apiKeyUrl": "https://kilo.ai"}

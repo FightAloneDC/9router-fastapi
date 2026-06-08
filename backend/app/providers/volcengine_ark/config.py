@@ -24,3 +24,6 @@ class VolcengineArkMetadata(BaseMetadata):
     name: str = "Volcengine Ark"
     color: str = "#1677FF"
     textIcon: str = "ARK"
+    icon: str = "Cloud"
+    website: str = "https://ark.cn-beijing.volces.com"
+    notice: dict | None = {"apiKeyUrl": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey"}

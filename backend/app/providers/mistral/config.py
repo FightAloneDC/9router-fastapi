@@ -29,3 +29,6 @@ class MistralMetadata(BaseMetadata):
     name: str = "Mistral"
     color: str = "#FF7000"
     textIcon: str = "MI"
+    icon: str = "Wind"
+    website: str = "https://console.mistral.ai"
+    notice: dict | None = {"apiKeyUrl": "https://console.mistral.ai/api-keys/"}

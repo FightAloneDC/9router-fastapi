@@ -24,3 +24,5 @@ class VertexPartnerMetadata(BaseMetadata):
     name: str = "Vertex Partner"
     color: str = "#34A853"
     textIcon: str = "VP"
+    icon: str = "Cloud"
+    website: str = "https://cloud.google.com/vertex-ai"

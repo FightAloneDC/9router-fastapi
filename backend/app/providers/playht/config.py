@@ -30,3 +30,6 @@ class PlayhtMetadata(BaseMetadata):
     name: str = "PlayHT"
     color: str = "#F59E0B"
     textIcon: str = "PH"
+    icon: str = "Play"
+    website: str = "https://play.ht"
+    notice: dict | None = {"apiKeyUrl": "https://play.ht/studio/api-access"}

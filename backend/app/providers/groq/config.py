@@ -24,3 +24,6 @@ class GroqMetadata(BaseMetadata):
     name: str = "Groq"
     color: str = "#F55036"
     textIcon: str = "GQ"
+    icon: str = "Zap"
+    website: str = "https://console.groq.com"
+    notice: dict | None = {"apiKeyUrl": "https://console.groq.com/keys"}

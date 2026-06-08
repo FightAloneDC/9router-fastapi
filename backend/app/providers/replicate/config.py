@@ -24,3 +24,6 @@ class ReplicateMetadata(BaseMetadata):
     name: str = "Replicate"
     color: str = "#000000"
     textIcon: str = "RP"
+    icon: str = "Image"
+    website: str = "https://replicate.com"
+    notice: dict | None = {"apiKeyUrl": "https://replicate.com/account/api-tokens"}

@@ -16,42 +16,44 @@ import OAuthModal from '../components/OAuthModal'
 import AddOpenAICompatibleModal from '../components/modals/AddOpenAICompatibleModal'
 import AddAnthropicCompatibleModal from '../components/modals/AddAnthropicCompatibleModal'
 import { providersApi } from '../api/providers'
-import {
-  PROVIDERS, OAUTH_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS,
-  APIKEY_PROVIDERS, WEB_COOKIE_PROVIDERS,
-} from '../constants/providers'
+import useCatalogStore from '../stores/catalogStore'
 import { useNotificationStore } from '../stores/notificationStore'
 
-// ── Provider categorization (using proper category exports) ─────────────────
+// ── Provider categorization (using catalog store) ────────────────────────────
 function isLLMProvider(info) {
   if (!info.serviceKinds) return true
   return info.serviceKinds.includes('llm')
 }
 
 function isOAuthProvider(key) {
-  return !!OAUTH_PROVIDERS[key]
+  const p = useCatalogStore.getState().providers[key]
+  return p?.authType === 'oauth'
 }
 
 function isFreeProvider(key) {
-  return !!FREE_PROVIDERS[key]
+  const p = useCatalogStore.getState().providers[key]
+  return p?.authType === 'free' || p?.noAuth === true
 }
 
 function isFreeTierProvider(key) {
-  return !!FREE_TIER_PROVIDERS[key]
+  const cats = useCatalogStore.getState().categories
+  return (cats.freeTier || []).includes(key)
 }
 
 function isWebCookieProvider(key) {
-  return !!WEB_COOKIE_PROVIDERS[key]
+  const p = useCatalogStore.getState().providers[key]
+  return p?.authType === 'cookie'
 }
 
 function isApiKeyProvider(key) {
-  return !!APIKEY_PROVIDERS[key]
+  const p = useCatalogStore.getState().providers[key]
+  return p?.authType === 'apikey'
 }
 
 function getAuthType(providerId, provider) {
-  if (provider?.noAuth) return 'free'
-  if (isOAuthProvider(providerId)) return 'oauth'
-  if (isWebCookieProvider(providerId)) return 'cookie'
+  const p = provider || useCatalogStore.getState().providers[providerId]
+  if (p?.noAuth) return 'free'
+  if (p?.authType) return p.authType
   return 'apikey'
 }
 
@@ -288,16 +290,6 @@ export default function ProvidersPage() {
   }, [searchQuery])
 
   // ── Categorize provider entries ────────────────────────────────────────────
-  const sortByStats = (entries) =>
-    [...entries].sort(([ka], [kb]) => {
-      const sa = getProviderStats(ka)
-      const sb = getProviderStats(kb)
-      const ca = sa.connected > 0 ? 1 : 0
-      const cb = sb.connected > 0 ? 1 : 0
-      if (ca !== cb) return cb - ca
-      return (PROVIDERS[ka]?.name || ka).localeCompare(PROVIDERS[kb]?.name || kb)
-    })
-
   const compatibleProviders = providerNodes
     .filter(n => n.type === 'openai-compatible')
     .map(n => ({
@@ -321,21 +313,39 @@ export default function ProvidersPage() {
     }))
     .filter(p => matchSearch(p.name))
 
-  const oauthEntries = Object.entries(OAUTH_PROVIDERS)
-    .filter(([key, info]) => !info.hidden && isLLMProvider(info) && matchSearch(info.name))
+  const catalog = useCatalogStore((s) => s.providers)
+  const categories = useCatalogStore((s) => s.categories)
 
-  const freeEntries = Object.entries(FREE_PROVIDERS)
-    .filter(([key, info]) => !info.hidden && isLLMProvider(info) && matchSearch(info.name))
+  const sortByStats = (entries) =>
+    [...entries].sort(([ka], [kb]) => {
+      const sa = getProviderStats(ka)
+      const sb = getProviderStats(kb)
+      const ca = sa.connected > 0 ? 1 : 0
+      const cb = sb.connected > 0 ? 1 : 0
+      if (ca !== cb) return cb - ca
+      return (catalog[ka]?.name || ka).localeCompare(catalog[kb]?.name || kb)
+    })
 
-  const freeTierEntries = Object.entries(FREE_TIER_PROVIDERS)
-    .filter(([key, info]) => !info.hidden && isLLMProvider(info) && matchSearch(info.name))
+  const oauthEntries = (categories.oauth || [])
+    .map(id => [id, catalog[id]])
+    .filter(([, info]) => info && !info.hidden && isLLMProvider(info) && matchSearch(info.name))
 
-  const cookieEntries = Object.entries(WEB_COOKIE_PROVIDERS)
-    .filter(([key, info]) => !info.hidden && isLLMProvider(info) && matchSearch(info.name))
+  const freeEntries = (categories.free || [])
+    .map(id => [id, catalog[id]])
+    .filter(([, info]) => info && !info.hidden && isLLMProvider(info) && matchSearch(info.name))
+
+  const freeTierEntries = (categories.freeTier || [])
+    .map(id => [id, catalog[id]])
+    .filter(([, info]) => info && !info.hidden && isLLMProvider(info) && matchSearch(info.name))
+
+  const cookieEntries = (categories.webCookie || [])
+    .map(id => [id, catalog[id]])
+    .filter(([, info]) => info && !info.hidden && isLLMProvider(info) && matchSearch(info.name))
 
   const apikeyEntries = sortByStats(
-    Object.entries(APIKEY_PROVIDERS)
-      .filter(([key, info]) => !info.hidden && isLLMProvider(info) && matchSearch(info.name))
+    (categories.apiKey || [])
+      .map(id => [id, catalog[id]])
+      .filter(([, info]) => info && !info.hidden && isLLMProvider(info) && matchSearch(info.name))
   )
 
   const isSearching = !!searchQuery.trim()
@@ -874,7 +884,7 @@ function AddApiKeyModal({ isOpen, providerKey, onClose, onCreated }) {
   const [createError, setCreateError] = useState('')
   const [azureData, setAzureData] = useState({ azureEndpoint: '', apiVersion: '2024-10-01-preview', deployment: '', organization: '' })
   const [cloudflareData, setCloudflareData] = useState({ accountId: '' })
-  const info = PROVIDERS[providerKey]
+  const info = useCatalogStore((s) => s.providers[providerKey])
   const isAzure = providerKey === 'azure'
   const isCloudflareAi = providerKey === 'cloudflare-ai'
 

@@ -24,3 +24,6 @@ class BlackboxMetadata(BaseMetadata):
     name: str = "Blackbox AI"
     color: str = "#5B5FEF"
     textIcon: str = "BB"
+    icon: str = "Bot"
+    website: str = "https://blackbox.ai"
+    notice: dict | None = {"apiKeyUrl": "https://www.blackbox.ai/api-management"}

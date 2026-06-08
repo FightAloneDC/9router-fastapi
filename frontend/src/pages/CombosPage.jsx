@@ -21,7 +21,7 @@ import Input from '../components/ui/Input'
 import ModelSelectModal from '../components/ModelSelectModal'
 import { combosApi } from '../api/combos'
 import { settingsApi } from '../api/settings'
-import { getProviderByAlias } from '../constants/providers'
+import useCatalogStore from '../stores/catalogStore'
 
 const NAME_RE = /^[a-zA-Z0-9_.\-]+$/
 const MAX_VISIBLE_MODELS = 3
@@ -294,7 +294,7 @@ function ComboCard({ combo, onEdit, onDelete, onCopy, copied, strategy, stickyLi
           <div className="flex flex-wrap gap-1.5">
             {visibleModels.map((model) => {
               const alias = model.includes('/') ? model.split('/')[0] : null
-              const provider = alias ? getProviderByAlias(alias) : null
+              const provider = alias ? useCatalogStore.getState().getProviderByAlias(alias) : null
               const shortName = model.includes('/') ? model.split('/').slice(1).join('/') : model
               return (
                 <span
@@ -576,7 +576,7 @@ function ComboFormModal({ combo, onSave, onClose }) {
                     >
                       {model.includes('/') && (() => {
                         const alias = model.split('/')[0]
-                        const provider = getProviderByAlias(alias)
+                        const provider = useCatalogStore.getState().getProviderByAlias(alias)
                         if (provider) {
                           return (
                             <span

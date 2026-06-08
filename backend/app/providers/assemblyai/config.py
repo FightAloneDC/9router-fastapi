@@ -26,3 +26,6 @@ class AssemblyaiMetadata(BaseMetadata):
     name: str = "AssemblyAI"
     color: str = "#0F172A"
     textIcon: str = "AA"
+    icon: str = "Mic"
+    website: str = "https://www.assemblyai.com"
+    notice: dict | None = {"apiKeyUrl": "https://www.assemblyai.com/app"}

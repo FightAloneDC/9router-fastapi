@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { Search, X, Check, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import Badge from './ui/Badge'
-import { getProviderByAlias } from '../constants/providers'
+import useCatalogStore from '../stores/catalogStore'
 import client from '../api/client'
 
 const TYPE_BADGE_STYLES = {
@@ -71,8 +71,8 @@ export default function ModelSelectModal({ isOpen, onClose, onAdd, existingModel
   // Provider display order: sort by name
   const providerOrder = useMemo(() => {
     return Object.keys(grouped).sort((a, b) => {
-      const pa = getProviderByAlias(a)
-      const pb = getProviderByAlias(b)
+      const pa = useCatalogStore.getState().getProviderByAlias(a)
+      const pb = useCatalogStore.getState().getProviderByAlias(b)
       const na = pa?.name || a
       const nb = pb?.name || b
       return na.localeCompare(nb)
@@ -85,7 +85,7 @@ export default function ModelSelectModal({ isOpen, onClose, onAdd, existingModel
     const q = search.toLowerCase()
     const result = {}
     for (const [alias, providerModels] of Object.entries(grouped)) {
-      const provider = getProviderByAlias(alias)
+      const provider = useCatalogStore.getState().getProviderByAlias(alias)
       const providerName = (provider?.name || alias).toLowerCase()
       const matchedModels = providerModels.filter(
         (m) =>
@@ -99,8 +99,8 @@ export default function ModelSelectModal({ isOpen, onClose, onAdd, existingModel
 
   const filteredProviderOrder = useMemo(() => {
     return Object.keys(filteredGroups).sort((a, b) => {
-      const pa = getProviderByAlias(a)
-      const pb = getProviderByAlias(b)
+      const pa = useCatalogStore.getState().getProviderByAlias(a)
+      const pb = useCatalogStore.getState().getProviderByAlias(b)
       const na = pa?.name || a
       const nb = pb?.name || b
       return na.localeCompare(nb)
@@ -235,7 +235,7 @@ export default function ModelSelectModal({ isOpen, onClose, onAdd, existingModel
               </div>
             ) : (
               filteredProviderOrder.map((alias) => {
-                const provider = getProviderByAlias(alias)
+                const provider = useCatalogStore.getState().getProviderByAlias(alias)
                 const providerName = provider?.name || alias
                 const providerColor = provider?.color || '#71717a'
                 const textIcon = provider?.textIcon || alias.slice(0, 2).toUpperCase()

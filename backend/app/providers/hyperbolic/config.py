@@ -24,3 +24,6 @@ class HyperbolicMetadata(BaseMetadata):
     name: str = "Hyperbolic"
     color: str = "#8B5CF6"
     textIcon: str = "HY"
+    icon: str = "Zap"
+    website: str = "https://hyperbolic.xyz"
+    notice: dict | None = {"apiKeyUrl": "https://app.hyperbolic.xyz/settings"}

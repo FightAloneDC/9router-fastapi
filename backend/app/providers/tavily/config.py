@@ -24,3 +24,6 @@ class TavilyMetadata(BaseMetadata):
     name: str = "Tavily"
     color: str = "#5B21B6"
     textIcon: str = "TV"
+    icon: str = "Search"
+    website: str = "https://tavily.com"
+    notice: dict | None = {"apiKeyUrl": "https://app.tavily.com/home"}

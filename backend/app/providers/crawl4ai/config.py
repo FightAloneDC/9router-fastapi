@@ -24,3 +24,6 @@ class Crawl4aiMetadata(BaseMetadata):
     name: str = "Crawl4AI"
     color: str = "#06B6D4"
     textIcon: str = "C4"
+    icon: str = "Globe"
+    website: str = "https://crawl4ai.com"
+    notice: dict | None = {"text": "Open-source web crawling."}

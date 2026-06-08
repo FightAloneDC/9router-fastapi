@@ -29,3 +29,6 @@ class CoquiMetadata(BaseMetadata):
     name: str = "Coqui TTS"
     color: str = "#10B981"
     textIcon: str = "CQ"
+    icon: str = "AudioLines"
+    website: str = "https://coqui.ai"
+    notice: dict | None = {"apiKeyUrl": "https://coqui.ai"}

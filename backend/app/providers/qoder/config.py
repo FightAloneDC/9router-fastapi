@@ -20,6 +20,7 @@ class QoderConfig(BaseProviderConfig):
     # ── Connection defaults ─────────────────────────────────────────────
     FORMAT: str = "qoder"  # Custom format — not OpenAI-compatible
     VALIDATION_TYPE: str = "qoder"
+    SUPPORTS_PAT: bool = True
 
 
 class QoderMetadata(BaseMetadata):
@@ -28,3 +29,6 @@ class QoderMetadata(BaseMetadata):
     name: str = "Qoder"
     color: str = "#6366F1"
     textIcon: str = "QD"
+    icon: str = "Zap"
+    website: str = "https://qoder.com"
+    notice: dict | None = {"signupUrl": "https://qoder.com"}

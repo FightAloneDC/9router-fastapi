@@ -24,3 +24,6 @@ class ExaMetadata(BaseMetadata):
     name: str = "Exa"
     color: str = "#2563EB"
     textIcon: str = "EX"
+    icon: str = "Search"
+    website: str = "https://exa.ai"
+    notice: dict | None = {"apiKeyUrl": "https://dashboard.exa.ai/api-keys"}

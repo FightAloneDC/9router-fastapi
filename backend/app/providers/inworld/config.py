@@ -32,3 +32,6 @@ class InworldMetadata(BaseMetadata):
     name: str = "Inworld AI"
     color: str = "#7C3AED"
     textIcon: str = "IW"
+    icon: str = "Bot"
+    website: str = "https://inworld.ai"
+    notice: dict | None = {"apiKeyUrl": "https://studio.inworld.ai"}

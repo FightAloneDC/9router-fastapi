@@ -23,7 +23,7 @@ function ProviderLogo({ providerId, provider, size = 40 }) {
 }
 import { useParams, useNavigate } from 'react-router-dom'
 import { Binary, Volume2, Mic, Search, Globe, Image, Eye, Video, Music, ChevronRight } from 'lucide-react'
-import { MEDIA_PROVIDER_KINDS } from '../constants/providers'
+import useCatalogStore from '../stores/catalogStore'
 import { providersApi } from '../api/providers'
 import Card, { CardContent } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
@@ -218,8 +218,8 @@ export default function MediaProvidersPage() {
 
     if (activeKind === 'webSearch' || activeKind === 'webFetch') {
       // Web tab shows both search and fetch
-      const searchConfig = MEDIA_PROVIDER_KINDS.find((k) => k.id === 'webSearch')
-      const fetchConfig = MEDIA_PROVIDER_KINDS.find((k) => k.id === 'webFetch')
+      const searchConfig = useCatalogStore.getState().mediaKinds.find((k) => k.id === 'webSearch')
+      const fetchConfig = useCatalogStore.getState().mediaKinds.find((k) => k.id === 'webFetch')
       return (
         <div className="space-y-6">
           {searchConfig && (
@@ -243,7 +243,7 @@ export default function MediaProvidersPage() {
       )
     }
 
-    const kindConfig = MEDIA_PROVIDER_KINDS.find((k) => k.id === activeKind)
+    const kindConfig = useCatalogStore.getState().mediaKinds.find((k) => k.id === activeKind)
     if (!kindConfig) {
       return (
         <div className="text-center py-12 text-zinc-500">

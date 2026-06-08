@@ -16,7 +16,7 @@ import Toggle from '../components/ui/Toggle'
 import { providersApi } from '../api/providers'
 import { proxyPoolsApi } from '../api/proxyPools'
 import { settingsApi } from '../api/settings'
-import { PROVIDERS, MEDIA_PROVIDER_KINDS, getKindConfig, getProviderAlias } from '../constants/providers'
+import useCatalogStore from '../stores/catalogStore'
 import { useAuthStore } from '../stores/authStore'
 import { copyToClipboard } from '../utils/clipboard'
 
@@ -1651,9 +1651,10 @@ function ImageTestPlayground({ providerId, providerAlias, connections }) {
 export default function MediaProviderDetailPage() {
   const { kind, providerId } = useParams()
   const navigate = useNavigate()
-  const provider = PROVIDERS[providerId]
-  const kindConfig = getKindConfig(kind)
-  const providerAlias = provider ? getProviderAlias(providerId) : providerId
+  const catalogStore = useCatalogStore()
+  const provider = catalogStore.providers[providerId]
+  const kindConfig = catalogStore.getKindConfig(kind)
+  const providerAlias = provider ? catalogStore.getProviderAlias(providerId) : providerId
   const kinds = provider?.serviceKinds || ['llm']
   const allServiceKinds = provider?.serviceKinds || []
 

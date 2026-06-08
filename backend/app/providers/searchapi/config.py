@@ -24,3 +24,6 @@ class SearchapiMetadata(BaseMetadata):
     name: str = "SearchAPI"
     color: str = "#10B981"
     textIcon: str = "SA"
+    icon: str = "Search"
+    website: str = "https://www.searchapi.io"
+    notice: dict | None = {"apiKeyUrl": "https://www.searchapi.io/dashboard"}

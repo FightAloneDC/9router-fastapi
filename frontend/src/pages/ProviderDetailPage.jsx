@@ -17,12 +17,7 @@ import Toggle from '../components/ui/Toggle'
 import { providersApi } from '../api/providers'
 import { proxyPoolsApi } from '../api/proxyPools'
 import { settingsApi } from '../api/settings'
-import {
-  PROVIDERS, OAUTH_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS,
-  APIKEY_PROVIDERS, WEB_COOKIE_PROVIDERS, AI_PROVIDERS,
-  getProviderAlias, isOpenAICompatibleProvider, isAnthropicCompatibleProvider,
-  THINKING_CONFIG, resolveProviderId,
-} from '../constants/providers'
+import useCatalogStore from '../stores/catalogStore'
 import { copyToClipboard } from '../utils/clipboard'
 import CompatibleModelsSection from '../components/CompatibleModelsSection'
 import { fetchSuggestedModels } from '../utils/providerModelsFetcher'
@@ -38,10 +33,11 @@ const COMPATIBLE_TYPES = new Set(['openai-compatible', 'anthropic-compatible'])
 
 // Per-connection OAuth detection (for providers that support both OAuth and PAT like qoder)
 function isConnectionOAuth(conn, providerId) {
-  // For qoder: both OAuth and PAT connections use OAuth-style editing (no API key field)
-  if (conn?.provider === 'qoder' || providerId === 'qoder') return true
-  if (conn?.auth_type) return conn.auth_type === 'oauth'
-  return !!OAUTH_PROVIDERS[providerId] || !!FREE_PROVIDERS[providerId]
+  const catalog = useCatalogStore.getState().providers
+  const p = catalog[providerId]
+  // OAuth-style editing: OAuth providers, free providers, or providers that support PAT
+  if (p?.authType === 'oauth' || p?.authType === 'free' || p?.supportsPAT) return true
+  return false
 }
 
 const TYPE_BADGE_STYLES = {
@@ -281,8 +277,9 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
   const isCookie = info?.authType === "cookie"
   const isAzure = providerId === "azure"
   const isCloudflareAi = providerId === "cloudflare-ai"
-  const providerRegions = AI_PROVIDERS?.[providerId]?.regions || null
-  const defaultRegion = AI_PROVIDERS?.[providerId]?.defaultRegion || providerRegions?.[0]?.id || ""
+  const catalogEntry = useCatalogStore((s) => s.providers[providerId])
+  const providerRegions = catalogEntry?.regions || null
+  const defaultRegion = catalogEntry?.defaultRegion || providerRegions?.[0]?.id || ""
 
   const credentialLabel = isCookie ? "Cookie Value" : "API Key"
   const credentialPlaceholder = isCookie
@@ -1224,14 +1221,15 @@ function ChatTestPlayground({ providerId, providerAlias, connections }) {
    ════════════════════════════════════════════════════════════════ */
 export default function ProviderDetailPage() {
   const { providerId: rawProviderId } = useParams()
-  const providerId = resolveProviderId(rawProviderId)
+  const catalogStore = useCatalogStore()
+  const providerId = catalogStore.resolveProviderId(rawProviderId)
   const navigate = useNavigate()
-  const info = AI_PROVIDERS[providerId]
+  const info = catalogStore.providers[providerId]
 
   // Provider auth type detection
-  const isOAuth = !!OAUTH_PROVIDERS[providerId] || !!FREE_PROVIDERS[providerId]
-  const isFreeNoAuth = !!FREE_PROVIDERS[providerId]?.noAuth
-  const isWebCookie = !!WEB_COOKIE_PROVIDERS[providerId]
+  const isOAuth = info?.authType === 'oauth' || info?.authType === 'free'
+  const isFreeNoAuth = info?.noAuth === true
+  const isWebCookie = info?.authType === 'cookie'
 
   const [connections, setConnections] = useState([])
   const [loading, setLoading] = useState(true)
@@ -1286,12 +1284,13 @@ export default function ProviderDetailPage() {
   const isAnthropicCompatible = providerNode?.type === 'anthropic-compatible'
   const isOpenAICompatible = providerNode?.type === 'openai-compatible'
   // Provider alias for model storage
-  const providerAlias = getProviderAlias(providerId)
+  const providerAlias = catalogStore.getProviderAlias(providerId)
   const providerStorageAlias = isCompatible ? providerId : providerAlias
   const providerDisplayAlias = isCompatible ? (providerNode?.prefix || providerId) : providerAlias
 
   // Thinking config — safe fallback
-  const thinkingConfig = info?.thinkingConfig || THINKING_CONFIG.extended
+  const THINKING_EXTENDED_DEFAULT = { options: ["auto", "on", "off"], defaultMode: "auto", defaultBudgetTokens: 10000 }
+  const thinkingConfig = info?.thinkingConfig || THINKING_EXTENDED_DEFAULT
 
   // Build display info from provider node or PROVIDERS constant
   // NOTE: Must be safe even when both info AND providerNode are null (edge case)
@@ -2486,34 +2485,22 @@ export default function ProviderDetailPage() {
       />
 
       {/* ── OAuth / Provider-specific Modal ── */}
-      {providerId === 'kiro' ? (
-        <KiroAuthModal
-          isOpen={showOAuthModal}
-          onClose={() => setShowOAuthModal(false)}
-          onMethodSelect={() => { setShowOAuthModal(false); fetchConnections() }}
-        />
-      ) : providerId === 'cursor' ? (
-        <CursorAuthModal
-          isOpen={showOAuthModal}
-          onSuccess={() => { setShowOAuthModal(false); fetchConnections() }}
-          onClose={() => setShowOAuthModal(false)}
-        />
-      ) : providerId === 'gitlab' ? (
-        <GitLabAuthModal
-          isOpen={showOAuthModal}
-          providerInfo={info}
-          onSuccess={() => { setShowOAuthModal(false); fetchConnections() }}
-          onClose={() => setShowOAuthModal(false)}
-        />
-      ) : (
-        <OAuthModal
-          isOpen={showOAuthModal}
-          provider={providerId}
-          providerInfo={info}
-          onSuccess={() => { setShowOAuthModal(false); fetchConnections() }}
-          onClose={() => setShowOAuthModal(false)}
-        />
-      )}
+      {(() => {
+        const customModal = info?.customModal
+        const handleClose = () => setShowOAuthModal(false)
+        const handleSuccess = () => { setShowOAuthModal(false); fetchConnections() }
+
+        if (customModal === 'kiro') {
+          return <KiroAuthModal isOpen={showOAuthModal} onClose={handleClose} onMethodSelect={handleSuccess} />
+        }
+        if (customModal === 'cursor') {
+          return <CursorAuthModal isOpen={showOAuthModal} onSuccess={handleSuccess} onClose={handleClose} />
+        }
+        if (customModal === 'gitlab') {
+          return <GitLabAuthModal isOpen={showOAuthModal} providerInfo={info} onSuccess={handleSuccess} onClose={handleClose} />
+        }
+        return <OAuthModal isOpen={showOAuthModal} provider={providerId} providerInfo={info} onSuccess={handleSuccess} onClose={handleClose} />
+      })()}
 
       {/* ── Confirm Modal ── */}
       <ConfirmModal

@@ -24,3 +24,6 @@ class SearxngMetadata(BaseMetadata):
     name: str = "SearXNG"
     color: str = "#FF6B35"
     textIcon: str = "SX"
+    icon: str = "Search"
+    website: str = "https://searxng.org"
+    notice: dict | None = {"text": "Self-hosted metasearch engine."}

@@ -24,3 +24,6 @@ class OpenrouterMetadata(BaseMetadata):
     name: str = "OpenRouter"
     color: str = "#F97316"
     textIcon: str = "OR"
+    icon: str = "Router"
+    website: str = "https://openrouter.ai"
+    notice: dict | None = {"text": "Free tier: 27+ free models, no credit card needed, 200 req/day.", "apiKeyUrl": "https://openrouter.ai/settings/keys"}

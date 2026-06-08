@@ -24,3 +24,6 @@ class CloudflareAiMetadata(BaseMetadata):
     name: str = "Cloudflare"
     color: str = "#F38020"
     textIcon: str = "CF"
+    icon: str = "Cloud"
+    website: str = "https://developers.cloudflare.com/workers-ai/"
+    notice: dict | None = {"text": "Workers AI free tier.", "apiKeyUrl": "https://dash.cloudflare.com/profile/api-tokens"}

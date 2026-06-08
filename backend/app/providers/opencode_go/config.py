@@ -24,3 +24,6 @@ class OpencodeGoMetadata(BaseMetadata):
     name: str = "OpenCode Go"
     color: str = "#E87040"
     textIcon: str = "OC"
+    icon: str = "Terminal"
+    website: str = "https://opencode.ai/auth"
+    notice: dict | None = {"text": "OpenCode Go subscription: $5/mo (then $10/mo). Access to Kimi, GLM, Qwen, MiMo, MiniMax models.", "apiKeyUrl": "https://opencode.ai/auth"}

@@ -34,3 +34,6 @@ class DeepgramMetadata(BaseMetadata):
     name: str = "Deepgram"
     color: str = "#13EF93"
     textIcon: str = "DG"
+    icon: str = "Mic"
+    website: str = "https://deepgram.com"
+    notice: dict | None = {"apiKeyUrl": "https://console.deepgram.com/product/api-keys"}

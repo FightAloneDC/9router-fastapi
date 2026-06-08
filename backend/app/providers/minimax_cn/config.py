@@ -25,3 +25,6 @@ class MinimaxCnMetadata(BaseMetadata):
     name: str = "Minimax (China)"
     color: str = "#DC2626"
     textIcon: str = "MC"
+    icon: str = "MemoryStick"
+    website: str = "https://www.minimaxi.com"
+    notice: dict | None = {"apiKeyUrl": "https://platform.minimaxi.com/user-center/basic-information/interface-key"}

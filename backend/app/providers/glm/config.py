@@ -25,3 +25,6 @@ class GlmMetadata(BaseMetadata):
     name: str = "GLM Coding"
     color: str = "#2563EB"
     textIcon: str = "GL"
+    icon: str = "Code"
+    website: str = "https://open.bigmodel.cn"
+    notice: dict | None = {"apiKeyUrl": "https://open.bigmodel.cn/usercenter/apikeys"}

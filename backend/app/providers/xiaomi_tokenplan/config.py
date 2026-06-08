@@ -16,6 +16,8 @@ class XiaomiTokenplanConfig(BaseProviderConfig):
     ALIAS: str = "xmtp"
     BASE_URL: str = "https://api.xiaomimimo.com/v1"
     SERVICE_KINDS: list[str] = ["llm"]
+    REGIONS: list[dict] | None = [{"id": "sgp", "label": "Singapore"}, {"id": "cn", "label": "China"}, {"id": "ams", "label": "Europe"}]
+    DEFAULT_REGION: str = "sgp"
 
 
 class XiaomiTokenplanMetadata(BaseMetadata):
@@ -24,3 +26,6 @@ class XiaomiTokenplanMetadata(BaseMetadata):
     name: str = "Xiaomi MiMo (Token Plan)"
     color: str = "#FF6700"
     textIcon: str = "XT"
+    icon: str = "Bot"
+    website: str = "https://mimo.xiaomi.com"
+    notice: dict | None = {"text": "Xiaomi MiMo Token Plan subscription.", "apiKeyUrl": "https://mimo.xiaomi.com"}

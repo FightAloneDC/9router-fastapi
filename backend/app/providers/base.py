@@ -40,6 +40,21 @@ class BaseProviderConfig(BaseModel):
     # Used by infer_model_type() to override regex-based heuristics
     MODEL_TYPE_OVERRIDES: dict[str, str] = {}
 
+    # ── UI Metadata (served via /providers/catalog) ────────────────────
+    DEPRECATED: bool = False
+    DEPRECATION_NOTICE: str = ""
+    HIDDEN: bool = False
+    NO_AUTH: bool = False
+    PASSTHROUGH_MODELS: bool = False
+    REGIONS: list[dict] | None = None
+    DEFAULT_REGION: str = ""
+    THINKING_CONFIG: dict | None = None
+    MEDIA_PRIORITY: int = 100
+    MODELS_FETCHER: dict | None = None
+    SUPPORTS_PAT: bool = False
+    REQUIRES_PROXY: bool = False
+    CUSTOM_MODAL: str = ""  # frontend modal component name (e.g. "kiro", "cursor", "gitlab")
+
     # ── Runtime (from DB connection, not .env) ──────────────────────────
     API_KEY: str = ""
 
@@ -50,6 +65,10 @@ class BaseMetadata(BaseModel):
     name: str
     color: str
     textIcon: str
+    icon: str = "Box"
+    website: str = ""
+    notice: dict | None = None
+    authHint: str = ""
 
 
 @dataclass

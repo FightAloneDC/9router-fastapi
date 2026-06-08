@@ -24,3 +24,6 @@ class FirecrawlMetadata(BaseMetadata):
     name: str = "Firecrawl"
     color: str = "#F97316"
     textIcon: str = "FC"
+    icon: str = "Globe"
+    website: str = "https://firecrawl.dev"
+    notice: dict | None = {"apiKeyUrl": "https://firecrawl.dev/app/api-keys"}

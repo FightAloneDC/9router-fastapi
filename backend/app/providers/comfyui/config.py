@@ -24,3 +24,6 @@ class ComfyuiMetadata(BaseMetadata):
     name: str = "ComfyUI"
     color: str = "#EC4899"
     textIcon: str = "CU"
+    icon: str = "Image"
+    website: str = "https://comfy.org"
+    notice: dict | None = {"text": "Local ComfyUI instance."}

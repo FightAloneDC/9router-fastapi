@@ -26,3 +26,5 @@ class AzureMetadata(BaseMetadata):
     name: str = "Azure OpenAI"
     color: str = "#0078D4"
     textIcon: str = "AZ"
+    icon: str = "Cloud"
+    website: str = "https://azure.microsoft.com"

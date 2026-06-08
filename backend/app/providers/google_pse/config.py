@@ -24,3 +24,6 @@ class GooglePseMetadata(BaseMetadata):
     name: str = "Google PSE"
     color: str = "#4285F4"
     textIcon: str = "GP"
+    icon: str = "Search"
+    website: str = "https://programmablesearchengine.google.com"
+    notice: dict | None = {"apiKeyUrl": "https://programmablesearchengine.google.com/controlpanel/create"}

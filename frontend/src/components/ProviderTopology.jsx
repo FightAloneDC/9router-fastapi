@@ -6,7 +6,7 @@ import {
   Controls,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { AI_PROVIDERS } from '../constants/providers'
+import useCatalogStore from '../stores/catalogStore'
 
 // Normalize provider ID: lowercase, strip spaces/special chars
 function normalizeId(id) {
@@ -16,7 +16,7 @@ function normalizeId(id) {
 function getProviderConfig(providerId) {
   const id = normalizeId(providerId)
   // Try exact, lowercase, and alias match
-  return AI_PROVIDERS[providerId] || AI_PROVIDERS[id] || { color: '#6b7280', name: providerId }
+  return useCatalogStore.getState().providers[providerId] || useCatalogStore.getState().providers[id] || { color: '#6b7280', name: providerId }
 }
 
 // Try multiple image path variations

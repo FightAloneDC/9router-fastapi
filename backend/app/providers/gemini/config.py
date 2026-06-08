@@ -30,6 +30,7 @@ class GeminiConfig(BaseProviderConfig):
         "text-embedding-004": "embedding",
         "embedding-001": "embedding",
     }
+    MEDIA_PRIORITY: int = 1
 
 
 class GeminiMetadata(BaseMetadata):
@@ -38,3 +39,6 @@ class GeminiMetadata(BaseMetadata):
     name: str = "Gemini"
     color: str = "#4285F4"
     textIcon: str = "GE"
+    icon: str = "Diamond"
+    website: str = "https://ai.google.dev"
+    notice: dict | None = {"apiKeyUrl": "https://aistudio.google.com/app/apikey"}

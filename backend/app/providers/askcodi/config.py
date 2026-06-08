@@ -24,3 +24,6 @@ class AskcodiMetadata(BaseMetadata):
     name: str = "AskCodi"
     color: str = "#6366F1"
     textIcon: str = "AC"
+    icon: str = "Code"
+    website: str = "https://www.askcodi.com/"
+    notice: dict | None = {"text": "Free tier: 100K token free credit on signup.", "apiKeyUrl": "https://www.askcodi.com/api_keys"}

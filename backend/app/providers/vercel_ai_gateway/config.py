@@ -24,3 +24,6 @@ class VercelAiGatewayMetadata(BaseMetadata):
     name: str = "Vercel AI Gateway"
     color: str = "#000000"
     textIcon: str = "VA"
+    icon: str = "Triangle"
+    website: str = "https://vercel.com/docs/ai-gateway"
+    notice: dict | None = {"apiKeyUrl": "https://vercel.com/dashboard"}

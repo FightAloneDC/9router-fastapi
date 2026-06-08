@@ -26,3 +26,6 @@ class DeepseekMetadata(BaseMetadata):
     name: str = "DeepSeek"
     color: str = "#0066FF"
     textIcon: str = "DS"
+    icon: str = "Sparkles"
+    website: str = "https://platform.deepseek.com"
+    notice: dict | None = {"apiKeyUrl": "https://platform.deepseek.com/api_keys"}

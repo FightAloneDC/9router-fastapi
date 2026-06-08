@@ -24,3 +24,6 @@ class PerplexityMetadata(BaseMetadata):
     name: str = "Perplexity"
     color: str = "#1A73E8"
     textIcon: str = "PX"
+    icon: str = "Search"
+    website: str = "https://www.perplexity.ai"
+    notice: dict | None = {"apiKeyUrl": "https://www.perplexity.ai/settings/api"}

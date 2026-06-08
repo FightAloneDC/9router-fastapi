@@ -18,6 +18,7 @@ class LocalDeviceConfig(BaseProviderConfig):
     SERVICE_KINDS: list[str] = ["tts"]
     AUTH_HEADER: str = ""
     AUTH_PREFIX: str = ""
+    NO_AUTH: bool = True
 
 
 class LocalDeviceMetadata(BaseMetadata):
@@ -26,3 +27,5 @@ class LocalDeviceMetadata(BaseMetadata):
     name: str = "Local Device"
     color: str = "#6B7280"
     textIcon: str = "LD"
+    icon: str = "Speaker"
+    website: str = "https://espeak.sourceforge.net"

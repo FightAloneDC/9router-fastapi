@@ -24,3 +24,6 @@ class SerperMetadata(BaseMetadata):
     name: str = "Serper"
     color: str = "#4F46E5"
     textIcon: str = "SP"
+    icon: str = "Search"
+    website: str = "https://serper.dev"
+    notice: dict | None = {"apiKeyUrl": "https://serper.dev/api-key"}

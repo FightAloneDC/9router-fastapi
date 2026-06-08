@@ -24,3 +24,6 @@ class JinaReaderMetadata(BaseMetadata):
     name: str = "Jina Reader"
     color: str = "#000000"
     textIcon: str = "JR"
+    icon: str = "BookOpen"
+    website: str = "https://jina.ai/reader"
+    notice: dict | None = {"apiKeyUrl": "https://jina.ai/?sui=apikey"}

@@ -24,3 +24,6 @@ class AlicodeMetadata(BaseMetadata):
     name: str = "Alibaba"
     color: str = "#FF6A00"
     textIcon: str = "ALi"
+    icon: str = "Cloud"
+    website: str = "https://bailian.console.aliyun.com"
+    notice: dict | None = {"apiKeyUrl": "https://bailian.console.aliyun.com/?apiKey=***"}

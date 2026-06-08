@@ -24,3 +24,6 @@ class FalAiMetadata(BaseMetadata):
     name: str = "Fal.ai"
     color: str = "#2563EB"
     textIcon: str = "FL"
+    icon: str = "Image"
+    website: str = "https://fal.ai"
+    notice: dict | None = {"apiKeyUrl": "https://fal.ai/dashboard/keys"}

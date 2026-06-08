@@ -24,3 +24,6 @@ class XiaomiMimoMetadata(BaseMetadata):
     name: str = "Xiaomi MiMo"
     color: str = "#FF6900"
     textIcon: str = "XM"
+    icon: str = "Bot"
+    website: str = "https://xiaomimimo.com"
+    notice: dict | None = {"apiKeyUrl": "https://xiaomimimo.com"}

@@ -34,3 +34,6 @@ class ElevenlabsMetadata(BaseMetadata):
     name: str = "ElevenLabs"
     color: str = "#000000"
     textIcon: str = "EL"
+    icon: str = "Volume2"
+    website: str = "https://elevenlabs.io"
+    notice: dict | None = {"apiKeyUrl": "https://elevenlabs.io/app/settings/api-keys"}

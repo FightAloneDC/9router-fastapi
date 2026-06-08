@@ -15,3 +15,6 @@ class KilocodeMetadata(BaseMetadata):
     name: str = "Kilo Code"
     color: str = "#FF6B35"
     textIcon: str = "KC"
+    icon: str = "Code"
+    website: str = "https://kilocode.ai"
+    notice: dict | None = {"signupUrl": "https://kilocode.ai"}

@@ -31,6 +31,7 @@ class OpenaiConfig(BaseProviderConfig):
         "dall-e-3": "image",
         "dall-e-2": "image",
     }
+    THINKING_CONFIG: dict | None = {"options": ["auto", "none", "low", "medium", "high"], "defaultMode": "auto"}
 
 
 class OpenaiMetadata(BaseMetadata):
@@ -39,3 +40,6 @@ class OpenaiMetadata(BaseMetadata):
     name: str = "OpenAI"
     color: str = "#10A37F"
     textIcon: str = "OA"
+    icon: str = "Sparkles"
+    website: str = "https://platform.openai.com"
+    notice: dict | None = {"apiKeyUrl": "https://platform.openai.com/api-keys"}

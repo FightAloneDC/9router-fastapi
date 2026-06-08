@@ -28,3 +28,6 @@ class AnthropicMetadata(BaseMetadata):
     name: str = "Anthropic"
     color: str = "#D97757"
     textIcon: str = "AC"
+    icon: str = "Bot"
+    website: str = "https://console.anthropic.com"
+    notice: dict | None = {"apiKeyUrl": "https://console.anthropic.com/settings/keys"}

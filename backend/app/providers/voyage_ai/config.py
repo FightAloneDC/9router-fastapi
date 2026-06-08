@@ -35,3 +35,6 @@ class VoyageAiMetadata(BaseMetadata):
     name: str = "Voyage AI"
     color: str = "#FF6B6B"
     textIcon: str = "VY"
+    icon: str = "Compass"
+    website: str = "https://www.voyageai.com"
+    notice: dict | None = {"apiKeyUrl": "https://dash.voyageai.com/api-keys"}

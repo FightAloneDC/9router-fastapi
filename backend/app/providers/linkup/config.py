@@ -24,3 +24,6 @@ class LinkupMetadata(BaseMetadata):
     name: str = "Linkup"
     color: str = "#3B82F6"
     textIcon: str = "LK"
+    icon: str = "Search"
+    website: str = "https://linkup.so"
+    notice: dict | None = {"apiKeyUrl": "https://linkup.so/dashboard"}

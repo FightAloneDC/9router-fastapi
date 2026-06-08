@@ -25,3 +25,6 @@ class KimiMetadata(BaseMetadata):
     name: str = "Kimi"
     color: str = "#1E3A8A"
     textIcon: str = "KM"
+    icon: str = "Brain"
+    website: str = "https://kimi.moonshot.cn"
+    notice: dict | None = {"apiKeyUrl": "https://platform.moonshot.ai/console/api-keys"}

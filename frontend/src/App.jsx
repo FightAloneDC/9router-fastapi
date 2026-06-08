@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
@@ -22,6 +23,7 @@ import CallbackPage from './pages/CallbackPage'
 import AuthLayout from './components/layouts/AuthLayout'
 import DashboardLayout from './components/layouts/DashboardLayout'
 import { useAuthStore } from './stores/authStore'
+import useCatalogStore from './stores/catalogStore'
 
 function ProtectedRoute({ children }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
@@ -32,6 +34,15 @@ function ProtectedRoute({ children }) {
 }
 
 function App() {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
+  const fetchCatalog = useCatalogStore((s) => s.fetchCatalog)
+  const catalogLoaded = useCatalogStore((s) => s.loaded)
+
+  useEffect(() => {
+    if (isAuthenticated && !catalogLoaded) {
+      fetchCatalog()
+    }
+  }, [isAuthenticated, catalogLoaded, fetchCatalog])
   return (
     <Routes>
       <Route path="/login" element={<AuthLayout><LoginPage /></AuthLayout>} />

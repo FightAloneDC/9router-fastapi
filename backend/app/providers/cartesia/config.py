@@ -27,3 +27,6 @@ class CartesiaMetadata(BaseMetadata):
     name: str = "Cartesia"
     color: str = "#06B6D4"
     textIcon: str = "CA"
+    icon: str = "AudioLines"
+    website: str = "https://cartesia.ai"
+    notice: dict | None = {"apiKeyUrl": "https://play.cartesia.ai/keys"}

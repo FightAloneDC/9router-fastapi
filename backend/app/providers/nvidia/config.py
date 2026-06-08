@@ -32,3 +32,6 @@ class NvidiaMetadata(BaseMetadata):
     name: str = "NVIDIA NIM"
     color: str = "#76B900"
     textIcon: str = "NV"
+    icon: str = "Cpu"
+    website: str = "https://developer.nvidia.com/nim"
+    notice: dict | None = {"text": "Free access for NVIDIA Developer Program members.", "apiKeyUrl": "https://build.nvidia.com/settings/api-keys"}

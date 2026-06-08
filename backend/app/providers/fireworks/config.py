@@ -24,3 +24,6 @@ class FireworksMetadata(BaseMetadata):
     name: str = "Fireworks"
     color: str = "#FF4F00"
     textIcon: str = "FW"
+    icon: str = "Flame"
+    website: str = "https://fireworks.ai"
+    notice: dict | None = {"apiKeyUrl": "https://fireworks.ai/account/api-keys"}

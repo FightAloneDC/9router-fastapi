@@ -24,3 +24,6 @@ class YouComMetadata(BaseMetadata):
     name: str = "You.com"
     color: str = "#8B5CF6"
     textIcon: str = "YC"
+    icon: str = "Search"
+    website: str = "https://api.you.com"
+    notice: dict | None = {"apiKeyUrl": "https://api.you.com/dashboard"}

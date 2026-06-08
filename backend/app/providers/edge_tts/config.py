@@ -18,6 +18,7 @@ class EdgeTtsConfig(BaseProviderConfig):
     SERVICE_KINDS: list[str] = ["tts"]
     AUTH_HEADER: str = ""
     AUTH_PREFIX: str = ""
+    NO_AUTH: bool = True
 
 
 class EdgeTtsMetadata(BaseMetadata):
@@ -26,3 +27,5 @@ class EdgeTtsMetadata(BaseMetadata):
     name: str = "Edge TTS"
     color: str = "#0078D4"
     textIcon: str = "ET"
+    icon: str = "Volume2"
+    website: str = "https://www.microsoft.com/edge"

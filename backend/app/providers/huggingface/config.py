@@ -35,3 +35,6 @@ class HuggingfaceMetadata(BaseMetadata):
     name: str = "Hugging Face"
     color: str = "#FFD21E"
     textIcon: str = "HF"
+    icon: str = "Box"
+    website: str = "https://huggingface.co"
+    notice: dict | None = {"apiKeyUrl": "https://huggingface.co/settings/tokens"}

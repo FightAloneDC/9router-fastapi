@@ -24,3 +24,6 @@ class VertexMetadata(BaseMetadata):
     name: str = "Vertex AI"
     color: str = "#4285F4"
     textIcon: str = "VX"
+    icon: str = "Cloud"
+    website: str = "https://cloud.google.com/vertex-ai"
+    notice: dict | None = {"text": "New Google Cloud accounts get $300 free credits.", "apiKeyUrl": "https://console.cloud.google.com/iam-admin/serviceaccounts"}

@@ -24,3 +24,4 @@ class VolcengineMetadata(BaseMetadata):
     name: str = "Volcengine Ark"
     color: str = "#000000"
     textIcon: str = "VK"
+    icon: str = "Cloud"

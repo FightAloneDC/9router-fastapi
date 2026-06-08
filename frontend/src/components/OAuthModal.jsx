@@ -11,9 +11,7 @@ import {
 import Modal from './ui/Modal'
 import Button from './ui/Button'
 import Input from './ui/Input'
-
-const DEVICE_CODE_PROVIDERS = ['github', 'qwen', 'kiro', 'kimi-coding', 'kilocode', 'codebuddy', 'qoder']
-const PAT_IMPORT_PROVIDERS = ['qoder']
+import useCatalogStore from '../stores/catalogStore'
 
 export default function OAuthModal({
   isOpen,
@@ -172,20 +170,22 @@ export default function OAuthModal({
 
   const startOAuthFlow = useCallback(async (method = null) => {
     const effectiveMethod = method || authMethod
-    console.log('[Qoder OAuth] startOAuthFlow called', { provider, authMethod, method, effectiveMethod })
     if (!provider) return
+    const catalogEntry = useCatalogStore.getState().providers[provider] || {}
+    const flowType = catalogEntry.flowType
+    const supportsPAT = catalogEntry.supportsPAT
+    const requiresProxy = catalogEntry.requiresProxy
     try {
       setError(null)
 
-      // For Qoder, show choice between device flow and PAT import
-      if (PAT_IMPORT_PROVIDERS.includes(provider) && effectiveMethod === null) {
-        console.log('[Qoder OAuth] Showing choice step (effectiveMethod is null)')
+      // Providers that support PAT: show choice first
+      if (supportsPAT && effectiveMethod === null) {
         setStep('choose')
         return
       }
 
-      if (DEVICE_CODE_PROVIDERS.includes(provider)) {
-        console.log('[Qoder OAuth] Starting device code flow')
+      // Device code flow (data-driven)
+      if (flowType === 'device_code') {
         setIsDeviceCode(true)
         setStep('waiting')
 
@@ -193,53 +193,47 @@ export default function OAuthModal({
           `/api/oauth/${provider}/device-code`,
           window.location.origin
         )
-        if (provider === 'kiro' && idcConfig?.startUrl) {
+        // Generic: pass any device code options (e.g. idcConfig for Kiro)
+        if (idcConfig?.startUrl) {
           deviceCodeUrl.searchParams.set('start_url', idcConfig.startUrl)
           if (idcConfig.region) {
             deviceCodeUrl.searchParams.set('region', idcConfig.region)
           }
           deviceCodeUrl.searchParams.set('auth_method', 'idc')
         }
-        console.log('[Qoder OAuth] Fetching device code from:', deviceCodeUrl.toString())
         const res = await fetch(deviceCodeUrl.toString())
         const data = await res.json()
-        console.log('[Qoder OAuth] Device code response:', { status: res.status, data })
         if (!res.ok) throw new Error(data.error)
 
         setDeviceData(data)
 
         const verifyUrl = data.verification_uri_complete || data.verification_uri
-        console.log('[Qoder OAuth] Opening verification URL:', verifyUrl)
         if (verifyUrl) window.open(verifyUrl, '_blank', 'noopener,noreferrer')
 
-        const extraData =
-          provider === 'kiro'
-            ? {
-                _clientId: data._clientId,
-                _clientSecret: data._clientSecret,
-                _region: data._region,
-                _authMethod: data._authMethod,
-                _startUrl: data._startUrl,
-              }
-            : provider === 'qoder'
-            ? {
-                _qoderNonce: data.extra?._qoderNonce || data.device_code,
-                _qoderMachineId: data.extra?._qoderMachineId,
-                _qoderVerifier: data.codeVerifier,
-              }
-            : null
-        console.log('[Qoder OAuth] Starting polling with:', { device_code: data.device_code, extraData })
-        startPolling(data.device_code, data.codeVerifier, data.interval || 5, extraData)
+        // Generic: collect all _ prefixed keys from response + data.extra
+        const extraData = {}
+        for (const [key, val] of Object.entries(data)) {
+          if (key.startsWith('_')) extraData[key] = val
+        }
+        if (data.extra) {
+          for (const [key, val] of Object.entries(data.extra)) {
+            if (key.startsWith('_')) extraData[key] = val
+          }
+        }
+        // Qoder: codeVerifier is used as _qoderVerifier
+        if (data.codeVerifier) {
+          extraData._qoderVerifier = data.codeVerifier
+        }
+
+        startPolling(data.device_code, data.codeVerifier, data.interval || 5, Object.keys(extraData).length ? extraData : null)
         return
       }
 
+      // Authorization code flow (with or without PKCE)
       const appPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80')
-      let redirectUri
-      if (provider === 'codex') {
-        redirectUri = 'http://localhost:1455/auth/callback'
-      } else {
-        redirectUri = `http://localhost:${appPort}/callback`
-      }
+      const redirectUri = requiresProxy
+        ? 'http://localhost:1455/auth/callback'
+        : `http://localhost:${appPort}/callback`
 
       const authorizeUrl = new URL(
         `/api/oauth/${provider}/authorize`,
@@ -255,9 +249,10 @@ export default function OAuthModal({
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
 
+      // Proxy providers (e.g. codex) start a local proxy server
       let codexProxyActive = false
       let codexServerSide = false
-      if (provider === 'codex') {
+      if (requiresProxy) {
         try {
           const proxyUrl = new URL(`/api/oauth/codex/start-proxy`, window.location.origin)
           proxyUrl.searchParams.set('app_port', appPort)
@@ -275,13 +270,13 @@ export default function OAuthModal({
 
       setAuthData({ ...data, redirectUri, codexServerSide })
 
-      if (provider === 'codex' && codexProxyActive) {
+      if (requiresProxy && codexProxyActive) {
         setStep('waiting')
         popupRef.current = window.open(data.authUrl, 'oauth_popup', 'width=600,height=700')
         if (!popupRef.current) {
           setStep('input')
         }
-      } else if (!isLocalhost || provider === 'codex') {
+      } else if (!isLocalhost || requiresProxy) {
         setStep('input')
         window.open(data.authUrl, '_blank')
       } else {
@@ -313,7 +308,8 @@ export default function OAuthModal({
       startOAuthFlow()
     } else if (!isOpen) {
       pollingAbortRef.current = true
-      if (provider === 'codex') {
+      const entry = useCatalogStore.getState().providers[provider]
+      if (entry?.requiresProxy) {
         fetch('/api/oauth/codex/stop-proxy').catch(() => {})
       }
     }
@@ -465,7 +461,8 @@ export default function OAuthModal({
   }
 
   const handleClose = useCallback(() => {
-    if (provider === 'codex') {
+    const entry = useCatalogStore.getState().providers[provider]
+    if (entry?.requiresProxy) {
       fetch('/api/oauth/codex/stop-proxy').catch(() => {})
     }
     onClose()

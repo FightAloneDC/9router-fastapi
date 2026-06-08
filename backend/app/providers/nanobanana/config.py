@@ -24,3 +24,6 @@ class NanobananaMetadata(BaseMetadata):
     name: str = "Nanobanana"
     color: str = "#F59E0B"
     textIcon: str = "NB"
+    icon: str = "Image"
+    website: str = "https://nanobanana.com"
+    notice: dict | None = {"apiKeyUrl": "https://nanobanana.com"}

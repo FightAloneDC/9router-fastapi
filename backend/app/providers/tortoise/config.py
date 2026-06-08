@@ -25,6 +25,7 @@ class TortoiseConfig(BaseProviderConfig):
         "facebook/mms-tts-eng": "tts",
         "microsoft/speecht5_tts": "tts",
     }
+    NO_AUTH: bool = True
 
 
 class TortoiseMetadata(BaseMetadata):
@@ -33,3 +34,5 @@ class TortoiseMetadata(BaseMetadata):
     name: str = "Tortoise TTS"
     color: str = "#6B7280"
     textIcon: str = "TT"
+    icon: str = "AudioLines"
+    website: str = "https://github.com/neonbjb/tortoise-tts"

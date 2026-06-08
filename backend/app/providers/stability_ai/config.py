@@ -24,3 +24,6 @@ class StabilityAiMetadata(BaseMetadata):
     name: str = "Stability AI"
     color: str = "#8B5CF6"
     textIcon: str = "SA"
+    icon: str = "Image"
+    website: str = "https://stability.ai"
+    notice: dict | None = {"apiKeyUrl": "https://platform.stability.ai/account/keys"}

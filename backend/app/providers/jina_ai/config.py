@@ -31,3 +31,6 @@ class JinaAiMetadata(BaseMetadata):
     name: str = "Jina AI"
     color: str = "#2563EB"
     textIcon: str = "JA"
+    icon: str = "Layers"
+    website: str = "https://jina.ai"
+    notice: dict | None = {"text": "10M free tokens on signup.", "apiKeyUrl": "https://jina.ai/?sui=apikey"}

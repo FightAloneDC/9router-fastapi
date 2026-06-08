@@ -26,3 +26,5 @@ class OllamaLocalMetadata(BaseMetadata):
     name: str = "Ollama Local"
     color: str = "#FFFFFF"
     textIcon: str = "OL"
+    icon: str = "Cloud"
+    website: str = "https://ollama.com"

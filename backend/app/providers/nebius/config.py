@@ -24,3 +24,6 @@ class NebiusMetadata(BaseMetadata):
     name: str = "Nebius AI"
     color: str = "#00A3FF"
     textIcon: str = "NB"
+    icon: str = "Cloud"
+    website: str = "https://nebius.ai"
+    notice: dict | None = {"apiKeyUrl": "https://studio.nebius.ai/settings/api-keys"}

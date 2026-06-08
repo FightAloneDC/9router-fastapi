@@ -24,3 +24,6 @@ class OllamaMetadata(BaseMetadata):
     name: str = "Ollama Cloud"
     color: str = "#FFFFFF"
     textIcon: str = "OL"
+    icon: str = "Cloud"
+    website: str = "https://ollama.com"
+    notice: dict | None = {"text": "Free tier: light usage, 1 cloud model at a time.", "apiKeyUrl": "https://ollama.com/settings/keys"}

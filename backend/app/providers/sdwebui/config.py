@@ -24,3 +24,6 @@ class SdwebuiMetadata(BaseMetadata):
     name: str = "Stable Diffusion WebUI"
     color: str = "#A855F7"
     textIcon: str = "SD"
+    icon: str = "Image"
+    website: str = "https://github.com/AUTOMATIC1111/stable-diffusion-webui"
+    notice: dict | None = {"text": "Local Stable Diffusion WebUI."}

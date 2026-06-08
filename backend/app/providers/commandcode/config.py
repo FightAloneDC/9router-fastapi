@@ -24,3 +24,6 @@ class CommandcodeMetadata(BaseMetadata):
     name: str = "Command Code"
     color: str = "#000000"
     textIcon: str = "CC"
+    icon: str = "Bot"
+    website: str = "https://commandcode.ai"
+    notice: dict | None = {"apiKeyUrl": "https://commandcode.ai/studio"}

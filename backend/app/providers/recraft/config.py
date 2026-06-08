@@ -24,3 +24,6 @@ class RecraftMetadata(BaseMetadata):
     name: str = "Recraft"
     color: str = "#EC4899"
     textIcon: str = "RC"
+    icon: str = "Image"
+    website: str = "https://recraft.ai"
+    notice: dict | None = {"apiKeyUrl": "https://www.recraft.ai/profile/api"}

@@ -20,3 +20,6 @@ class CohereMetadata(BaseMetadata):
     name: str = "Cohere"
     color: str = "#39594D"
     textIcon: str = "CO"
+    icon: str = "Sparkles"
+    website: str = "https://dashboard.cohere.com"
+    notice: dict | None = {"apiKeyUrl": "https://dashboard.cohere.com/api-keys"}

@@ -24,3 +24,6 @@ class BraveSearchMetadata(BaseMetadata):
     name: str = "Brave Search"
     color: str = "#FB542B"
     textIcon: str = "BR"
+    icon: str = "Globe"
+    website: str = "https://brave.com/search/api"
+    notice: dict | None = {"apiKeyUrl": "https://api-dashboard.search.brave.com/app/keys"}

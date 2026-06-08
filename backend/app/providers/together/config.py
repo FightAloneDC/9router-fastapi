@@ -31,3 +31,6 @@ class TogetherMetadata(BaseMetadata):
     name: str = "Together"
     color: str = "#6C3AED"
     textIcon: str = "TG"
+    icon: str = "Layers"
+    website: str = "https://api.together.xyz"
+    notice: dict | None = {"apiKeyUrl": "https://api.together.xyz/settings/api-keys"}

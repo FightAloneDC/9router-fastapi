@@ -24,3 +24,6 @@ class XaiMetadata(BaseMetadata):
     name: str = "xAI"
     color: str = "#1DA1F2"
     textIcon: str = "XA"
+    icon: str = "Sparkles"
+    website: str = "https://console.x.ai"
+    notice: dict | None = {"apiKeyUrl": "https://console.x.ai/"}

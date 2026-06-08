@@ -24,3 +24,6 @@ class ByteplusMetadata(BaseMetadata):
     name: str = "BytePlus ModelArk"
     color: str = "#2563EB"
     textIcon: str = "BP"
+    icon: str = "Cloud"
+    website: str = "https://console.byteplus.com/ark"
+    notice: dict | None = {"text": "Free credits for new accounts.", "apiKeyUrl": "https://console.byteplus.com/ark/region:ark+ap-southeast-1/apiKey"}

@@ -24,3 +24,6 @@ class GlmCnMetadata(BaseMetadata):
     name: str = "GLM (China)"
     color: str = "#DC2626"
     textIcon: str = "GC"
+    icon: str = "Code"
+    website: str = "https://open.bigmodel.cn"
+    notice: dict | None = {"apiKeyUrl": "https://open.bigmodel.cn/usercenter/apikeys"}

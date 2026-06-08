@@ -24,3 +24,6 @@ class TopazMetadata(BaseMetadata):
     name: str = "Topaz"
     color: str = "#059669"
     textIcon: str = "TP"
+    icon: str = "Image"
+    website: str = "https://topazlabs.com"
+    notice: dict | None = {"apiKeyUrl": "https://topazlabs.com/account"}

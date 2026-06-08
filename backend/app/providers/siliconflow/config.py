@@ -24,3 +24,6 @@ class SiliconflowMetadata(BaseMetadata):
     name: str = "SiliconFlow"
     color: str = "#000000"
     textIcon: str = "SF"
+    icon: str = "Cpu"
+    website: str = "https://cloud.siliconflow.com"
+    notice: dict | None = {"apiKeyUrl": "https://cloud.siliconflow.com/account/ak"}
