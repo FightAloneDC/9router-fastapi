@@ -5,9 +5,15 @@ from __future__ import annotations
 from typing import Optional
 
 import httpx
+from pydantic import BaseModel
 
 from app.providers import PROVIDER_GITLAB
 from app.providers.oauth_base import AuthCodePKCEHandler
+
+
+class GitLabPATRequest(BaseModel):
+    accessToken: str
+    baseUrl: Optional[str] = "https://gitlab.com"
 
 
 class GitlabOAuthHandler(AuthCodePKCEHandler):

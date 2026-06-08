@@ -5,9 +5,14 @@ from __future__ import annotations
 from typing import Optional
 
 import httpx
+from pydantic import BaseModel
 
 from app.providers import PROVIDER_QODER
 from app.providers.oauth_base import DeviceCodeHandler
+
+
+class QoderPATRequest(BaseModel):
+    personalToken: str
 
 
 class QoderOAuthHandler(DeviceCodeHandler):

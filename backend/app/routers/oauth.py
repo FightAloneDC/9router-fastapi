@@ -1,18 +1,13 @@
 """OAuth provider authentication endpoints.
 
 Handles authorization code flows (with/without PKCE), device code flows,
-and special flows (cursor import, cline callback, codex proxy).
+and special flows (cursor import, codex proxy).
 """
 
-import asyncio
 import json
 import logging
-import subprocess
-import threading
 from datetime import datetime, timezone
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional
-from urllib.parse import urlparse, parse_qs
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -20,13 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.provider import ProviderConnection
-from app.providers import (
-    PROVIDER_CODEX,
-    PROVIDER_CURSOR,
-    PROVIDER_GITLAB,
-    PROVIDER_KIRO,
-    PROVIDER_QODER,
-)
+from app.providers.codex.proxy import CodexProxy
+from app.providers.cursor.oauth import CursorImportRequest
+from app.providers.gitlab.oauth import GitLabPATRequest
+from app.providers.kiro.oauth import KiroImportRequest, KiroSocialExchangeRequest
+from app.providers.qoder.oauth import QoderPATRequest
 from app.services.oauth import (
     generate_auth_data,
     exchange_tokens,
@@ -39,155 +32,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/oauth", tags=["oauth"])
 
-# ── Codex Proxy State ───────────────────────────────────────────────────────
-# Codex OAuth uses a local proxy server on port 1455 that auto-exchanges
-# tokens server-side when the callback arrives.
+# ── Codex Proxy (lazy-init, receives save_connection callback) ────────────────
 
-CODEX_PORT = 1455
-CODEX_PROXY_TIMEOUT_S = 300  # 5 minutes
-
-_codex_sessions: dict = {}  # keyed by state string
-_codex_proxy_server: Optional[HTTPServer] = None
-_codex_proxy_thread: Optional[threading.Thread] = None
-_codex_proxy_timer: Optional[threading.Timer] = None
+_codex_proxy: Optional[CodexProxy] = None
 
 
-def _render_codex_result_page(success: bool, message: str) -> str:
-    color = "#22c55e" if success else "#ef4444"
-    icon = "&#10003;" if success else "&#10007;"
-    title = "Authentication Successful" if success else "Authentication Failed"
-    return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>{title}</title>
-<style>body{{font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f5f5f5}}.c{{text-align:center;padding:2rem;background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.1)}}.i{{color:{color};font-size:3rem}}h1{{margin:1rem 0}}p{{color:#666}}</style>
-</head><body><div class="c"><div class="i">{icon}</div><h1>{title}</h1><p>{message}</p><p>Closing in <span id="cd">3</span>s...</p>
-<script>let n=3;const c=document.getElementById("cd");const t=setInterval(()=>{{n--;c.textContent=n;if(n<=0){{clearInterval(t);window.close();}}}},1000);</script>
-</div></body></html>"""
-
-
-class _CodexCallbackHandler(BaseHTTPRequestHandler):
-    """HTTP handler for the Codex OAuth callback proxy on port 1455."""
-
-    def log_message(self, format, *args):
-        logger.info(f"Codex proxy: {format % args}")
-
-    def do_GET(self):
-        parsed = urlparse(self.path)
-        path = parsed.path
-        params = parse_qs(parsed.query)
-
-        if path not in ("/callback", "/auth/callback"):
-            self.send_response(404)
-            self.end_headers()
-            self.wfile.write(b"Not found")
-            return
-
-        code = params.get("code", [None])[0]
-        state = params.get("state", [None])[0]
-        error_param = params.get("error", [None])[0]
-        session = _codex_sessions.get(state) if state else None
-
-        if session:
-            try:
-                if error_param:
-                    raise Exception(params.get("error_description", [error_param])[0])
-                if not code:
-                    raise Exception("No authorization code received")
-
-                # Exchange tokens synchronously (we're in a thread)
-                loop = asyncio.new_event_loop()
-                try:
-                    token_data = loop.run_until_complete(
-                        exchange_tokens(
-                            PROVIDER_CODEX, code, session["redirectUri"],
-                            session["codeVerifier"], state or ""
-                        )
-                    )
-                finally:
-                    loop.close()
-
-                # Save connection synchronously
-                loop = asyncio.new_event_loop()
-                try:
-                    conn = loop.run_until_complete(
-                        _save_connection_sync(PROVIDER_CODEX, token_data)
-                    )
-                finally:
-                    loop.close()
-
-                session["status"] = "done"
-                session["connectionId"] = str(conn.id)
-                session["email"] = conn.email
-
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(
-                    _render_codex_result_page(True, "You can close this window.").encode()
-                )
-            except Exception as err:
-                session["status"] = "error"
-                session["error"] = str(err)
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(_render_codex_result_page(False, str(err)).encode())
-            finally:
-                _stop_codex_proxy()
-            return
-
-        # No matching session — redirect to app port fallback
-        app_port = "5173"
-        for s in _codex_sessions.values():
-            app_port = s.get("appPort", "5173")
-            break
-        redirect_url = f"http://localhost:{app_port}/callback?{parsed.query}"
-        self.send_response(302)
-        self.send_header("Location", redirect_url)
-        self.end_headers()
-
-
-async def _save_connection_sync(provider: str, token_data: dict):
-    """Save connection from the proxy thread using a new async session."""
-    from app.database import async_session
-    async with async_session() as db:
-        conn = await _save_connection(db, provider, token_data)
-        await db.commit()
-        return conn
-
-
-def _start_codex_proxy_thread():
-    """Start the codex proxy HTTP server in a background thread."""
-    global _codex_proxy_server, _codex_proxy_thread
-
-    if _codex_proxy_server is not None:
-        return True
-
-    try:
-        _codex_proxy_server = HTTPServer(("0.0.0.0", CODEX_PORT), _CodexCallbackHandler)
-        _codex_proxy_thread = threading.Thread(
-            target=_codex_proxy_server.serve_forever, daemon=True
+def _get_codex_proxy() -> CodexProxy:
+    global _codex_proxy
+    if _codex_proxy is None:
+        _codex_proxy = CodexProxy(
+            exchange_fn=exchange_tokens,
+            save_connection_fn=_save_connection,
         )
-        _codex_proxy_thread.start()
-        logger.info(f"Codex proxy started on port {CODEX_PORT}")
-        return True
-    except OSError as e:
-        logger.error(f"Failed to start codex proxy on port {CODEX_PORT}: {e}")
-        return False
-
-
-def _stop_codex_proxy():
-    """Stop the codex proxy server and cleanup."""
-    global _codex_proxy_server, _codex_proxy_thread, _codex_proxy_timer
-
-    if _codex_proxy_timer:
-        _codex_proxy_timer.cancel()
-        _codex_proxy_timer = None
-
-    if _codex_proxy_server:
-        _codex_proxy_server.shutdown()
-        _codex_proxy_server = None
-        _codex_proxy_thread = None
-        logger.info("Codex proxy stopped")
+    return _codex_proxy
 
 
 # ── Request/Response Models ──────────────────────────────────────────────────
@@ -252,30 +109,6 @@ class OAuthPollResponse(BaseModel):
     error: Optional[str] = None
     errorDescription: Optional[str] = None
     pending: bool = False
-
-
-class GitLabPATRequest(BaseModel):
-    accessToken: str
-    baseUrl: Optional[str] = "https://gitlab.com"
-
-
-class KiroImportRequest(BaseModel):
-    refreshToken: str
-
-
-class KiroSocialExchangeRequest(BaseModel):
-    code: str
-    codeVerifier: str
-    provider: str  # "google" or "github"
-
-
-class CursorImportRequest(BaseModel):
-    accessToken: str
-    machineId: str
-
-
-class QoderPATRequest(BaseModel):
-    personalToken: str
 
 
 # ── Helper ───────────────────────────────────────────────────────────────────
@@ -497,14 +330,11 @@ async def import_token(
     body: TokenImportRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Import a token directly (used for cursor)."""
+    """Import a token directly (handler dispatches via flow_type)."""
     try:
-        if provider != PROVIDER_CURSOR:
-            raise HTTPException(status_code=400, detail="Import token only supported for cursor")
-
-        token_data = map_tokens(PROVIDER_CURSOR,
-            {"accessToken": body.accessToken, "machineId": body.machineId},
-        )
+        handler = get_oauth_handler(provider)
+        raw_data = await handler.import_token(body.accessToken, machineId=body.machineId)
+        token_data = handler.map_tokens(raw_data)
         conn = await _save_connection(db, provider, token_data)
         return OAuthExchangeResponse(
             success=True,
@@ -515,6 +345,8 @@ async def import_token(
                 displayName=conn.name,
             ),
         )
+    except NotImplementedError:
+        raise HTTPException(status_code=400, detail=f"Provider {provider} does not support import token")
     except Exception as e:
         logger.exception(f"OAuth import-token error for {provider}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -527,23 +359,7 @@ async def import_token(
 async def cursor_auto_import():
     """Auto-detect Cursor tokens from local SQLite database."""
     try:
-        import platform as _platform
-        if _platform.system().lower() == "linux":
-            cursor_installed = False
-            try:
-                result = subprocess.run(["which", "cursor"], capture_output=True, timeout=5)
-                if result.returncode == 0:
-                    cursor_installed = True
-            except Exception:
-                pass
-            if not cursor_installed:
-                desktop_file = os.path.expanduser("~/.local/share/applications/cursor.desktop")
-                if os.path.exists(desktop_file):
-                    cursor_installed = True
-            if not cursor_installed:
-                return {"found": False, "error": "Cursor config files found but Cursor IDE does not appear to be installed. Skipping auto-import."}
-        result = await get_oauth_handler(PROVIDER_CURSOR).auto_import()
-        return result
+        return await get_oauth_handler("cursor").auto_import()
     except Exception as e:
         logger.exception("Cursor auto-import error")
         return {"found": False, "error": str(e)}
@@ -557,8 +373,8 @@ async def cursor_import(body: CursorImportRequest, db: AsyncSession = Depends(ge
             raise HTTPException(status_code=400, detail="Access token is required")
         if not body.machineId or not isinstance(body.machineId, str):
             raise HTTPException(status_code=400, detail="Machine ID is required")
-        token_data = await get_oauth_handler(PROVIDER_CURSOR).validate_import_token(body.accessToken.strip(), body.machineId.strip())
-        conn = await _save_connection(db, PROVIDER_CURSOR, token_data)
+        token_data = await get_oauth_handler("cursor").validate_import_token(body.accessToken.strip(), body.machineId.strip())
+        conn = await _save_connection(db, "cursor", token_data)
         return OAuthExchangeResponse(success=True, connection=ConnectionResponse(id=str(conn.id), provider=conn.provider, email=conn.email, displayName=conn.name))
     except HTTPException:
         raise
@@ -574,7 +390,7 @@ async def cursor_import(body: CursorImportRequest, db: AsyncSession = Depends(ge
 async def kiro_auto_import():
     """Auto-detect Kiro refresh token from AWS SSO cache."""
     try:
-        return await get_oauth_handler(PROVIDER_KIRO).auto_import()
+        return await get_oauth_handler("kiro").auto_import()
     except Exception as e:
         logger.exception("Kiro auto-import error")
         return {"found": False, "error": str(e)}
@@ -586,10 +402,10 @@ async def kiro_import(body: KiroImportRequest, db: AsyncSession = Depends(get_db
     try:
         if not body.refreshToken or not isinstance(body.refreshToken, str):
             raise HTTPException(status_code=400, detail="Refresh token is required")
-        handler = get_oauth_handler(PROVIDER_KIRO)
+        handler = get_oauth_handler("kiro")
         token_data = await handler.validate_import_token(body.refreshToken.strip())
         save_data = handler.build_import_data(token_data, body.refreshToken.strip())
-        conn = await _save_connection(db, PROVIDER_KIRO, save_data)
+        conn = await _save_connection(db, "kiro", save_data)
         return OAuthExchangeResponse(success=True, connection=ConnectionResponse(id=str(conn.id), provider=conn.provider, email=conn.email, displayName=conn.name))
     except HTTPException:
         raise
@@ -606,7 +422,7 @@ async def kiro_social_authorize(provider: str = ""):
             raise HTTPException(status_code=400, detail="Invalid provider. Use 'google' or 'github'")
         from app.utils.pkce import generate_pkce
         pkce = generate_pkce()
-        handler = get_oauth_handler(PROVIDER_KIRO)
+        handler = get_oauth_handler("kiro")
         auth_url = handler.build_social_login_url(provider, pkce["codeChallenge"], pkce["state"])
         return {"authUrl": auth_url, "state": pkce["state"], "codeVerifier": pkce["codeVerifier"], "codeChallenge": pkce["codeChallenge"], "provider": provider}
     except HTTPException:
@@ -624,10 +440,10 @@ async def kiro_social_exchange(body: KiroSocialExchangeRequest, db: AsyncSession
             raise HTTPException(status_code=400, detail="Missing required fields")
         if body.provider not in ("google", "github"):
             raise HTTPException(status_code=400, detail="Invalid provider")
-        handler = get_oauth_handler(PROVIDER_KIRO)
+        handler = get_oauth_handler("kiro")
         token_data = await handler.exchange_social_code(body.code, body.codeVerifier)
         save_data = handler.build_social_save_data(token_data, body.provider)
-        conn = await _save_connection(db, PROVIDER_KIRO, save_data)
+        conn = await _save_connection(db, "kiro", save_data)
         return OAuthExchangeResponse(success=True, connection=ConnectionResponse(id=str(conn.id), provider=conn.provider, email=conn.email, displayName=conn.name))
     except HTTPException:
         raise
@@ -647,57 +463,31 @@ async def codex_start_proxy(
     redirect_uri: str = "",
 ):
     """Start the Codex OAuth proxy server on port 1455 and register session."""
-    global _codex_proxy_timer
-
-    if not state or not code_verifier or not redirect_uri:
-        raise HTTPException(status_code=400, detail="Missing state, code_verifier, or redirect_uri")
-
-    # Start proxy server if not running
-    proxy_started = _start_codex_proxy_thread()
-    if not proxy_started:
-        return {"success": False, "reason": "port_busy"}
-
-    # Register session for server-side auto-exchange
-    _codex_sessions[state] = {
-        "codeVerifier": code_verifier,
-        "redirectUri": redirect_uri,
-        "appPort": str(app_port),
-        "status": "pending",
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-    }
-
-    # Auto-stop proxy after timeout
-    if _codex_proxy_timer:
-        _codex_proxy_timer.cancel()
-    _codex_proxy_timer = threading.Timer(CODEX_PROXY_TIMEOUT_S, _stop_codex_proxy)
-    _codex_proxy_timer.daemon = True
-    _codex_proxy_timer.start()
-
-    return {"success": True, "serverSide": True}
+    try:
+        return _get_codex_proxy().start(app_port, state, code_verifier, redirect_uri)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Codex start-proxy error")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/codex/poll-status")
 async def codex_poll_status(state: str = ""):
     """Poll for Codex OAuth session status (used by frontend to detect completion)."""
-    if not state:
-        raise HTTPException(status_code=400, detail="Missing state")
-
-    session = _codex_sessions.get(state)
-    if not session:
-        return {"status": "unknown"}
-
-    if session["status"] in ("done", "error"):
-        payload = {**session}
-        del _codex_sessions[state]
-        return payload
-
-    return {"status": session["status"]}
+    try:
+        return _get_codex_proxy().poll_status(state)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Codex poll-status error")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/codex/stop-proxy")
 async def codex_stop_proxy():
     """Stop the Codex OAuth proxy server."""
-    _stop_codex_proxy()
+    _get_codex_proxy().stop()
     return {"success": True}
 
 
@@ -711,9 +501,9 @@ async def gitlab_pat(
 ):
     """Authenticate with GitLab using a Personal Access Token."""
     try:
-        handler = get_oauth_handler(PROVIDER_GITLAB)
+        handler = get_oauth_handler("gitlab")
         token_data = await handler.validate_pat(body.accessToken, body.baseUrl or "")
-        conn = await _save_connection(db, PROVIDER_GITLAB, token_data)
+        conn = await _save_connection(db, "gitlab", token_data)
         return OAuthExchangeResponse(
             success=True,
             connection=ConnectionResponse(
@@ -763,7 +553,7 @@ async def qoder_pat_import(
             },
         }
 
-        conn = await _save_connection(db, PROVIDER_QODER, token_data, auth_type="apikey")
+        conn = await _save_connection(db, "qoder", token_data, auth_type="apikey")
         return OAuthExchangeResponse(
             success=True,
             connection=ConnectionResponse(

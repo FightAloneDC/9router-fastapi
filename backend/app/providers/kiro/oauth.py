@@ -7,9 +7,20 @@ import os
 from typing import Optional
 
 import httpx
+from pydantic import BaseModel
 
 from app.providers import PROVIDER_KIRO
 from app.providers.oauth_base import DeviceCodeHandler, extract_email_from_token, decode_jwt_payload
+
+
+class KiroImportRequest(BaseModel):
+    refreshToken: str
+
+
+class KiroSocialExchangeRequest(BaseModel):
+    code: str
+    codeVerifier: str
+    provider: str  # "google" or "github"
 
 
 class KiroOAuthHandler(DeviceCodeHandler):

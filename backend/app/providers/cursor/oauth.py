@@ -6,10 +6,18 @@ import os
 import platform
 import re
 import sqlite3
+import subprocess
 from typing import Optional
+
+from pydantic import BaseModel
 
 from app.providers import PROVIDER_CURSOR
 from app.providers.oauth_base import ImportTokenHandler
+
+
+class CursorImportRequest(BaseModel):
+    accessToken: str
+    machineId: str
 
 
 class CursorOAuthHandler(ImportTokenHandler):
@@ -38,6 +46,14 @@ class CursorOAuthHandler(ImportTokenHandler):
 
     async def auto_import(self) -> dict:
         """Auto-detect and import token from Cursor IDE's local SQLite database."""
+        # Platform check on Linux
+        if platform.system().lower() == "linux":
+            if not self._is_cursor_installed():
+                return {
+                    "found": False,
+                    "error": "Cursor config files found but Cursor IDE does not appear to be installed. Skipping auto-import.",
+                }
+
         system = platform.system().lower()
         db_path = os.path.expanduser("~/.config/Cursor/User/globalStorage/state.vscdb")
         if system == "darwin":
@@ -76,6 +92,16 @@ class CursorOAuthHandler(ImportTokenHandler):
             return {"found": True, "accessToken": access_token, "machineId": machine_id}
         except sqlite3.Error as e:
             raise Exception(f"Failed to read Cursor database: {e}")
+
+    def _is_cursor_installed(self) -> bool:
+        """Check if Cursor IDE is installed on this system."""
+        try:
+            result = subprocess.run(["which", "cursor"], capture_output=True, timeout=5)
+            if result.returncode == 0:
+                return True
+        except Exception:
+            pass
+        return os.path.exists(os.path.expanduser("~/.local/share/applications/cursor.desktop"))
 
     async def validate_import_token(self, access_token: str, machine_id: str) -> dict:
         """Validate and import a token from Cursor IDE."""
