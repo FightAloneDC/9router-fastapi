@@ -19,6 +19,7 @@ from app.providers.codex.proxy import CodexProxy
 from app.providers.cursor.oauth import CursorImportRequest
 from app.providers.gitlab.oauth import GitLabPATRequest
 from app.providers.kiro.oauth import KiroImportRequest, KiroSocialExchangeRequest
+from app.providers.qoder.auth import import_pat
 from app.providers.qoder.oauth import QoderPATRequest
 from app.services.oauth import (
     generate_auth_data,
@@ -149,6 +150,14 @@ async def _save_connection(
     email = token_data.get("email")
     display_name = token_data.get("displayName")
     data["testStatus"] = "active"
+
+    # Auto-derive alias from provider config so models get correct prefix
+    try:
+        from app.providers.provider import Provider
+        p = Provider(provider)
+        data["alias"] = p.alias()
+    except (ValueError, ModuleNotFoundError):
+        pass
 
     conn = ProviderConnection(
         provider=provider,
@@ -534,7 +543,7 @@ async def qoder_pat_import(
     /api/v1/jobToken/exchange, then used for COSY-signed requests.
     """
     try:
-        from app.providers.qoder.auth import import_pat
+        # from app.providers.qoder.auth import import_pat
 
         # Import PAT: exchange for regular token + fetch user info
         result = await import_pat(body.personalToken)

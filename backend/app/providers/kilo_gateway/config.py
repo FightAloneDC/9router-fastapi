@@ -13,7 +13,7 @@ class KiloGatewayConfig(BaseProviderConfig):
     # ── Identity ────────────────────────────────────────────────────────
     PROVIDER_NAME: str = "Kilo Gateway"
     PROVIDER_ID: str = "kilo-gateway"
-    ALIAS: str = "kg"
+    ALIAS: str = "kilo"
     BASE_URL: str = "https://api.kilo.ai/api/gateway"
     SERVICE_KINDS: list[str] = ["llm"]
 
