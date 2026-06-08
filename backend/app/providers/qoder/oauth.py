@@ -6,13 +6,14 @@ from typing import Optional
 
 import httpx
 
+from app.providers import PROVIDER_QODER
 from app.providers.oauth_base import DeviceCodeHandler
 
 
 class QoderOAuthHandler(DeviceCodeHandler):
     """OAuth handler for Qoder (custom device token flow)."""
 
-    PROVIDER_ID = "qoder"
+    PROVIDER_ID = PROVIDER_QODER
     CONFIG = {
         "openApiBaseUrl": "https://openapi.qoder.sh",
         "centerBaseUrl": "https://center.qoder.sh",

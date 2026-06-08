@@ -9,6 +9,7 @@ from typing import Optional
 
 import httpx
 
+from app.providers import PROVIDER_CLINE
 from app.providers.oauth_base import AuthCodeHandler
 
 
@@ -19,7 +20,7 @@ class ClineOAuthHandler(AuthCodeHandler):
     Falls back to token exchange endpoint if base64 decode fails.
     """
 
-    PROVIDER_ID = "cline"
+    PROVIDER_ID = PROVIDER_CLINE
     CONFIG = {
         "appBaseUrl": "https://app.cline.bot",
         "apiBaseUrl": "https://api.cline.bot",

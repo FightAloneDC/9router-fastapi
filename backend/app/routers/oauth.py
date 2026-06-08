@@ -7,28 +7,31 @@ and special flows (cursor import, cline callback, codex proxy).
 import asyncio
 import json
 import logging
-import os
 import subprocess
 import threading
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional
-from urllib.parse import urlparse, parse_qs, urlencode
+from urllib.parse import urlparse, parse_qs
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.provider import ProviderConnection
+from app.providers import (
+    PROVIDER_CODEX,
+    PROVIDER_CURSOR,
+    PROVIDER_GITLAB,
+    PROVIDER_KIRO,
+    PROVIDER_QODER,
+)
 from app.services.oauth import (
     generate_auth_data,
     exchange_tokens,
     request_device_code,
     poll_for_token,
-    map_tokens,
     get_oauth_handler,
 )
 
@@ -95,7 +98,7 @@ class _CodexCallbackHandler(BaseHTTPRequestHandler):
                 try:
                     token_data = loop.run_until_complete(
                         exchange_tokens(
-                            "codex", code, session["redirectUri"],
+                            PROVIDER_CODEX, code, session["redirectUri"],
                             session["codeVerifier"], state or ""
                         )
                     )
@@ -106,7 +109,7 @@ class _CodexCallbackHandler(BaseHTTPRequestHandler):
                 loop = asyncio.new_event_loop()
                 try:
                     conn = loop.run_until_complete(
-                        _save_connection_sync("codex", token_data)
+                        _save_connection_sync(PROVIDER_CODEX, token_data)
                     )
                 finally:
                     loop.close()
@@ -350,21 +353,17 @@ async def exchange(
 ):
     """Exchange authorization code for tokens and save to database."""
     try:
-        # Cline doesn't use PKCE
-        no_pkce_providers = ["cline"]
         if not body.code:
             raise HTTPException(status_code=400, detail="Missing code")
-        if not body.redirectUri:
-            raise HTTPException(status_code=400, detail="Missing redirectUri")
-        if not body.codeVerifier and provider not in no_pkce_providers:
-            raise HTTPException(status_code=400, detail="Missing codeVerifier")
 
-        # Special handling for cursor (import_token flow)
-        if provider == "cursor":
-            token_data = map_tokens("cursor",
-                {"accessToken": body.code, "machineId": body.meta.get("machineId", "") if body.meta else ""},
-                None,
+        handler = get_oauth_handler(provider)
+
+        # import_token flow: handler manages its own token import
+        if handler.flow_type == "import_token":
+            raw_data = await handler.import_token(
+                body.code, **(body.meta or {})
             )
+            token_data = handler.map_tokens(raw_data)
             conn = await _save_connection(db, provider, token_data)
             return OAuthExchangeResponse(
                 success=True,
@@ -375,6 +374,12 @@ async def exchange(
                     displayName=conn.name,
                 ),
             )
+
+        # authorization_code flows
+        if not body.redirectUri:
+            raise HTTPException(status_code=400, detail="Missing redirectUri")
+        if handler.needs_pkce() and not body.codeVerifier:
+            raise HTTPException(status_code=400, detail="Missing codeVerifier")
 
         token_data = await exchange_tokens(
             provider, body.code, body.redirectUri, body.codeVerifier, body.state, body.meta
@@ -406,33 +411,24 @@ async def device_code(
 ):
     """Request a device code for device_code flow providers."""
     try:
-        prov = get_oauth_handler(provider)
-        if prov.flow_type not in ("device_code", "polling"):
+        handler = get_oauth_handler(provider)
+        if handler.flow_type not in ("device_code", "polling"):
             raise HTTPException(status_code=400, detail="Provider does not support device code flow")
 
-        # Generate PKCE data (needed for qwen)
-        from app.utils.pkce import generate_pkce
-        pkce = generate_pkce()
-
-        # Providers that don't use PKCE for device code
-        no_pkce = ["github", "kiro", "kimi-coding", "kilocode"]
-        code_challenge = pkce["codeChallenge"] if provider not in no_pkce else ""
-
         options = {}
-        if provider == "kiro":
-            if start_url:
-                options["startUrl"] = start_url
-            if region:
-                options["region"] = region
-            if auth_method:
-                options["authMethod"] = auth_method
+        if start_url:
+            options["startUrl"] = start_url
+        if region:
+            options["region"] = region
+        if auth_method:
+            options["authMethod"] = auth_method
 
-        device_data = await request_device_code(provider, code_challenge, options or None)
+        device_data = await request_device_code(provider, options=options or None)
 
-        # Prepare extra data for polling (e.g. kiro stores client credentials)
+        # Extract internal handler data (prefixed with _) into extra
         extra = {}
-        for key in ("_clientId", "_clientSecret", "_region", "_authMethod", "_startUrl", "_qoderNonce", "_qoderMachineId"):
-            if key in device_data:
+        for key in list(device_data):
+            if key.startswith("_"):
                 extra[key] = device_data.pop(key)
 
         return DeviceCodeResponse(
@@ -442,7 +438,7 @@ async def device_code(
             verification_uri_complete=device_data.get("verification_uri_complete"),
             expires_in=device_data.get("expires_in"),
             interval=device_data.get("interval", 5),
-            codeVerifier=device_data.get("codeVerifier") or pkce["codeVerifier"],
+            codeVerifier=device_data.get("codeVerifier") or "",
             extra=extra if extra else None,
         )
     except ValueError as e:
@@ -460,13 +456,11 @@ async def poll(
 ):
     """Poll for device code token. Creates connection on success."""
     try:
-        # Providers that don't use PKCE
-        no_pkce = ["github", "kimi-coding", "kilocode"]
-
+        # Handler decides whether to use code_verifier (PKCE) or ignore it
         result = await poll_for_token(
             provider,
             body.deviceCode,
-            "" if provider in no_pkce else body.codeVerifier,
+            body.codeVerifier,
             body.extraData,
         )
 
@@ -505,12 +499,11 @@ async def import_token(
 ):
     """Import a token directly (used for cursor)."""
     try:
-        if provider != "cursor":
+        if provider != PROVIDER_CURSOR:
             raise HTTPException(status_code=400, detail="Import token only supported for cursor")
 
-        token_data = map_tokens("cursor",
+        token_data = map_tokens(PROVIDER_CURSOR,
             {"accessToken": body.accessToken, "machineId": body.machineId},
-            None,
         )
         conn = await _save_connection(db, provider, token_data)
         return OAuthExchangeResponse(
@@ -549,7 +542,7 @@ async def cursor_auto_import():
                     cursor_installed = True
             if not cursor_installed:
                 return {"found": False, "error": "Cursor config files found but Cursor IDE does not appear to be installed. Skipping auto-import."}
-        result = await get_oauth_handler("cursor").auto_import()
+        result = await get_oauth_handler(PROVIDER_CURSOR).auto_import()
         return result
     except Exception as e:
         logger.exception("Cursor auto-import error")
@@ -564,8 +557,8 @@ async def cursor_import(body: CursorImportRequest, db: AsyncSession = Depends(ge
             raise HTTPException(status_code=400, detail="Access token is required")
         if not body.machineId or not isinstance(body.machineId, str):
             raise HTTPException(status_code=400, detail="Machine ID is required")
-        token_data = await get_oauth_handler("cursor").validate_import_token(body.accessToken.strip(), body.machineId.strip())
-        conn = await _save_connection(db, "cursor", token_data)
+        token_data = await get_oauth_handler(PROVIDER_CURSOR).validate_import_token(body.accessToken.strip(), body.machineId.strip())
+        conn = await _save_connection(db, PROVIDER_CURSOR, token_data)
         return OAuthExchangeResponse(success=True, connection=ConnectionResponse(id=str(conn.id), provider=conn.provider, email=conn.email, displayName=conn.name))
     except HTTPException:
         raise
@@ -581,38 +574,7 @@ async def cursor_import(body: CursorImportRequest, db: AsyncSession = Depends(ge
 async def kiro_auto_import():
     """Auto-detect Kiro refresh token from AWS SSO cache."""
     try:
-        cache_path = os.path.expanduser("~/.aws/sso/cache")
-        if not os.path.isdir(cache_path):
-            return {"found": False, "error": "AWS SSO cache not found. Please login to Kiro IDE first."}
-        files = os.listdir(cache_path)
-        refresh_token = None
-        found_file = None
-        kiro_token_file = "kiro-auth-token.json"
-        if kiro_token_file in files:
-            try:
-                with open(os.path.join(cache_path, kiro_token_file), "r") as f:
-                    data = json.load(f)
-                if data.get("refreshToken", "").startswith("aorAAAAAG"):
-                    refresh_token = data["refreshToken"]
-                    found_file = kiro_token_file
-            except (json.JSONDecodeError, OSError):
-                pass
-        if not refresh_token:
-            for file in files:
-                if not file.endswith(".json"):
-                    continue
-                try:
-                    with open(os.path.join(cache_path, file), "r") as f:
-                        data = json.load(f)
-                    if data.get("refreshToken", "").startswith("aorAAAAAG"):
-                        refresh_token = data["refreshToken"]
-                        found_file = file
-                        break
-                except (json.JSONDecodeError, OSError):
-                    continue
-        if not refresh_token:
-            return {"found": False, "error": "Kiro token not found in AWS SSO cache. Please login to Kiro IDE first."}
-        return {"found": True, "refreshToken": refresh_token, "source": found_file}
+        return await get_oauth_handler(PROVIDER_KIRO).auto_import()
     except Exception as e:
         logger.exception("Kiro auto-import error")
         return {"found": False, "error": str(e)}
@@ -624,17 +586,10 @@ async def kiro_import(body: KiroImportRequest, db: AsyncSession = Depends(get_db
     try:
         if not body.refreshToken or not isinstance(body.refreshToken, str):
             raise HTTPException(status_code=400, detail="Refresh token is required")
-        token_data = await get_oauth_handler("kiro").validate_import_token(body.refreshToken.strip())
-        email = get_oauth_handler("kiro").extract_email_from_jwt(token_data.get("accessToken", ""))
-        save_data = {
-            "accessToken": token_data.get("accessToken"),
-            "refreshToken": token_data.get("refreshToken", body.refreshToken.strip()),
-            "expiresIn": token_data.get("expiresIn"),
-            "email": email,
-            "displayName": email,
-            "providerSpecificData": {"profileArn": token_data.get("profileArn"), "authMethod": "imported", "provider": "Imported"},
-        }
-        conn = await _save_connection(db, "kiro", save_data)
+        handler = get_oauth_handler(PROVIDER_KIRO)
+        token_data = await handler.validate_import_token(body.refreshToken.strip())
+        save_data = handler.build_import_data(token_data, body.refreshToken.strip())
+        conn = await _save_connection(db, PROVIDER_KIRO, save_data)
         return OAuthExchangeResponse(success=True, connection=ConnectionResponse(id=str(conn.id), provider=conn.provider, email=conn.email, displayName=conn.name))
     except HTTPException:
         raise
@@ -651,7 +606,8 @@ async def kiro_social_authorize(provider: str = ""):
             raise HTTPException(status_code=400, detail="Invalid provider. Use 'google' or 'github'")
         from app.utils.pkce import generate_pkce
         pkce = generate_pkce()
-        auth_url = get_oauth_handler("kiro").build_social_login_url(provider, pkce["codeChallenge"], pkce["state"])
+        handler = get_oauth_handler(PROVIDER_KIRO)
+        auth_url = handler.build_social_login_url(provider, pkce["codeChallenge"], pkce["state"])
         return {"authUrl": auth_url, "state": pkce["state"], "codeVerifier": pkce["codeVerifier"], "codeChallenge": pkce["codeChallenge"], "provider": provider}
     except HTTPException:
         raise
@@ -668,15 +624,10 @@ async def kiro_social_exchange(body: KiroSocialExchangeRequest, db: AsyncSession
             raise HTTPException(status_code=400, detail="Missing required fields")
         if body.provider not in ("google", "github"):
             raise HTTPException(status_code=400, detail="Invalid provider")
-        token_data = await get_oauth_handler("kiro").exchange_social_code(body.code, body.codeVerifier)
-        email = get_oauth_handler("kiro").extract_email_from_jwt(token_data.get("accessToken", ""))
-        save_data = {
-            **token_data,
-            "email": email,
-            "displayName": email,
-            "providerSpecificData": {"profileArn": token_data.get("profileArn"), "authMethod": body.provider, "provider": body.provider.capitalize()},
-        }
-        conn = await _save_connection(db, "kiro", save_data)
+        handler = get_oauth_handler(PROVIDER_KIRO)
+        token_data = await handler.exchange_social_code(body.code, body.codeVerifier)
+        save_data = handler.build_social_save_data(token_data, body.provider)
+        conn = await _save_connection(db, PROVIDER_KIRO, save_data)
         return OAuthExchangeResponse(success=True, connection=ConnectionResponse(id=str(conn.id), provider=conn.provider, email=conn.email, displayName=conn.name))
     except HTTPException:
         raise
@@ -760,33 +711,9 @@ async def gitlab_pat(
 ):
     """Authenticate with GitLab using a Personal Access Token."""
     try:
-        base_url = body.baseUrl or "https://gitlab.com"
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(
-                f"{base_url}/api/v4/user",
-                headers={"Authorization": f"Bearer {body.accessToken}"},
-            )
-            if resp.status_code >= 400:
-                raise HTTPException(status_code=401, detail="Invalid GitLab PAT")
-            user_info = resp.json()
-
-        token_data = {
-            "accessToken": body.accessToken,
-            "refreshToken": None,
-            "expiresIn": None,
-            "email": user_info.get("email"),
-            "displayName": user_info.get("name"),
-            "providerSpecificData": {
-                "gitlabUserId": user_info.get("id"),
-                "gitlabUsername": user_info.get("username"),
-                "gitlabName": user_info.get("name"),
-                "gitlabAvatar": user_info.get("avatar_url"),
-                "gitlabWebUrl": user_info.get("web_url"),
-                "baseUrl": base_url,
-            },
-        }
-
-        conn = await _save_connection(db, "gitlab", token_data)
+        handler = get_oauth_handler(PROVIDER_GITLAB)
+        token_data = await handler.validate_pat(body.accessToken, body.baseUrl or "")
+        conn = await _save_connection(db, PROVIDER_GITLAB, token_data)
         return OAuthExchangeResponse(
             success=True,
             connection=ConnectionResponse(
@@ -836,7 +763,7 @@ async def qoder_pat_import(
             },
         }
 
-        conn = await _save_connection(db, "qoder", token_data, auth_type="apikey")
+        conn = await _save_connection(db, PROVIDER_QODER, token_data, auth_type="apikey")
         return OAuthExchangeResponse(
             success=True,
             connection=ConnectionResponse(

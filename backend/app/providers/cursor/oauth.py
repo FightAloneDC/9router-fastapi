@@ -8,13 +8,14 @@ import re
 import sqlite3
 from typing import Optional
 
+from app.providers import PROVIDER_CURSOR
 from app.providers.oauth_base import ImportTokenHandler
 
 
 class CursorOAuthHandler(ImportTokenHandler):
     """OAuth handler for Cursor (import token directly)."""
 
-    PROVIDER_ID = "cursor"
+    PROVIDER_ID = PROVIDER_CURSOR
     CONFIG = {
         "apiEndpoint": "https://api2.cursor.sh",
         "chatEndpoint": "/aiserver.v1.ChatService/StreamUnifiedChatWithTools",
@@ -95,6 +96,11 @@ class CursorOAuthHandler(ImportTokenHandler):
             "expiresIn": 86400,
             "authMethod": "imported",
         }
+
+    async def import_token(self, access_token: str, **kwargs) -> dict:
+        """Import token via the generic import_token dispatch (used by /exchange endpoint)."""
+        machine_id = kwargs.get("machineId", "")
+        return await self.validate_import_token(access_token, machine_id)
 
     def map_tokens(self, tokens: dict, extra: Optional[dict] = None) -> dict:
         return {

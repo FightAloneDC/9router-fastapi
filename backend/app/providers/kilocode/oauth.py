@@ -6,13 +6,14 @@ from typing import Optional
 
 import httpx
 
+from app.providers import PROVIDER_KILOCODE
 from app.providers.oauth_base import DeviceCodeHandler
 
 
 class KilocodeOAuthHandler(DeviceCodeHandler):
     """OAuth handler for Kilocode."""
 
-    PROVIDER_ID = "kilocode"
+    PROVIDER_ID = PROVIDER_KILOCODE
     CONFIG = {
         "apiBaseUrl": "https://api.kilo.ai",
         "initiateUrl": "https://api.kilo.ai/api/device-auth/codes",

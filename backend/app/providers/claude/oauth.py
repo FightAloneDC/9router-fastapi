@@ -7,13 +7,14 @@ from typing import Optional
 import httpx
 
 from app.config import settings
+from app.providers import PROVIDER_CLAUDE
 from app.providers.oauth_base import AuthCodePKCEHandler
 
 
 class ClaudeOAuthHandler(AuthCodePKCEHandler):
     """OAuth handler for Claude (Anthropic)."""
 
-    PROVIDER_ID = "claude"
+    PROVIDER_ID = PROVIDER_CLAUDE
     CONFIG = {
         "clientId": settings.CLAUDE_CLIENT_ID,
         "authorizeUrl": "https://claude.ai/oauth/authorize",

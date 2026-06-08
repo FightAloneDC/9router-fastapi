@@ -9,6 +9,7 @@ from typing import Optional
 import httpx
 
 from app.config import settings
+from app.providers import PROVIDER_CODEX
 from app.providers.oauth_base import AuthCodePKCEHandler, decode_jwt_payload
 
 
@@ -27,7 +28,7 @@ def _extract_codex_account_info(id_token: str) -> dict:
 class CodexOAuthHandler(AuthCodePKCEHandler):
     """OAuth handler for Codex (OpenAI)."""
 
-    PROVIDER_ID = "codex"
+    PROVIDER_ID = PROVIDER_CODEX
     CONFIG = {
         "clientId": settings.CODEX_CLIENT_ID,
         "authorizeUrl": "https://auth.openai.com/oauth/authorize",

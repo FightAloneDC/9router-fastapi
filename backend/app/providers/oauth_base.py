@@ -65,6 +65,10 @@ class BaseOAuthHandler:
     def flow_type(self) -> str:
         return self.FLOW_TYPE
 
+    def needs_pkce(self) -> bool:
+        """Whether this handler's flow requires a code_verifier (PKCE)."""
+        return self.FLOW_TYPE == "authorization_code_pkce"
+
     def get_config(self) -> dict[str, Any]:
         """Return provider OAuth config."""
         return self.config
@@ -155,3 +159,10 @@ class ImportTokenHandler(BaseOAuthHandler):
     """
 
     FLOW_TYPE = "import_token"
+
+    async def import_token(self, access_token: str, **kwargs: Any) -> dict:
+        """Import and validate a token. Override in subclass.
+
+        Returns raw token data before map_tokens() is applied.
+        """
+        raise NotImplementedError(f"{self.PROVIDER_ID} does not support import_token")

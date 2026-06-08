@@ -7,13 +7,14 @@ from typing import Optional
 import httpx
 
 from app.config import settings
+from app.providers import PROVIDER_OPENAI
 from app.providers.codex.oauth import CodexOAuthHandler
 
 
 class OpenaiOAuthHandler(CodexOAuthHandler):
     """OAuth handler for OpenAI (same flow as Codex, different originator)."""
 
-    PROVIDER_ID = "openai"
+    PROVIDER_ID = PROVIDER_OPENAI
     CONFIG = {
         "clientId": settings.CODEX_CLIENT_ID,
         "authorizeUrl": "https://auth.openai.com/oauth/authorize",

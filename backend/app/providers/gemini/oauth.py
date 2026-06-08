@@ -8,6 +8,7 @@ from typing import Optional
 import httpx
 
 from app.config import settings
+from app.providers import PROVIDER_GEMINI_CLI
 from app.providers.oauth_base import AuthCodeHandler
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 class GeminiOAuthHandler(AuthCodeHandler):
     """OAuth handler for Gemini CLI (Google)."""
 
-    PROVIDER_ID = "gemini-cli"
+    PROVIDER_ID = PROVIDER_GEMINI_CLI
     CONFIG = {
         "clientId": settings.GEMINI_CLIENT_ID,
         "clientSecret": settings.GEMINI_CLIENT_SECRET,

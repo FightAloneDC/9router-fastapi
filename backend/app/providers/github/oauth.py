@@ -7,13 +7,14 @@ from typing import Optional
 import httpx
 
 from app.config import settings
+from app.providers import PROVIDER_GITHUB
 from app.providers.oauth_base import DeviceCodeHandler
 
 
 class GithubOAuthHandler(DeviceCodeHandler):
     """OAuth handler for GitHub (Copilot)."""
 
-    PROVIDER_ID = "github"
+    PROVIDER_ID = PROVIDER_GITHUB
     CONFIG = {
         "clientId": settings.GITHUB_CLIENT_ID,
         "deviceCodeUrl": "https://github.com/login/device/code",

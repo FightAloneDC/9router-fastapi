@@ -8,13 +8,14 @@ from typing import Optional
 import httpx
 
 from app.config import settings
+from app.providers import PROVIDER_IFLOW
 from app.providers.oauth_base import AuthCodeHandler
 
 
 class IflowOAuthHandler(AuthCodeHandler):
     """OAuth handler for iFlow."""
 
-    PROVIDER_ID = "iflow"
+    PROVIDER_ID = PROVIDER_IFLOW
     CONFIG = {
         "clientId": settings.IFLOW_CLIENT_ID,
         "clientSecret": settings.IFLOW_CLIENT_SECRET,

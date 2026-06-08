@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import json
+import os
 from typing import Optional
 
 import httpx
 
+from app.providers import PROVIDER_KIRO
 from app.providers.oauth_base import DeviceCodeHandler, extract_email_from_token, decode_jwt_payload
 
 
 class KiroOAuthHandler(DeviceCodeHandler):
     """OAuth handler for Kiro (AWS SSO)."""
 
-    PROVIDER_ID = "kiro"
+    PROVIDER_ID = PROVIDER_KIRO
     CONFIG = {
         "ssoOidcEndpoint": "https://oidc.us-east-1.amazonaws.com",
         "registerClientUrl": "https://oidc.us-east-1.amazonaws.com/client/register",
@@ -165,6 +168,76 @@ class KiroOAuthHandler(DeviceCodeHandler):
     def extract_email_from_jwt(self, access_token: str) -> Optional[str]:
         """Extract email from JWT access token."""
         return extract_email_from_token(access_token)
+
+    async def auto_import(self) -> dict:
+        """Auto-detect Kiro refresh token from AWS SSO cache."""
+        cache_path = os.path.expanduser("~/.aws/sso/cache")
+        if not os.path.isdir(cache_path):
+            return {"found": False, "error": "AWS SSO cache not found. Please login to Kiro IDE first."}
+
+        files = os.listdir(cache_path)
+        refresh_token = None
+        found_file = None
+        kiro_token_file = "kiro-auth-token.json"
+
+        if kiro_token_file in files:
+            try:
+                with open(os.path.join(cache_path, kiro_token_file), "r") as f:
+                    data = json.load(f)
+                if data.get("refreshToken", "").startswith("aorAAAAAG"):
+                    refresh_token = data["refreshToken"]
+                    found_file = kiro_token_file
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        if not refresh_token:
+            for file in files:
+                if not file.endswith(".json"):
+                    continue
+                try:
+                    with open(os.path.join(cache_path, file), "r") as f:
+                        data = json.load(f)
+                    if data.get("refreshToken", "").startswith("aorAAAAAG"):
+                        refresh_token = data["refreshToken"]
+                        found_file = file
+                        break
+                except (json.JSONDecodeError, OSError):
+                    continue
+
+        if not refresh_token:
+            return {"found": False, "error": "Kiro token not found in AWS SSO cache. Please login to Kiro IDE first."}
+
+        return {"found": True, "refreshToken": refresh_token, "source": found_file}
+
+    def build_import_data(self, token_data: dict, raw_refresh_token: str) -> dict:
+        """Build connection save data from validated import token."""
+        email = self.extract_email_from_jwt(token_data.get("accessToken", ""))
+        return {
+            "accessToken": token_data.get("accessToken"),
+            "refreshToken": token_data.get("refreshToken", raw_refresh_token),
+            "expiresIn": token_data.get("expiresIn"),
+            "email": email,
+            "displayName": email,
+            "providerSpecificData": {
+                "profileArn": token_data.get("profileArn"),
+                "authMethod": "imported",
+                "provider": "Imported",
+            },
+        }
+
+    def build_social_save_data(self, token_data: dict, social_provider: str) -> dict:
+        """Build connection save data from social login token exchange."""
+        email = self.extract_email_from_jwt(token_data.get("accessToken", ""))
+        return {
+            **token_data,
+            "email": email,
+            "displayName": email,
+            "providerSpecificData": {
+                "profileArn": token_data.get("profileArn"),
+                "authMethod": social_provider,
+                "provider": social_provider.capitalize(),
+            },
+        }
 
     def build_social_login_url(self, provider: str, code_challenge: str, state: str = "") -> str:
         """Build Google/GitHub social login URL."""

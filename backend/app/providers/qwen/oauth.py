@@ -7,13 +7,14 @@ from typing import Optional
 import httpx
 
 from app.config import settings
+from app.providers import PROVIDER_QWEN
 from app.providers.oauth_base import DeviceCodeHandler
 
 
 class QwenOAuthHandler(DeviceCodeHandler):
     """OAuth handler for Qwen."""
 
-    PROVIDER_ID = "qwen"
+    PROVIDER_ID = PROVIDER_QWEN
     CONFIG = {
         "clientId": settings.QWEN_CLIENT_ID,
         "deviceCodeUrl": "https://chat.qwen.ai/api/v1/oauth2/device/code",

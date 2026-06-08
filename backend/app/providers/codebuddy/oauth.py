@@ -6,13 +6,14 @@ from typing import Optional
 
 import httpx
 
+from app.providers import PROVIDER_CODEBUDDY
 from app.providers.oauth_base import DeviceCodeHandler
 
 
 class CodebuddyOAuthHandler(DeviceCodeHandler):
     """OAuth handler for CodeBuddy (Tencent)."""
 
-    PROVIDER_ID = "codebuddy"
+    PROVIDER_ID = PROVIDER_CODEBUDDY
     FLOW_TYPE = "polling"
     CONFIG = {
         "baseUrl": "https://copilot.tencent.com",

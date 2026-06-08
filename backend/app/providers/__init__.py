@@ -101,6 +101,20 @@ PROVIDER_OLLAMA_LOCAL = "ollama-local"
 
 # Special providers (complex auth)
 PROVIDER_QODER = "qoder"
+PROVIDER_CLAUDE = "claude"
+PROVIDER_CODEX = "codex"
+PROVIDER_GEMINI_CLI = "gemini-cli"
+PROVIDER_ANTIGRAVITY = "antigravity"
+PROVIDER_IFLOW = "iflow"
+PROVIDER_GITHUB = "github"
+PROVIDER_GITLAB = "gitlab"
+PROVIDER_QWEN = "qwen"
+PROVIDER_KIRO = "kiro"
+PROVIDER_CURSOR = "cursor"
+PROVIDER_KIMI_CODING = "kimi-coding"
+PROVIDER_KILOCODE = "kilocode"
+PROVIDER_CLINE = "cline"
+PROVIDER_CODEBUDDY = "codebuddy"
 
 # ── All implemented providers ──────────────────────────────────────────────
 AVAILABLE_PROVIDERS: list[str] = [

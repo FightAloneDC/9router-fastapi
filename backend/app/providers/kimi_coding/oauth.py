@@ -7,13 +7,14 @@ from typing import Optional
 import httpx
 
 from app.config import settings
+from app.providers import PROVIDER_KIMI_CODING
 from app.providers.oauth_base import DeviceCodeHandler
 
 
 class KimiCodingOAuthHandler(DeviceCodeHandler):
     """OAuth handler for Kimi Coding."""
 
-    PROVIDER_ID = "kimi-coding"
+    PROVIDER_ID = PROVIDER_KIMI_CODING
     CONFIG = {
         "clientId": settings.KIMI_CODING_CLIENT_ID,
         "deviceCodeUrl": "https://auth.kimi.com/api/oauth/device_authorization",

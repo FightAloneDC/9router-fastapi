@@ -6,13 +6,14 @@ from typing import Optional
 
 import httpx
 
+from app.providers import PROVIDER_GITLAB
 from app.providers.oauth_base import AuthCodePKCEHandler
 
 
 class GitlabOAuthHandler(AuthCodePKCEHandler):
     """OAuth handler for GitLab."""
 
-    PROVIDER_ID = "gitlab"
+    PROVIDER_ID = PROVIDER_GITLAB
     CONFIG = {
         "defaultBaseUrl": "https://gitlab.com",
         "authorizeUrlPath": "/oauth/authorize",
@@ -75,4 +76,32 @@ class GitlabOAuthHandler(AuthCodePKCEHandler):
             "scope": tokens.get("scope"),
             "email": (extra or {}).get("userInfo", {}).get("email"),
             "displayName": (extra or {}).get("userInfo", {}).get("name"),
+        }
+
+    async def validate_pat(self, access_token: str, base_url: str = "") -> dict:
+        """Validate a Personal Access Token and return token data for connection save."""
+        base_url = base_url or self.config.get("defaultBaseUrl", "https://gitlab.com")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{base_url}/api/v4/user",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if resp.status_code >= 400:
+                raise Exception("Invalid GitLab PAT")
+            user_info = resp.json()
+
+        return {
+            "accessToken": access_token,
+            "refreshToken": None,
+            "expiresIn": None,
+            "email": user_info.get("email"),
+            "displayName": user_info.get("name"),
+            "providerSpecificData": {
+                "gitlabUserId": user_info.get("id"),
+                "gitlabUsername": user_info.get("username"),
+                "gitlabName": user_info.get("name"),
+                "gitlabAvatar": user_info.get("avatar_url"),
+                "gitlabWebUrl": user_info.get("web_url"),
+                "baseUrl": base_url,
+            },
         }

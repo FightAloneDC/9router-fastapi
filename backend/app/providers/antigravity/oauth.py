@@ -9,6 +9,7 @@ from typing import Optional
 import httpx
 
 from app.config import settings
+from app.providers import PROVIDER_ANTIGRAVITY
 from app.providers.oauth_base import AuthCodeHandler
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 class AntigravityOAuthHandler(AuthCodeHandler):
     """OAuth handler for Antigravity (Google Cloud Code)."""
 
-    PROVIDER_ID = "antigravity"
+    PROVIDER_ID = PROVIDER_ANTIGRAVITY
     CONFIG = {
         "clientId": settings.ANTIGRAVITY_CLIENT_ID,
         "clientSecret": settings.ANTIGRAVITY_CLIENT_SECRET,
