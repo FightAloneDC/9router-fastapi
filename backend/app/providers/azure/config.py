@@ -18,6 +18,7 @@ class AzureConfig(BaseProviderConfig):
     SERVICE_KINDS: list[str] = ["llm"]
     AUTH_HEADER: str = "api-key"
     AUTH_PREFIX: str = ""
+    PROVIDER_SPECIFIC_DATA: bool = True
 
 
 class AzureMetadata(BaseMetadata):

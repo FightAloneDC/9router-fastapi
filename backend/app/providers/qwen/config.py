@@ -12,6 +12,7 @@ class QwenConfig(BaseProviderConfig):
     ALIAS: str = "qw"
     BASE_URL: str = "https://chat.qwen.ai"
     SERVICE_KINDS: list[str] = ["llm"]
+    CATEGORY: str = "free"
     DEPRECATED: bool = True
     HIDDEN: bool = True
     DEPRECATION_NOTICE: str = "Qwen OAuth free tier was discontinued by Alibaba on 2026-04-15. New connections will not work."

@@ -16,6 +16,7 @@ class OllamaConfig(BaseProviderConfig):
     ALIAS: str = "ollama"
     BASE_URL: str = "https://ollama.com/api"
     SERVICE_KINDS: list[str] = ["llm"]
+    CATEGORY: str = "freeTier"
 
 
 class OllamaMetadata(BaseMetadata):

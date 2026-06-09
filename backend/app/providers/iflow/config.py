@@ -12,6 +12,7 @@ class IflowConfig(BaseProviderConfig):
     ALIAS: str = "if"
     BASE_URL: str = "https://iflow.cn"
     SERVICE_KINDS: list[str] = []
+    CATEGORY: str = "free"
     HIDDEN: bool = True
 
 

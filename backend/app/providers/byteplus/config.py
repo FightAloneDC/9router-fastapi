@@ -16,6 +16,7 @@ class ByteplusConfig(BaseProviderConfig):
     ALIAS: str = "bpm"
     BASE_URL: str = "https://ark.ap-southeast.bytepluses.com/api/coding/v3"
     SERVICE_KINDS: list[str] = ["llm"]
+    CATEGORY: str = "freeTier"
 
 
 class ByteplusMetadata(BaseMetadata):

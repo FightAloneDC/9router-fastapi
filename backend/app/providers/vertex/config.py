@@ -16,6 +16,7 @@ class VertexConfig(BaseProviderConfig):
     ALIAS: str = "vx"
     BASE_URL: str = "https://aiplatform.googleapis.com/v1"
     SERVICE_KINDS: list[str] = ["llm"]
+    CATEGORY: str = "freeTier"
 
 
 class VertexMetadata(BaseMetadata):

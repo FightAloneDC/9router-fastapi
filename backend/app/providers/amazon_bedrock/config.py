@@ -18,6 +18,7 @@ class AmazonBedrockConfig(BaseProviderConfig):
     SERVICE_KINDS: list[str] = ["llm"]
     AUTH_HEADER: str = ""
     AUTH_PREFIX: str = ""
+    PROVIDER_SPECIFIC_DATA: bool = True
 
 
 class AmazonBedrockMetadata(BaseMetadata):

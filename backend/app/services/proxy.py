@@ -29,6 +29,8 @@ def _build_alias_to_id() -> dict[str, str]:
 
     Each provider's config has an ALIAS field. Also includes provider ID itself
     as a key (for cases like "openrouter" → "openrouter").
+    When multiple providers share an alias (e.g. kilo-gateway + kilocode),
+    the last one wins in this dict. Use ALIAS_TO_IDS for all matches.
     """
     from app.providers import AVAILABLE_PROVIDERS
     mapping: dict[str, str] = {}
@@ -44,7 +46,44 @@ def _build_alias_to_id() -> dict[str, str]:
             pass
     return mapping
 
+
+def _build_alias_to_ids() -> dict[str, list[str]]:
+    """Build alias → list of provider IDs mapping.
+
+    Handles shared aliases (e.g. 'kilo' → ['kilo-gateway', 'kilocode']).
+    Provider IDs are also included as keys mapping to themselves.
+    """
+    from app.providers import AVAILABLE_PROVIDERS
+    mapping: dict[str, list[str]] = {}
+    for name in AVAILABLE_PROVIDERS:
+        try:
+            p = Provider(name)
+            alias: str = p.config().ALIAS
+            if alias:
+                mapping.setdefault(alias, []).append(name)
+            mapping.setdefault(name, []).append(name)
+        except (ValueError, ModuleNotFoundError):
+            pass
+    return mapping
+
+
+def _build_id_to_alias() -> dict[str, str]:
+    """Build provider ID → alias mapping directly from Provider class."""
+    from app.providers import AVAILABLE_PROVIDERS
+    mapping: dict[str, str] = {}
+    for name in AVAILABLE_PROVIDERS:
+        try:
+            p = Provider(name)
+            alias: str = p.config().ALIAS
+            if alias:
+                mapping[name] = alias
+        except (ValueError, ModuleNotFoundError):
+            pass
+    return mapping
+
+
 ALIAS_TO_ID: dict[str, str] = _build_alias_to_id()
+ALIAS_TO_IDS: dict[str, list[str]] = _build_alias_to_ids()
 
 
 def _resolve_provider_alias(provider_name: str) -> str:
@@ -56,8 +95,17 @@ def _resolve_provider_alias(provider_name: str) -> str:
     """
     return ALIAS_TO_ID.get(provider_name, provider_name)
 
+
+def _resolve_provider_aliases(provider_name: str) -> list[str]:
+    """Resolve alias to ALL matching provider IDs (for shared aliases).
+
+    Returns a list of provider IDs. For unique aliases, returns a single-item list.
+    For shared aliases like 'kilo', returns ['kilo-gateway', 'kilocode'].
+    """
+    return ALIAS_TO_IDS.get(provider_name, [provider_name])
+
 # Reverse mapping: provider ID → alias
-ID_TO_ALIAS: dict[str, str] = {v: k for k, v in ALIAS_TO_ID.items()}
+ID_TO_ALIAS: dict[str, str] = _build_id_to_alias()
 
 # ──────────────────────────────────────────────
 # Provider URL/header configuration
@@ -638,45 +686,52 @@ async def _build_target_for_provider(
     """Build target for explicit provider/model format.
 
     Returns a list with at most ONE target (selected via strategy).
+    Handles shared aliases (e.g. 'kilo' → kilo-gateway + kilocode) by
+    trying each provider until one has active connections.
     """
-    resolved_provider = _resolve_provider_alias(provider_name)
+    provider_ids = _resolve_provider_aliases(provider_name)
 
-    connections = await get_connections_cached(db, resolved_provider)
-    if not connections:
-        return []
+    # Try each provider for this alias until we find active connections
+    for resolved_provider in provider_ids:
+        connections = await get_connections_cached(db, resolved_provider)
+        if not connections:
+            continue
 
-    strategy, sticky_limit = await get_provider_strategy(db, resolved_provider)
+        strategy, sticky_limit = await get_provider_strategy(db, resolved_provider)
 
-    conn = select_connection_for_provider(
-        connections=list(connections),
-        provider_id=resolved_provider,
-        strategy=strategy,
-        sticky_limit=sticky_limit,
-        exclude_ids=exclude_ids,
-        model=model_name,
-    )
+        conn = select_connection_for_provider(
+            connections=list(connections),
+            provider_id=resolved_provider,
+            strategy=strategy,
+            sticky_limit=sticky_limit,
+            exclude_ids=exclude_ids,
+            model=model_name,
+        )
 
-    if not conn:
-        return []
+        if not conn:
+            continue
 
-    data = json.loads(conn.data) if conn.data else {}
-    conn_api_key = data.get("apiKey", "") or data.get("accessToken", "")
-    base_url = _resolve_base_url(resolved_provider, data)
-    url = _build_upstream_url(resolved_provider, base_url, stream, data, model_name)
+        data = json.loads(conn.data) if conn.data else {}
+        conn_api_key = data.get("apiKey", "") or data.get("accessToken", "")
+        base_url = _resolve_base_url(resolved_provider, data)
+        url = _build_upstream_url(resolved_provider, base_url, stream, data, model_name)
 
-    try:
-        headers = _build_headers(resolved_provider, conn_api_key, stream, data)
-    except ValueError as e:
-        logger.warning(f"Header build failed for {resolved_provider}: {e}")
-        return []
+        try:
+            headers = _build_headers(resolved_provider, conn_api_key, stream, data)
+        except ValueError as e:
+            logger.warning(f"Header build failed for {resolved_provider}: {e}")
+            continue
 
-    return [ResolvedTarget(
-        url=url,
-        headers=headers,
-        provider=resolved_provider,
-        model=model_name,
-        connection_id=str(conn.id),
-    )]
+        return [ResolvedTarget(
+            url=url,
+            headers=headers,
+            provider=resolved_provider,
+            model=model_name,
+            connection_id=str(conn.id),
+        )]
+
+    # No matching connection found for any provider with this alias
+    return []
 
 
 async def get_combo_strategy(db: AsyncSession, combo_name: str = None) -> tuple[str, int]:

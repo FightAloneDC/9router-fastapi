@@ -12,6 +12,7 @@ class GrokWebConfig(BaseProviderConfig):
     ALIAS: str = "gw"
     BASE_URL: str = "https://grok.com"
     SERVICE_KINDS: list[str] = ["llm"]
+    CATEGORY: str = "webCookie"
     PASSTHROUGH_MODELS: bool = True
 
 

@@ -12,6 +12,7 @@ class OpencodeConfig(BaseProviderConfig):
     ALIAS: str = "oc"
     BASE_URL: str = "https://opencode.ai"
     SERVICE_KINDS: list[str] = []
+    CATEGORY: str = "free"
     NO_AUTH: bool = True
     PASSTHROUGH_MODELS: bool = True
     MODELS_FETCHER: dict | None = {"url": "https://opencode.ai/zen/v1/models", "type": "opencode-free"}

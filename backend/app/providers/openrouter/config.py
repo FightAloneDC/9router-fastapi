@@ -16,6 +16,7 @@ class OpenrouterConfig(BaseProviderConfig):
     ALIAS: str = "openrouter"
     BASE_URL: str = "https://openrouter.ai/api/v1"
     SERVICE_KINDS: list[str] = ["llm", "embedding", "imageToText", "tts"]
+    CATEGORY: str = "freeTier"
 
 
 class OpenrouterMetadata(BaseMetadata):

@@ -16,6 +16,7 @@ class NvidiaConfig(BaseProviderConfig):
     ALIAS: str = "nvidia"
     BASE_URL: str = "https://integrate.api.nvidia.com/v1"
     SERVICE_KINDS: list[str] = ["llm", "tts", "embedding"]
+    CATEGORY: str = "freeTier"
 
     # ── Model type overrides ────────────────────────────────────────────
     MODEL_TYPE_OVERRIDES: dict[str, str] = {

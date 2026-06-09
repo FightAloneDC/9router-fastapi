@@ -16,6 +16,8 @@ class CloudflareAiConfig(BaseProviderConfig):
     ALIAS: str = "cf"
     BASE_URL: str = "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai"
     SERVICE_KINDS: list[str] = ["llm", "image"]
+    CATEGORY: str = "freeTier"
+    PROVIDER_SPECIFIC_DATA: bool = True
 
 
 class CloudflareAiMetadata(BaseMetadata):

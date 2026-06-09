@@ -12,6 +12,7 @@ class PerplexityWebConfig(BaseProviderConfig):
     ALIAS: str = "pw"
     BASE_URL: str = "https://www.perplexity.ai"
     SERVICE_KINDS: list[str] = ["llm"]
+    CATEGORY: str = "webCookie"
 
 
 class PerplexityWebMetadata(BaseMetadata):

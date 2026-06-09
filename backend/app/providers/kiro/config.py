@@ -12,6 +12,7 @@ class KiroConfig(BaseProviderConfig):
     ALIAS: str = "kr"
     BASE_URL: str = "https://kiro.ai"
     SERVICE_KINDS: list[str] = ["llm", "tts"]
+    CATEGORY: str = "free"
     DEPRECATED: bool = True
     DEPRECATION_NOTICE: str = "Risk Notice: This provider uses a subscription/OAuth session not officially licensed for proxy/router use. Account may be restricted or banned. Use at your own risk."
     CUSTOM_MODAL: str = "kiro"

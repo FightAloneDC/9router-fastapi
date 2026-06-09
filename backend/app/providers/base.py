@@ -54,6 +54,8 @@ class BaseProviderConfig(BaseModel):
     SUPPORTS_PAT: bool = False
     REQUIRES_PROXY: bool = False
     CUSTOM_MODAL: str = ""  # frontend modal component name (e.g. "kiro", "cursor", "gitlab")
+    PROVIDER_SPECIFIC_DATA: bool = False  # needs extra form fields in AddKeyModal
+    CATEGORY: str = ""  # "free", "freeTier", "webCookie" (empty = derive from auth)
 
     # ── Runtime (from DB connection, not .env) ──────────────────────────
     API_KEY: str = ""

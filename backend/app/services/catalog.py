@@ -16,13 +16,6 @@ from app.providers.base import BaseMetadata, BaseProviderConfig
 
 logger = logging.getLogger(__name__)
 
-# ── Category definitions (provider_id → category) ─────────────────────────
-_FREE_PROVIDERS = {"kiro", "qwen", "gemini-cli", "iflow", "opencode"}
-_FREE_TIER_PROVIDERS = {
-    "openrouter", "nvidia", "ollama", "vertex", "gemini", "cloudflare-ai", "byteplus",
-}
-_WEB_COOKIE_PROVIDERS = {"grok-web", "perplexity-web"}
-
 # ── Compatible prefixes ────────────────────────────────────────────────────
 _COMPATIBLE_PREFIXES = {
     "openai": "openai-compatible-",
@@ -109,7 +102,7 @@ def _try_get_oauth_flow_type(provider_id: str) -> str | None:
 
 def _derive_auth_type(config: BaseProviderConfig, flow_type: str | None) -> str:
     """Derive frontend authType from config and OAuth handler."""
-    if config.PROVIDER_ID in _WEB_COOKIE_PROVIDERS:
+    if config.CATEGORY == "webCookie":
         return "cookie"
     if flow_type:
         return "oauth"
@@ -118,14 +111,14 @@ def _derive_auth_type(config: BaseProviderConfig, flow_type: str | None) -> str:
     return "apikey"
 
 
-def _derive_category(provider_id: str, flow_type: str | None, config: BaseProviderConfig) -> str:
-    """Derive frontend category from provider properties."""
-    if provider_id in _FREE_PROVIDERS:
-        return "free"
-    if provider_id in _FREE_TIER_PROVIDERS:
-        return "freeTier"
-    if provider_id in _WEB_COOKIE_PROVIDERS:
-        return "webCookie"
+def _derive_category(config: BaseProviderConfig, flow_type: str | None) -> str:
+    """Derive frontend category from provider config.CATEGORY field.
+
+    If CATEGORY is set on the config, use it directly.
+    Otherwise derive from auth properties.
+    """
+    if config.CATEGORY:
+        return config.CATEGORY
     if flow_type:
         return "oauth"
     return "apiKey"
@@ -140,9 +133,7 @@ def _build_provider_entry(
     auth_type = _derive_auth_type(config, flow_type)
 
     # hasProviderSpecificData: providers that need extra form fields in AddKeyModal
-    has_psd = bool(config.REGIONS) or config.PROVIDER_ID in (
-        "azure", "amazon-bedrock", "cloudflare-ai", "xiaomi-tokenplan",
-    )
+    has_psd = bool(config.REGIONS) or config.PROVIDER_SPECIFIC_DATA
 
     return {
         "id": config.PROVIDER_ID,
@@ -206,7 +197,7 @@ def collect_catalog(*, force: bool = False) -> dict[str, Any]:
         entry = _build_provider_entry(config, metadata, flow_type)
         providers[provider_id] = entry
 
-        category = _derive_category(provider_id, flow_type, config)
+        category = _derive_category(config, flow_type)
         categories[category].append(provider_id)
 
     catalog = {

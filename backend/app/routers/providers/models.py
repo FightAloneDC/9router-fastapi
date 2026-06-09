@@ -13,6 +13,7 @@ from app.models.settings import SettingsModel
 from app.providers.provider import Provider
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
+from app.services.proxy import ID_TO_ALIAS
 from app.routers.providers.constants import normalize_models_list
 from app.routers.providers.nodes import _build_node_handler
 
@@ -71,6 +72,47 @@ async def _fetch_builtin_models(
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────
+
+@router.get("/providers/{provider_id}/models/list")
+async def list_provider_models(
+    provider_id: str,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+) -> dict:
+    """List all stored models for a provider (from DB, no upstream call).
+
+    provider_id can be a provider ID or alias.
+    """
+    from app.services.proxy import ALIAS_TO_ID
+    resolved = ALIAS_TO_ID.get(provider_id, provider_id)
+
+    result = await db.execute(
+        select(ProviderConnection)
+        .where(
+            ProviderConnection.provider == resolved,
+            ProviderConnection.is_active == True,
+        )
+        .order_by(ProviderConnection.priority)
+    )
+    connections = result.scalars().all()
+
+    all_models: list[dict] = []
+    seen: set[str] = set()
+    for conn in connections:
+        data = json.loads(conn.data) if conn.data else {}
+        for m in data.get("models", []):
+            mid = m if isinstance(m, str) else m.get("id", "")
+            if mid and mid not in seen:
+                seen.add(mid)
+                mtype = "llm"
+                if isinstance(m, dict) and "type" in m:
+                    mtype = m["type"]
+                elif mid in data.get("modelTypes", {}):
+                    mtype = data["modelTypes"][mid]
+                all_models.append({"id": mid, "type": mtype})
+
+    return {"provider": resolved, "count": len(all_models), "models": all_models}
+
 
 @router.get("/providers/{conn_id}/models")
 async def fetch_provider_models(
@@ -147,7 +189,7 @@ async def clear_provider_models(
     conn.data = json.dumps(data)
 
     # Also clear disabled models for this provider alias from settings
-    provider_alias: str = conn.provider
+    provider_alias: str = ID_TO_ALIAS.get(conn.provider, conn.provider)
     settings_result = await db.execute(select(SettingsModel).where(SettingsModel.id == 1))
     settings_row = settings_result.scalar_one_or_none()
     if settings_row:

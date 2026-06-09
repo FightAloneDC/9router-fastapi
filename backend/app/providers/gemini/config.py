@@ -16,6 +16,7 @@ class GeminiConfig(BaseProviderConfig):
     ALIAS: str = "gemini"
     BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
     SERVICE_KINDS: list[str] = ["llm", "embedding", "image", "imageToText", "webSearch", "tts", "stt"]
+    CATEGORY: str = "freeTier"
 
     # ── Auth ────────────────────────────────────────────────────────────
     # Gemini uses query-param auth (?key=), not header auth

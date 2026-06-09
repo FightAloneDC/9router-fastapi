@@ -18,6 +18,7 @@ class XiaomiTokenplanConfig(BaseProviderConfig):
     SERVICE_KINDS: list[str] = ["llm"]
     REGIONS: list[dict] | None = [{"id": "sgp", "label": "Singapore"}, {"id": "cn", "label": "China"}, {"id": "ams", "label": "Europe"}]
     DEFAULT_REGION: str = "sgp"
+    PROVIDER_SPECIFIC_DATA: bool = True
 
 
 class XiaomiTokenplanMetadata(BaseMetadata):

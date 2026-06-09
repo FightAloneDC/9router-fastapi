@@ -1033,21 +1033,16 @@ function ChatTestPlayground({ providerId, providerAlias, connections }) {
   const resultRef = useRef(null)
 
   useEffect(() => {
-    fetch(`/v1/models`, {
-      headers: { 'Authorization': `Bearer ${token || ''}` },
-    })
-      .then(r => r.json())
-      .then(data => {
-        const allModels = data.data || []
-        const filtered = allModels.filter(m => {
-          const id = m.id || ''
-          return id.startsWith(`${providerAlias}/`) || id.startsWith(`${providerId}/`)
+    import('../api/client').then(({ default: client }) => {
+      client.get(`/providers/${providerId}/models/list`)
+        .then(res => {
+          const models = (res.data?.models || []).map(m => ({ id: `${providerAlias}/${m.id}`, type: m.type }))
+          setAvailableModels(models)
+          if (models.length > 0 && !selectedModel) setSelectedModel(models[0].id)
         })
-        setAvailableModels(filtered)
-        if (filtered.length > 0 && !selectedModel) setSelectedModel(filtered[0].id)
-      })
-      .catch(() => {})
-  }, [providerId, providerAlias, token])
+        .catch(() => {})
+    })
+  }, [providerId, providerAlias])
 
   const buildBody = () => ({
     model: selectedModel || `${providerId}/default`,

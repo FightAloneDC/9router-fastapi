@@ -12,6 +12,7 @@ class GeminiCliConfig(BaseProviderConfig):
     ALIAS: str = "gc"
     BASE_URL: str = "https://generativelanguage.googleapis.com"
     SERVICE_KINDS: list[str] = []
+    CATEGORY: str = "free"
     DEPRECATED: bool = True
     DEPRECATION_NOTICE: str = "Risk Notice: This provider uses a subscription/OAuth session not officially licensed for proxy/router use. Account may be restricted or banned. Use at your own risk."
 
