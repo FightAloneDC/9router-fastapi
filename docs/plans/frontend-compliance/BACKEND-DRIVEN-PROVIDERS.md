@@ -1,4 +1,4 @@
-# PS Frontend Compliance Plan
+# Backend-Driven Providers Plan
 
 **Goal:** Eliminate hardcoded provider-specific logic from the frontend. All provider metadata, OAuth flow types, and UI config should be served from the backend via a new `/providers/catalog` endpoint.
 

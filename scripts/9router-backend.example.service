@@ -1,0 +1,15 @@
+[Unit]
+Description=9Router FastAPI Backend
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/9router-fastapi/backend
+ExecStartPre=/path/to/9router-fastapi/backend/.venv/bin/python -m alembic upgrade head
+ExecStart=/path/to/9router-fastapi/backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 9000 --reload
+Restart=on-failure
+RestartSec=5
+EnvironmentFile=/path/to/9router-fastapi/backend/.env
+
+[Install]
+WantedBy=default.target

@@ -68,7 +68,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 # 9Router — AI Model Proxy Router
 
-Self-hosted OpenRouter alternative. Clients send OpenAI-compatible requests → 9Router resolves model alias to upstream provider → forwards request → returns response. Supports 50+ AI providers (OpenAI, Anthropic, Google, DeepSeek, Groq, etc.) with OAuth, API key, free tier, and web cookie auth.
+Self-hosted OpenRouter alternative. Clients send OpenAI-compatible requests → 9Router resolves model alias to upstream provider → forwards request → returns response. Supports 90+ AI providers (OpenAI, Anthropic, Google, DeepSeek, Groq, Qoder, etc.) with OAuth, API key, free tier, and web cookie auth.
 
 **This is a faithful port from Next.js (at `_reference/`)**. When fixing bugs or adding features, ALWAYS read the original source code in `_reference/` first and replicate behavior exactly. Do not improvise unless explicitly asked.
 
@@ -95,36 +95,63 @@ docker compose -f docker-compose.dev.yml up --build
 
 ```
 backend/app/
-├── main.py              # FastAPI app factory, lifespan, CORS, 13 routers
+├── main.py              # FastAPI app factory, lifespan, CORS
 ├── config.py            # pydantic-settings (DATABASE_URL, SECRET_KEY, etc.)
 ├── database.py          # AsyncSession factory, get_db() dependency
 ├── models/              # SQLAlchemy models (provider, user, api_key, combo, usage, etc.)
 ├── schemas/             # Pydantic schemas (request/response validation)
 ├── routers/
 │   ├── auth.py          # /auth/* — login, status, me
-│   ├── providers/       # ★ MODULAR: connections, models, nodes, testing, validation
-│   ├── v1_proxy.py      # ★ POST /v1/chat/completions — core proxy (streaming + non-streaming)
+│   ├── providers/       # ★ MODULAR: connections, models, nodes, testing, validation, catalog
+│   ├── v1_proxy/        # ★ MODULAR: chat.py, messages.py, responses.py, embeddings.py, etc.
 │   ├── oauth.py         # OAuth flows (PKCE, device code, Codex, Cursor, GitHub, etc.)
 │   └── ...              # combos, usage, quota, mitm, cli_tools, proxy_pools, settings, console
 ├── services/
 │   ├── proxy.py         # ★★ Model→provider resolution, upstream URL/header construction
 │   ├── auth.py          # bcrypt + JWT
-│   ├── oauth.py         # PKCE utilities, OAuth handlers (1800+ lines)
-│   └── oauth_providers.py # OAuth config per provider (1400+ lines)
-└── utils/pkce.py        # PKCE helper
+│   ├── oauth.py         # PKCE utilities, OAuth handlers
+│   ├── oauth_providers.py # OAuth config per provider
+│   ├── catalog.py       # Provider catalog collector (serves metadata to frontend)
+│   └── token_refresh.py # Background token refresh (OAuth + Qoder)
+└── utils/               # pkce.py, helpers
+
+backend/app/providers/   # ★★ MODULAR PROVIDER SYSTEM (PS architecture)
+├── __init__.py          # AVAILABLE_PROVIDERS, PROVIDER_X constants (90+ providers)
+├── base.py              # BaseProviderConfig + BaseMetadata + BaseProviderHandler
+├── provider.py          # Provider class — unified accessor
+├── oauth_base.py        # BaseOAuthHandler → AuthCodeHandler, DeviceCodeHandler, ImportTokenHandler
+└── <provider>/          # Each provider has its own module
+    ├── config.py        # ProviderConfig + ProviderMetadata
+    ├── handler.py       # ProviderHandler (validate, build_request, fetch_models)
+    ├── constants.py     # Provider-specific constants
+    ├── auth.py          # Auth helpers (if needed)
+    ├── models.py        # Model fetching/parsing
+    └── oauth.py         # OAuth handler (if OAuth provider)
 
 frontend/src/
-├── App.jsx              # Routes (16 pages), all dashboard routes wrapped in ProtectedRoute
+├── App.jsx              # Routes, fetches catalog on mount
 ├── api/                 # Axios API modules (providers.js has 40+ methods)
-├── constants/
-│   └── providers.js     # ★ Provider definitions, ALIAS_TO_ID, ID_TO_ALIAS
+├── constants/           # cliTools.js, mitmTools.js, navigation.js, skills.js
 ├── pages/
-│   ├── ProvidersPage.jsx      # ★ Provider list (1050 lines)
-│   ├── ProviderDetailPage.jsx # ★ Provider detail (2179 lines — jantung project)
+│   ├── ProvidersPage.jsx      # ★ Provider list (uses catalogStore)
+│   ├── ProviderDetailPage.jsx # ★ Provider detail (uses catalogStore)
 │   └── ...                    # 14 other pages
-├── components/          # UI components + modals
-├── stores/              # Zustand stores (authStore, notificationStore)
+├── components/          # UI components + modals (OAuthModal uses catalogStore)
+├── stores/              # Zustand stores (authStore, catalogStore, notificationStore)
 └── utils/               # Helpers
+
+docs/
+├── archives/            # Archived docs (completed plans, audits, QA reports)
+│   ├── agent-instructions/
+│   ├── completed-plans/
+│   ├── investigations/
+│   ├── porting/
+│   ├── provider-audits/
+│   └── qa-reports/
+├── plans/               # Active plans
+│   └── frontend-compliance/BACKEND-DRIVEN-PROVIDERS.md
+├── qoder/               # Qoder provider documentation
+└── reference/           # Reference docs (combo system, etc.)
 ```
 
 ## Critical Patterns (MUST KNOW)
@@ -136,56 +163,78 @@ All provider-specific data stored in a single `data` JSON TEXT column, NOT separ
 ```
 **NEVER add new columns to provider tables** — put everything in the JSON blob.
 
-### 2. Constants Duplication (Backend + Frontend)
-Provider config (URLs, auth headers, validation types) exists in TWO places:
-- **Backend**: `routers/providers/constants.py` (DEFAULTS), `services/proxy.py` (PROVIDER_CONFIGS, ALIAS_TO_ID)
-- **Frontend**: `constants/providers.js` (ALIAS_TO_ID, ID_TO_ALIAS, provider definitions)
-- **ALWAYS sync both sides** when adding/changing providers.
+### 2. PS Architecture (Provider-Specific)
+All provider-specific logic MUST live in `backend/app/providers/<provider>/`. This is the **PS Rule**.
+- **Backend**: Each provider has its own module (config, handler, constants, auth, models, oauth)
+- **Frontend**: Fetches provider metadata from `/providers/catalog` endpoint via `catalogStore`
+- **NEVER hardcode provider-specific logic in routers, services, or frontend**
 
-### 3. Alias System
+### 3. Provider Catalog System
+Frontend gets all provider metadata from backend via `/providers/catalog`:
+- **Backend**: `services/catalog.py` collects metadata from all provider configs
+- **Frontend**: `stores/catalogStore.js` fetches and caches catalog
+- **No more hardcoded constants**: `constants/providers.js` is replaced by catalogStore
+- Categories (free, oauth, apiKey, etc.) derived from backend config, not frontend lists
+
+### 4. Alias System
 Model strings use 2-5 char aliases: `"an/claude-sonnet-4"` → alias "an" → provider "anthropic"
-- Backend: `services/proxy.py` → `ALIAS_TO_ID` (82 entries)
-- Frontend: `constants/providers.js` → `ALIAS_TO_ID`, `ID_TO_ALIAS`
+- Backend: `services/proxy.py` → `ALIAS_TO_ID` (90+ entries)
+- Frontend: Derived from catalog (not hardcoded)
 
-### 4. Provider Categories
+### 5. Provider Categories
 | Category | Auth | Examples |
 |----------|------|----------|
 | Free | None | kiro, qwen, opencode |
 | Free Tier | Free API key | openrouter, nvidia, gemini |
-| OAuth | OAuth flow | claude, codex, github, cursor |
-| API Key | User's API key | ~40 providers (openai, anthropic, deepseek, groq) |
+| OAuth | OAuth flow | claude, codex, github, cursor, qoder |
+| API Key | User's API key | ~50 providers (openai, anthropic, deepseek, groq) |
 | Web Cookie | Browser cookie | grok-web, perplexity-web |
 | Custom | Custom endpoint | OpenAI/Anthropic-compatible nodes |
 
-### 5. Sensitive Data Stripping
+### 6. Sensitive Data Stripping
 `apiKey`, `accessToken`, `refreshToken`, `idToken` are stripped from `/providers/client` responses.
 
-### 6. Provider Node Cascade
+### 7. Provider Node Cascade
 Deleting a node auto-deletes all connections referencing it.
+
+### 8. Token Refresh
+- **OAuth tokens**: Background refresh via `token_refresh.py`
+- **Qoder tokens**: Dual refresh — on-demand (401/403 retry) + background (every 5 min)
+- **API keys**: No refresh needed (user provides)
 
 ## Key Files to Read First
 
 When working on a bug or feature, trace the full round-trip:
 
 ### Backend
-1. `backend/app/main.py` — See all 13 routers
-2. `backend/app/routers/providers/connections.py` — Provider CRUD (422 lines, most complex)
-3. `backend/app/services/proxy.py` — Core proxy routing (531 lines)
-4. `backend/app/routers/v1_proxy.py` — Proxy endpoint (270 lines)
-5. `backend/app/routers/providers/models.py` — Model fetching/clearing (563 lines)
-6. `backend/app/routers/providers/nodes.py` — Node CRUD + validation (391 lines)
-7. `backend/app/models/provider.py` — ProviderConnection + ProviderNode models
-8. `backend/app/schemas/provider.py` — All Pydantic schemas (227 lines)
-9. `backend/app/services/oauth.py` — OAuth service (1818 lines)
-10. `backend/app/services/oauth_providers.py` — OAuth configs per provider (1390 lines)
+1. `backend/app/main.py` — See all routers
+2. `backend/app/routers/providers/connections.py` — Provider CRUD (most complex)
+3. `backend/app/services/proxy.py` — Core proxy routing
+4. `backend/app/routers/v1_proxy/` — Proxy endpoints (chat.py, messages.py, responses.py)
+5. `backend/app/routers/providers/models.py` — Model fetching/clearing
+6. `backend/app/routers/providers/nodes.py` — Node CRUD + validation
+7. `backend/app/routers/providers/catalog.py` — Provider catalog endpoint
+8. `backend/app/models/provider.py` — ProviderConnection + ProviderNode models
+9. `backend/app/schemas/provider.py` — All Pydantic schemas
+10. `backend/app/services/catalog.py` — Catalog collector
+11. `backend/app/services/oauth.py` — OAuth service
+12. `backend/app/services/token_refresh.py` — Token refresh (OAuth + Qoder)
 
 ### Frontend
-1. `frontend/src/App.jsx` — Routing (70 lines)
-2. `frontend/src/api/providers.js` — API calls (68 lines, 40+ methods)
-3. `frontend/src/constants/providers.js` — Provider definitions (171 lines)
-4. `frontend/src/pages/ProvidersPage.jsx` — Provider list page (1050 lines)
-5. `frontend/src/pages/ProviderDetailPage.jsx` — Provider detail page (2179 lines)
-6. `frontend/src/stores/authStore.js` — Auth state management
+1. `frontend/src/App.jsx` — Routing, catalog fetch on mount
+2. `frontend/src/api/providers.js` — API calls (40+ methods)
+3. `frontend/src/stores/catalogStore.js` — Provider metadata from backend
+4. `frontend/src/pages/ProvidersPage.jsx` — Provider list page
+5. `frontend/src/pages/ProviderDetailPage.jsx` — Provider detail page
+6. `frontend/src/components/OAuthModal.jsx` — OAuth modal (uses catalogStore)
+7. `frontend/src/stores/authStore.js` — Auth state management
+
+### Provider Module (when adding/modifying providers)
+1. `backend/app/providers/<provider>/config.py` — Config + Metadata
+2. `backend/app/providers/<provider>/handler.py` — Request building, validation
+3. `backend/app/providers/<provider>/constants.py` — Provider-specific constants
+4. `backend/app/providers/<provider>/oauth.py` — OAuth handler (if applicable)
+5. `backend/app/providers/base.py` — Base classes (BaseProviderConfig, BaseMetadata, BaseProviderHandler)
 
 ### Reference (Original Next.js)
 - `_reference/providers.js` — Original providers page (52KB)
@@ -199,22 +248,22 @@ When working on a bug or feature, trace the full round-trip:
 1. docker compose -f docker-compose.dev.yml logs backend
 2. curl http://localhost:9000/providers/client -H "Authorization: Bearer $TOKEN"
 3. Check snake_case vs camelCase field names
-4. Check ProvidersPage.jsx: setConnections(connRes.data?.connections || connRes.data || [])
-5. Check api/client.js: is 401 interceptor firing incorrectly?
+4. Check ProvidersPage.jsx: uses catalogStore, not hardcoded constants
+5. Check catalogStore: is catalog loaded? (useCatalogStore.getState().loaded)
 ```
 
 ### Test connection fails
 ```
 1. POST /providers/{id}/test → check response
 2. Check console log viewer (WS /console/ws)
-3. Check constants.py: is validationType correct?
-4. Check validation.py: can server reach the upstream endpoint?
+3. Check provider handler: is validationType correct?
+4. Check provider constants: can server reach the upstream endpoint?
 ```
 
 ### Fetch models not working
 ```
 1. GET /providers/{conn_id}/models
-2. Check PROVIDER_MODELS_CONFIG in models.py — does provider have entry?
+2. Check provider handler: does provider have fetch_models()?
 3. Check auth header: Bearer vs x-api-key vs query param
 4. Is it node-based (compatible) or built-in provider?
 ```
@@ -225,6 +274,15 @@ When working on a bug or feature, trace the full round-trip:
 2. Check callback endpoint receives code correctly
 3. Check token exchange: is client_id/secret valid?
 4. Codex: check local proxy server on port 1455
+5. Qoder: check device code flow + PAT import support
+```
+
+### Token expired (Qoder)
+```
+1. Check background refresh: docker compose logs backend | grep refresh
+2. Check on-demand refresh: proxy should catch 401/403 and retry
+3. Check refresh token: is it still valid? (48h expiry)
+4. If refresh expired: user needs to re-import PAT
 ```
 
 ## Common Commands
@@ -247,6 +305,9 @@ TOKEN=$(curl -s -X POST http://localhost:9000/auth/login \
 # List providers
 curl http://localhost:9000/providers/client -H "Authorization: Bearer $TOKEN"
 
+# Get provider catalog
+curl http://localhost:9000/providers/catalog -H "Authorization: Bearer $TOKEN"
+
 # Test proxy
 curl -X POST http://localhost:9000/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -255,14 +316,20 @@ curl -X POST http://localhost:9000/v1/chat/completions \
 
 # View API docs
 open http://localhost:9000/docs
+
+# Run tests locally (use .venv-local, NOT .venv)
+cd backend && ../.venv-local/bin/pytest tests/ -v
 ```
 
 ## Rules for AI Agents
 
 1. **READ BEFORE WRITE** — Always read the original Next.js source in `_reference/` before implementing. User expects faithful porting, not redesign.
 2. **No new DB columns** — Provider data goes in the JSON `data` blob.
-3. **Sync constants** — Backend + Frontend provider configs must stay in sync.
+3. **PS Rule** — All provider-specific logic MUST live in `backend/app/providers/<provider>/`. No hardcoded provider checks in routers or frontend.
 4. **ProviderDetailPage is the heart** — ALL features in the Providers menu must be fully fixed and working.
 5. **No half-measures** — Verify fixes in the running app, not just in code. If user says something is broken, they're right.
 6. **Optimistic updates** — Toggle UI state first, then API call. Rollback on failure.
 7. **Docker auto-reloads** — Backend and frontend have volume mounts + hot reload. Don't rebuild containers for code changes.
+8. **Use catalogStore** — Frontend gets provider metadata from backend via `/providers/catalog`. Don't hardcode provider lists.
+9. **Respect backup files** — Files with `-v*` suffix are intentional backups in `.gitignore`. Don't delete or modify them.
+10. **Docs in English** — All documentation and code comments must be in English. Use chat language (Indonesian) for user communication.
