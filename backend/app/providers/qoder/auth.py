@@ -1,4 +1,4 @@
-"""Qoder authentication: device flow + PAT import.
+"""Qoder authentication: device flow + PAT import + token refresh.
 
 Device Flow:
   1. Generate a PKCE pair locally and a fresh nonce + machine id.
@@ -13,8 +13,11 @@ PAT Import:
   3. Fetch user info with the regular token
   4. Store regular token for COSY signing
 
-Tokens live ~30 days; refresh is a no-op (the upstream refresh endpoint
-returns 403 for our flow). Users re-run login when expired.
+Token Refresh:
+  PAT-exchanged job tokens (jt-xxx) expire in ~24 hours.
+  qodercli uses /api/v1/jobToken/refresh (on openapi.qoder.sh) to get a new
+  access token using the refresh_token.  The old endpoint on center.qoder.sh
+  returns 403 — this one works.
 """
 
 import base64
@@ -29,6 +32,7 @@ from .constants import (
     QODER_DEVICE_TOKEN_URL,
     QODER_LOGIN_URL,
     QODER_OPENAPI_BASE,
+    QODER_REFRESH_TOKEN_URL,
     QODER_USERINFO_URL,
 )
 
@@ -299,6 +303,59 @@ async def exchange_personal_token(
     }
 
 
+async def refresh_job_token(
+    refresh_token: str,
+    timeout: float = 15.0,
+) -> dict[str, Any] | None:
+    """Refresh a Qoder job token using the refresh token.
+
+    Uses POST /api/v1/jobToken/refresh on openapi.qoder.sh
+    (same endpoint qodercli uses). Returns None if the refresh
+    token itself is expired/invalid.
+
+    Args:
+        refresh_token: The refresh_token (jrt-xxx) from the original exchange
+        timeout: Request timeout in seconds
+
+    Returns:
+        Dict with access_token, refresh_token, expires_in — or None on failure
+    """
+    if not refresh_token:
+        return None
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(
+            QODER_REFRESH_TOKEN_URL,
+            json={"refresh_token": refresh_token},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+        )
+
+    if response.status_code != 200:
+        return None
+
+    data = response.json()
+
+    access_token = (
+        data.get("token")
+        or data.get("device_token")
+        or data.get("access_token")
+    )
+    if not access_token:
+        return None
+
+    expires_in = data.get("expires_in") or data.get("expireTimeS")
+    new_refresh_token = data.get("refreshToken") or data.get("refresh_token")
+
+    return {
+        "access_token": access_token,
+        "refresh_token": new_refresh_token or refresh_token,
+        "expires_in": expires_in,
+    }
+
+
 async def import_pat(
     personal_token: str,
     timeout: float = 30.0,
@@ -350,3 +407,123 @@ async def import_pat(
         "machine_id": machine_id,
         "organization_id": user_info.get("organization_id"),
     }
+
+
+async def try_refresh_connection(db, connection_id: str) -> bool:
+    """Try to refresh a Qoder connection's token using its refresh_token.
+
+    Called by the proxy when a 401/403 is received from Qoder upstream.
+    Updates the connection's accessToken and refreshToken in the DB.
+
+    Args:
+        db: AsyncSession
+        connection_id: ProviderConnection UUID string
+
+    Returns:
+        True if refresh succeeded and DB was updated, False otherwise.
+    """
+    import json
+    import logging
+    from datetime import datetime, timezone
+    from sqlalchemy import select
+    from app.models.provider import ProviderConnection
+
+    logger = logging.getLogger(__name__)
+
+    result = await db.execute(
+        select(ProviderConnection).where(ProviderConnection.id == connection_id)
+    )
+    conn = result.scalar_one_or_none()
+    if not conn or not conn.data:
+        return False
+
+    data = json.loads(conn.data)
+    refresh_token = data.get("refreshToken")
+    if not refresh_token:
+        logger.warning(f"Qoder refresh: no refresh_token for connection {connection_id}")
+        return False
+
+    new_tokens = await refresh_job_token(refresh_token)
+    if not new_tokens:
+        logger.warning(f"Qoder refresh: refresh_token expired for connection {connection_id}")
+        return False
+
+    # Update tokens in DB
+    data["accessToken"] = new_tokens["access_token"]
+    data["refreshToken"] = new_tokens["refresh_token"]
+    data["testStatus"] = "connected"
+    data.pop("lastError", None)
+    data.pop("lastErrorAt", None)
+    conn.data = json.dumps(data)
+
+    await db.flush()
+
+    # Invalidate proxy cache
+    from app.services.proxy import invalidate_connection_cache
+    invalidate_connection_cache("qoder")
+
+    logger.info(f"Qoder refresh: token refreshed for connection {connection_id}")
+    return True
+
+
+async def refresh_all_qoder_connections() -> dict[str, bool]:
+    """Background task: refresh all Qoder connections that have a refresh_token.
+
+    Called periodically (every 5 min via token_refresh_loop) to keep tokens
+    alive even when connections are idle.
+
+    Returns:
+        Dict mapping connection_id -> success bool
+    """
+    import json
+    import logging
+    from sqlalchemy import select
+    from app.models.provider import ProviderConnection
+    from app.database import async_sessionmaker, engine
+
+    logger = logging.getLogger(__name__)
+    results: dict[str, bool] = {}
+
+    async_session = async_sessionmaker(engine, expire_on_commit=False)
+    async with async_session() as db:
+        stmt = select(ProviderConnection).where(
+            ProviderConnection.provider == "qoder",
+            ProviderConnection.is_active == True,
+        )
+        rows = await db.execute(stmt)
+        connections = rows.scalars().all()
+
+        for conn in connections:
+            data = json.loads(conn.data) if conn.data else {}
+            refresh_token = data.get("refreshToken")
+            if not refresh_token:
+                continue
+
+            conn_id = str(conn.id)
+            new_tokens = await refresh_job_token(refresh_token)
+            if not new_tokens:
+                logger.warning(f"Qoder background refresh FAILED: {conn_id[:8]}... (refresh_token expired)")
+                results[conn_id] = False
+                continue
+
+            data["accessToken"] = new_tokens["access_token"]
+            data["refreshToken"] = new_tokens["refresh_token"]
+            data["testStatus"] = "connected"
+            data.pop("lastError", None)
+            data.pop("lastErrorAt", None)
+            conn.data = json.dumps(data)
+            db.add(conn)
+
+            logger.info(f"Qoder background refresh OK: {conn_id[:8]}...")
+            results[conn_id] = True
+
+        await db.commit()
+
+    # Invalidate proxy cache after all refreshes
+    try:
+        from app.services.proxy import invalidate_connection_cache
+        invalidate_connection_cache("qoder")
+    except Exception:
+        pass
+
+    return results

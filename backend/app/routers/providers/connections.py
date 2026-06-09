@@ -21,6 +21,7 @@ from app.routers.providers.helpers import (
     _sanitize_connection,
 )
 from app.routers.providers.validation import _validate_provider
+from app.services.proxy import invalidate_connection_cache
 from app.schemas.provider import (
     ProviderConnectionCreate,
     ProviderConnectionOut,
@@ -335,6 +336,10 @@ async def update_provider(
 
     await db.flush()
     await db.refresh(conn)
+
+    # Invalidate proxy cache so next request sees updated is_active state
+    invalidate_connection_cache(conn.provider)
+
     return _connection_to_out(conn)
 
 

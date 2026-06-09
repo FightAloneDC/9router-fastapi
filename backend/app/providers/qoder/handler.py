@@ -1,7 +1,7 @@
 """Qoder provider handler — COSY-signed requests, custom URL/headers/body/envelope.
 
 Qoder is a special provider that uses:
-- COSY signing (RSA + AES + MD5) for authentication
+- qodercli-style COSY headers for authentication
 - WAF-bypass body encoding
 - Custom request/response transformation
 - OAuth device flow + PAT import for connection setup
@@ -11,6 +11,7 @@ All Qoder-specific code lives in providers/qoder/.
 
 import json
 import logging
+import time
 from typing import Any
 
 from app.providers.base import BaseProviderHandler, ValidateResult
@@ -24,13 +25,28 @@ class QoderHandler(BaseProviderHandler):
     async def validate(self, api_key: str, data: dict | None = None) -> ValidateResult:
         """Validate Qoder credentials.
 
-        Qoder validation is complex (requires COSY signing).
-        For now, we trust that the token is valid if it exists.
-        Real validation happens when the user makes a chat request.
+        Validate against Qoder user info rather than only checking that the
+        token exists. PAT-exchanged job tokens can be present but inactive;
+        Qoder then returns TOKEN_EXPIRE/Login expired during model/chat calls.
         """
         if not api_key:
             return ValidateResult(valid=False, error="No Qoder token configured")
-        return ValidateResult(valid=True, models=None)
+        start = time.monotonic()
+        try:
+            from app.providers.qoder.auth import fetch_user_info
+
+            await fetch_user_info(api_key)
+            return ValidateResult(
+                valid=True,
+                models=None,
+                latency_ms=int((time.monotonic() - start) * 1000),
+            )
+        except Exception as e:
+            return ValidateResult(
+                valid=False,
+                error=str(e)[:200],
+                latency_ms=int((time.monotonic() - start) * 1000),
+            )
 
     def build_upstream_url(self, base_url: str, stream: bool = False, data: dict | None = None, model: str = "") -> str:
         """Qoder uses COSY-signed endpoint with Encode=1."""
@@ -40,7 +56,8 @@ class QoderHandler(BaseProviderHandler):
     def build_headers(self, api_key: str, stream: bool = False, data: dict | None = None) -> dict[str, str]:
         """Build COSY-signed headers for Qoder.
 
-        This is the most complex part — COSY signing uses RSA+AES+MD5.
+        The actual content signature is rebuilt in build_request_body() for
+        providers using a custom raw body.
         """
         from app.providers.qoder.cosy import build_cosy_headers
         from app.providers.qoder.constants import QODER_CHAT_URL_ENCODED
@@ -52,8 +69,8 @@ class QoderHandler(BaseProviderHandler):
         if not user_id:
             raise ValueError("Qoder userId missing — cannot build COSY headers")
 
-        # Build COSY headers with empty body
-        # The actual COSY signing with body happens in build_request_body()
+        # Build placeholder headers with empty body. The actual content
+        # signature is rebuilt in build_request_body().
         cosy_headers = build_cosy_headers(
             body=b"",
             request_url=QODER_CHAT_URL_ENCODED,
@@ -128,7 +145,8 @@ class QoderHandler(BaseProviderHandler):
         encoded_str = qoder_encode_body(plain_bytes)
         encoded_bytes = encoded_str.encode("latin1")
 
-        # Build COSY headers with the ENCODED body
+        # Build COSY headers with the encoded body, matching qodercli-style
+        # Bearer COSY authorization for /algo endpoints.
         cosy_headers = build_cosy_headers(
             body=encoded_bytes,
             request_url=QODER_CHAT_URL_ENCODED,

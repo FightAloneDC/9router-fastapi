@@ -54,6 +54,7 @@ async def check_and_refresh_tokens() -> dict:
     skipped = 0
     errors = []
 
+    # ── Refresh OAuth tokens ──
     async with async_session() as session:
         stmt = select(ProviderConnection).where(
             ProviderConnection.is_active == True,  # noqa: E712
@@ -166,6 +167,20 @@ async def check_and_refresh_tokens() -> dict:
                 })
 
         await session.commit()
+
+    # ── Refresh Qoder tokens (always refresh, not just near expiry) ──
+    try:
+        from app.providers.qoder.auth import refresh_all_qoder_connections
+        qoder_results = await refresh_all_qoder_connections()
+        for conn_id, success in qoder_results.items():
+            if success:
+                refreshed += 1
+                logger.info("Qoder background refresh OK: %s", conn_id[:8])
+            else:
+                failed += 1
+                logger.warning("Qoder background refresh FAILED: %s", conn_id[:8])
+    except Exception as e:
+        logger.error("Qoder background refresh error: %s", e)
 
     summary = {
         "refreshed": refreshed,

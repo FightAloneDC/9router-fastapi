@@ -199,6 +199,13 @@ async def messages_endpoint(
             track_request_end(active_request_id)
             last_error_detail = e.response.text[:500]
             last_error_status = e.response.status_code
+
+            # ── Qoder auto-refresh on 401/403 ──
+            if e.response.status_code in (401, 403):
+                from app.routers.v1_proxy.shared import _try_qoder_token_refresh
+                if await _try_qoder_token_refresh(target, db):
+                    continue
+
             if not _should_fallback_on_error(e.response.status_code, e.response.text):
                 try:
                     error_body = e.response.json()

@@ -328,7 +328,7 @@ async def test_model(
         if signed_headers:
             send_headers = signed_headers
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=20.0) as client:
             if body.kind == "embedding":
                 # For embeddings, use the embeddings endpoint
                 cfg_url = url.replace("/chat/completions", "/embeddings")

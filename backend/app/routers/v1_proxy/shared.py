@@ -49,6 +49,17 @@ def _should_fallback_on_error(status_code: int, detail: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+async def _try_qoder_token_refresh(target: ProxyTarget, db) -> bool:
+    """Try to refresh Qoder token on 401/403. Returns True if refreshed."""
+    if target.provider != "qoder" or not target.connection_id:
+        return False
+    try:
+        from app.providers.qoder.auth import try_refresh_connection
+        return await try_refresh_connection(db, target.connection_id)
+    except Exception:
+        return False
+
+
 async def _build_provider_request(
     target: ProxyTarget, body: dict, conn_data: dict,
 ) -> tuple[bytes | None, dict[str, str] | None]:
