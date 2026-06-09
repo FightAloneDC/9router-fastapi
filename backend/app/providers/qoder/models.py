@@ -1,5 +1,9 @@
 """Qoder model catalog fetcher.
 
+⚠️  CRITICAL: Do NOT modify this provider without user approval.
+    Extensive investigation and trial-error has been done.
+    See docs/qoder/BUG-FIXING-LOG.md before making any changes.
+
 Calls /algo/api/v2/model/list (COSY-signed) on the inference host to get
 the live catalog for an authenticated Qoder account, then caches the
 per-model `model_config` blocks by key.

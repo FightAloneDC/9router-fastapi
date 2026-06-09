@@ -1,5 +1,9 @@
 """Qoder COSY signing.
 
+⚠️  CRITICAL: Do NOT modify this provider without user approval.
+    Extensive investigation and trial-error has been done.
+    See docs/qoder/BUG-FIXING-LOG.md before making any changes.
+
 Qoder uses two auth shapes in qodercli:
 - Plain bearer headers for a few account/config endpoints.
 - ``Bearer COSY.{payload}.{signature}`` for `/algo` service endpoints such as

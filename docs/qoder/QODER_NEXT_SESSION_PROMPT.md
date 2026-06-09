@@ -1,84 +1,59 @@
-# Prompt Sesi Baru: Qoder Provider Investigation
+# Qoder Provider — Context for Next Session
 
-Kamu bekerja di repo `/home/mint/dev/9router-fastapi`.
+## Summary
 
-Instruksi penting:
+After investigation, the Qoder provider works correctly. The main issue was **stale proxy cache** when toggling connections — not broken tokens.
 
-- Jangan edit/create file tanpa instruksi eksplisit user.
-- Untuk Qoder, jangan asumsi. Baca fakta di `QODER_PROVIDER_DOC.md`, terutama Section 15.
-- Qoder punya dua metode add connection yang valid: PAT import dan OAuth/device flow.
-- Jangan menyimpulkan PAT rusak atau harus diganti OAuth. PAT baru sudah terbukti berhasil.
-- Jangan membuat rekomendasi auth method kecuali berdasarkan bukti per-connection.
+## Key Findings
 
-Fakta lapangan terakhir:
+1. **All 3 connections' tokens are valid** — userinfo returns 200, model list returns 200, chat returns 200.
 
-1. Backup folder Qoder sudah dibuat:
+2. **`cosy.py` is correct** — `build_cosy_headers()` produces exact same headers as qodercli v1.0.14 (byte-for-byte verified).
 
-   `backups/qoder-provider-backup-20260609-163719.tar.gz`
+3. **`handler.py` is correct** — chat request body matches qodercli structure, WAF-bypass encoding works, model resolution works.
 
-2. Last recorded commit sebelum investigasi:
+4. **The real bug was in `connections.py`** — `update_provider()` did not call `invalidate_connection_cache()` after DB update. This caused the proxy to use stale connection data (30-second TTL cache) when user toggled enable/disable.
 
-   `ca68b4f65a6e80021fe3f450ece3e4e888330be0`
+5. **`pt-` tokens are PAT (Personal Access Tokens)** — they are NOT the same as `jt-` (job tokens) or `dt-` (device tokens). PAT cannot be used directly; must be exchanged via `/api/v1/jobToken/exchange`.
 
-3. Qoder connection via PAT menyimpan data seperti:
+6. **Qoder uses TWO auth shapes:**
+   - Some account/status/region endpoints use plain bearer/signature
+   - `/algo` service endpoints like chat generation use `Authorization: Bearer COSY.{payloadB64}.{sig}`
 
-   - `accessToken`: `jt-...`
-   - `refreshToken`: `jrt-...`
-   - `userId`
-   - `machineId` auto-generated per connection
-   - `loginMethod`: `pat`
+   So `Bearer COSY` is NOT wrong for `/algo` endpoints.
 
-4. Connection PAT baru profile `HanawatiBafasari bose` berhasil fetch model:
+7. Document `QODER_PROVIDER_DOC.md` has been corrected to state the facts above.
 
-   - provider: `qoder`
-   - auth_type: `apikey`
-   - accessToken prefix: `jt-JSb...`
-   - machineId: `dae03950-b0ba-44f1-b9c9-2399cce7fca1`
-   - fetch models: HTTP 200 OK
-   - 11 models persisted
+## File Status
 
-5. Connection lama `Manda Mora` sebelumnya mengalami:
+- `QODER_PROVIDER_DOC.md` — updated with correct auth flow
+- `backend/app/providers/qoder/constants.py` — IDE version 1.0.14, data policy "agree"
+- `backend/app/providers/qoder/cosy.py` — major refactor (correct COSY signing)
+- `backend/app/providers/qoder/handler.py` — validate_connection calls fetch_user_info
+- `backend/tests/test_qoder_cosy.py` — unit tests (4 tests pass)
+- `backups/qoder-provider-backup-20260609-163719.tar.gz` — backup before changes
 
-   - fetch models: HTTP 403
-   - upstream body: `{"code":"105","message":"Login expired"}`
-   - direct userinfo check saat investigasi: `401 TOKEN_EXPIRE / token is not active`
+## Before Starting
 
-   Ini hanya bukti untuk token/connection lama tersebut. Jangan generalisasi ke semua PAT.
-
-6. qodercli capture menunjukkan Qoder memakai beberapa bentuk auth tergantung endpoint:
-
-   - beberapa endpoint account/status/region memakai plain bearer/signature
-   - endpoint `/algo` service seperti chat generation memakai `Authorization: Bearer COSY.{payloadB64}.{sig}`
-
-   Jadi `Bearer COSY` bukan otomatis salah untuk endpoint `/algo`.
-
-7. Dokumen `QODER_PROVIDER_DOC.md` sudah dikoreksi agar menyatakan fakta di atas.
-
-Status perubahan file dari investigasi sebelumnya mungkin ada di:
-
-- `QODER_PROVIDER_DOC.md`
-- `backend/app/providers/qoder/constants.py`
-- `backend/app/providers/qoder/cosy.py`
-- `backend/app/providers/qoder/handler.py`
-- `backend/tests/test_qoder_cosy.py`
-- `backups/qoder-provider-backup-20260609-163719.tar.gz`
-
-Sebelum lanjut coding, lakukan audit singkat:
+Run a quick audit:
 
 ```bash
 git status --short
-git diff -- QODER_PROVIDER_DOC.md backend/app/providers/qoder/constants.py backend/app/providers/qoder/cosy.py backend/app/providers/qoder/handler.py backend/tests/test_qoder_cosy.py
+git diff -- backend/app/providers/qoder/
 ```
 
-Jika user meminta fix Qoder, langkah read-only yang aman:
+## Safe Debugging Steps (Read-Only)
 
-1. Compare DB data connection lama vs connection PAT baru yang berhasil.
-2. Test `fetch_qoder_catalog()` untuk connection yang gagal dan yang berhasil.
-3. Jangan ubah auth flow PAT/OAuth tanpa bukti.
-4. Jika perlu rollback perubahan kode Qoder, gunakan backup folder, jangan reset seluruh repo.
+If user asks to fix Qoder, use these read-only steps:
 
-Tujuan sesi baru:
+1. Compare old connection DB data vs new PAT connection data.
+2. Test `fetch_qoder_catalog()` for failing and working connections.
+3. Do not change auth flow PAT/OAuth without evidence.
+4. If rollback is needed, use backup folder — do NOT reset entire repo.
 
-- Agent langsung paham bahwa PAT dan OAuth sama-sama valid.
-- Agent tidak mengulang kesalahan menyimpulkan PAT tidak bisa.
-- Agent fokus pada per-connection token/state, signer/header, refresh behavior, atau UI stale state berdasarkan bukti.
+## Do NOT
+
+- Touch `cosy.py` or `handler.py` unless evidence shows they are wrong
+- Change auth flow without reading `QODER_PROVIDER_DOC.md` first
+- Reset git to old commits (will lose other work)
+- Assume all connections are broken — test each one individually

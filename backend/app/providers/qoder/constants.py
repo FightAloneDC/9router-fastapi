@@ -1,4 +1,9 @@
-"""Qoder API constants ported from Node.js implementation."""
+"""Qoder API constants ported from Node.js implementation.
+
+⚠️  CRITICAL: Do NOT modify this provider without user approval.
+    Extensive investigation and trial-error has been done.
+    See docs/qoder/BUG-FIXING-LOG.md before making any changes.
+"""
 
 # Base URLs
 QODER_OPENAPI_BASE = "https://openapi.qoder.sh"

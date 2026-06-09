@@ -93,3 +93,10 @@ frontend/dist/
 tmp/
 dist/
 build/
+
+# Agent folders
+.agents/
+.claude/
+.codex/
+.hermes/
+.openclaude/

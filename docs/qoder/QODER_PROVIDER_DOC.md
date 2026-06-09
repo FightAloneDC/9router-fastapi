@@ -1,19 +1,19 @@
 # Qoder Provider — Flow & Architecture Documentation
 
-> Dokumen ini adalah hasil pembelajaran menyeluruh terhadap `backend/app/providers/qoder/`.
-> Gunakan sebagai referensi untuk menghindari scan ulang di sesi lain.
+> This document is a comprehensive reference for `backend/app/providers/qoder/`.
+> Use as reference to avoid re-scanning in other sessions.
 
 ---
 
 ## 1. Overview
 
-Qoder adalah provider AI yang **tidak menggunakan format OpenAI-compatible**. Ia punya protokol sendiri:
+Qoder is an AI provider that **does not use OpenAI-compatible format**. It has its own protocol:
 
-- **COSY Signing** — autentikasi hybrid RSA + AES + MD5 (bukan Bearer token biasa)
-- **WAF-bypass encoding** — body request di-encode untuk menghindari pattern-matching Alibaba Cloud WAF
-- **Custom envelope response** — response dibungkus dalam envelope, bukan JSON OpenAI langsung
-- **OAuth device flow** — autentikasi menggunakan custom device token flow (bukan standard OAuth2)
-- **PAT import** — alternatif: import Personal Access Token (pt-xxx) yang di-exchange ke regular token
+- **COSY Signing** — hybrid RSA + AES + MD5 authentication (not a standard Bearer token)
+- **WAF-bypass encoding** — request body is encoded to avoid Alibaba Cloud WAF pattern-matching
+- **Custom envelope response** — response is wrapped in an envelope, not direct OpenAI JSON
+- **OAuth device flow** — authentication uses a custom device token flow (not standard OAuth2)
+- **PAT import** — alternative: import Personal Access Token (pt-xxx) which is exchanged for a regular token
 
 Provider ID: `qoder`, Alias: `qd`, Category: Special (complex auth).
 
@@ -75,7 +75,7 @@ User provides PAT (pt-xxx) from qoder.com/account/integrations
   │     - Auth: Bearer {token} (fallback: ?accessToken= query param)
   │     - Returns: { id, email, name, ... }
   │
-  └─ 3. import_pat() orchestrasi
+  └─ 3. import_pat() orchestrates
         - Generates UUID machine_id
         - Returns connection data: { access_token, refresh_token, user_id, email, display_name, machine_id }
 ```
@@ -83,14 +83,14 @@ User provides PAT (pt-xxx) from qoder.com/account/integrations
 ### 3c. Token Refresh
 
 - Endpoint: POST https://center.qoder.sh/algo/api/v3/user/refresh_token
-- Dalam praktik: **no-op** — upstream returns 403 untuk flow ini
-- Token expire ~30 hari, user harus re-login
+- In practice: **no-op** — upstream returns 403 for this flow
+- Token expires ~30 days, user must re-login
 
 ---
 
 ## 4. COSY Signing System
 
-Setiap request ke inference endpoint **wajib** di-sign dengan COSY. Ini adalah bagian paling kompleks.
+Every request to the inference endpoint **must** be signed with COSY. This is the most complex part.
 
 ### 4a. Build COSY Headers (`build_cosy_headers()`)
 
@@ -98,7 +98,7 @@ Setiap request ke inference endpoint **wajib** di-sign dengan COSY. Ini adalah b
 Input: body_bytes, request_url, user_id, auth_token, name, email, machine_id
 
 Step 1: Encrypt user info
-  - Generate AES-128 key (16 chars dari UUID)
+  - Generate AES-128 key (16 chars from UUID)
   - AES-CBC encrypt: { uid, security_oauth_token, name, aid, email }
   - RSA-PKCS1v15 encrypt: AES key → "Cosy-Key"
 
@@ -107,7 +107,7 @@ Step 2: Build payload
   - payload_b64 = base64(payload_json)
 
 Step 3: Compute signature
-  - sig_path = URL path tanpa prefix /algo
+  - sig_path = URL path without /algo prefix
   - sig_input = "{payload_b64}\n{cosy_key}\n{timestamp}\n{body}\n{sig_path}"
   - sig = MD5(sig_input)
   - Authorization = "Bearer COSY.{payload_b64}.{sig}"
@@ -141,19 +141,19 @@ RSA public key: 1024-bit, extracted from Qoder IDE v0.9.
 
 ## 5. WAF-Bypass Encoding (`encoding.py`)
 
-Body request di-encode sebelum dikirim untuk menghindari Alibaba Cloud WAF:
+Request body is encoded before sending to avoid Alibaba Cloud WAF:
 
 ```
 Algorithm:
   1. base64-encode plaintext bytes (standard alphabet)
-  2. Rearrange: split jadi 3 bagian, reorder jadi [tail][mid][head]
-  3. Substitute: setiap karakter di-map dari standard alphabet ke custom alphabet
+  2. Rearrange: split into 3 parts, reorder as [tail][mid][head]
+  3. Substitute: each character is mapped from standard alphabet to custom alphabet
 
 Standard: ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/
 Custom:   _doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!
 '=' → '$'
 
-URL endpoint ditambah &Encode=1 supaya server tahu perlu decode.
+URL endpoint is appended with &Encode=1 for the server to know to decode.
 ```
 
 ---
@@ -164,7 +164,7 @@ URL endpoint ditambah &Encode=1 supaya server tahu perlu decode.
 
 Input: OpenAI-format `{ model, messages, tools, max_tokens, ... }`
 
-Output: Qoder-format body dengan struktur:
+Output: Qoder-format body with structure:
 ```json
 {
   "request_id": "uuid",
@@ -207,16 +207,16 @@ Output: Qoder-format body dengan struktur:
 ```
 
 Key transformations:
-- `messages`: system messages dipisah ke field `system`, sisanya di `messages`
-- `tools`: dipertahankan dari request asli
-- `max_tokens`: dari body request atau default 32768
-- `session_id`: stable hash dari user_id + model_key
-- `chat_record_id`: stable hash dari model + messages + tools + max_tokens
-- `model_config`: full config dari catalog (wajib ada, fetch dari API jika tidak ada)
+- `messages`: system messages are extracted to the `system` field, the rest in `messages`
+- `tools`: preserved from the original request
+- `max_tokens`: from request body or default 32768
+- `session_id`: stable hash from user_id + model_key
+- `chat_record_id`: stable hash from model + messages + tools + max_tokens
+- `model_config`: full config from catalog (required, fetch from API if missing)
 
 ### 6b. Qoder → OpenAI (Response Unwrapping)
 
-Qoder mengirim response dalam 3 format:
+Qoder sends response in 3 formats:
 
 **Streaming (SSE):**
 ```
@@ -229,9 +229,9 @@ data: [DONE]
 Unwrapping: extract `body` field, sanitize newlines, forward as standard SSE.
 
 **Non-streaming:**
-- Bisa SSE (Qoder selalu SSE bahkan untuk non-stream) → unwrap + aggregate chunks
-- Bisa plain JSON envelope → unwrap `body` field
-- Bisa direct OpenAI format → pass through
+- Can be SSE (Qoder always uses SSE even for non-stream) → unwrap + aggregate chunks
+- Can be plain JSON envelope → unwrap `body` field
+- Can be direct OpenAI format → pass through
 
 ---
 
@@ -280,18 +280,18 @@ Alias → canonical key mapping:
 
 ## 8. Handler (`handler.py`) — Core Proxy Logic
 
-`QoderHandler` extends `BaseProviderHandler` dengan 5 override:
+`QoderHandler` extends `BaseProviderHandler` with 5 overrides:
 
 ### 8a. `validate(api_key, data)`
-- Minimal: hanya cek apakah token ada
-- Real validation terjadi saat chat request (karena perlu COSY signing)
+- Minimal: only checks if token exists
+- Real validation happens during chat request (because COSY signing is needed)
 
 ### 8b. `build_upstream_url(base_url, stream, data, model)`
 - Always returns: `https://api3.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1`
 
 ### 8c. `build_headers(api_key, stream, data)`
-- Build COSY-signed headers (with empty body — real signing di `build_request_body`)
-- Requires: `userId` dalam data
+- Build COSY-signed headers (with empty body — real signing in `build_request_body`)
+- Requires: `userId` in data
 
 ### 8d. `build_request_body(model, body, data)` — **the complex one**
 ```
@@ -432,23 +432,23 @@ ProviderSpecificData stored in connection:
 
 ## 13. Dependencies
 
-- `cryptography` — RSA + AES encryption untuk COSY signing
+- `cryptography` — RSA + AES encryption for COSY signing
 - `httpx` — async HTTP client
 - `pydantic` — schemas
-- No external Qoder SDK — semuanya di-port manual dari Node.js
+- No external Qoder SDK — everything is manually ported from Node.js
 
 ---
 
 ## 14. Edge Cases & Gotchas
 
-1. **Model config wajib ada** — Qoder silently downgrades model jika model_config salah/tidak ada. Handler raise error jika config tidak ditemukan di cache.
-2. **COSY signing dengan encoded body** — `build_headers()` dipanggil dengan body kosong (placeholder), signing sesungguhnya terjadi di `build_request_body()` dengan encoded body.
-3. **Token format bervariasi** — Response bisa `token`, `accessToken`, atau `access_token`. Code handles all.
-4. **User ID format bervariasi** — Bisa `id`, `uid`, atau `userId`. Code handles all.
-5. **No pre-flight for Qoder** — Endpoint selalu mengembalikan streaming SSE, jadi pre-flight check di-skip.
-6. **Accept-Encoding: identity** — gzip triggers signature validation failure di Qoder CDN.
-7. **Cache key collision risk** — Cache key berdasarkan SHA256(`qoder:{user_id_or_token}`), unlikely collision.
-8. **Non-stream = streaming** — Qoder selalu mengirim SSE format bahkan untuk non-streaming request. Handler unwrap + aggregate chunks.
+1. **Model config is required** — Qoder silently downgrades model if model_config is wrong/missing. Handler raises error if config is not found in cache.
+2. **COSY signing with encoded body** — `build_headers()` is called with empty body (placeholder), actual signing happens in `build_request_body()` with encoded body.
+3. **Token format varies** — Response can be `token`, `accessToken`, or `access_token`. Code handles all.
+4. **User ID format varies** — Can be `id`, `uid`, or `userId`. Code handles all.
+5. **No pre-flight for Qoder** — Endpoint always returns streaming SSE, so pre-flight check is skipped.
+6. **Accept-Encoding: identity** — gzip triggers signature validation failure on Qoder CDN.
+7. **Cache key collision risk** — Cache key is based on SHA256(`qoder:{user_id_or_token}`), unlikely collision.
+8. **Non-stream = streaming** — Qoder always sends SSE format even for non-streaming requests. Handler unwraps + aggregates chunks.
 
 ---
 

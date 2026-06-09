@@ -1,5 +1,9 @@
 """Qoder provider handler — COSY-signed requests, custom URL/headers/body/envelope.
 
+⚠️  CRITICAL: Do NOT modify this provider without user approval.
+    Extensive investigation and trial-error has been done.
+    See docs/qoder/BUG-FIXING-LOG.md before making any changes.
+
 Qoder is a special provider that uses:
 - qodercli-style COSY headers for authentication
 - WAF-bypass body encoding

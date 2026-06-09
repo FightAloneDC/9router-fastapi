@@ -1,4 +1,9 @@
-"""Qoder OAuth handler — Device Token flow (custom)."""
+"""Qoder OAuth handler — Device Token flow (custom).
+
+⚠️  CRITICAL: Do NOT modify this provider without user approval.
+    Extensive investigation and trial-error has been done.
+    See docs/qoder/BUG-FIXING-LOG.md before making any changes.
+"""
 
 from __future__ import annotations
 
@@ -24,7 +29,7 @@ class QoderOAuthHandler(DeviceCodeHandler):
         "centerBaseUrl": "https://center.qoder.sh",
         "chatBaseUrl": "https://api3.qoder.sh",
         "deviceTokenUrl": "https://openapi.qoder.sh/api/v1/deviceToken/poll",
-        "refreshUrl": "https://center.qoder.sh/algo/api/v3/user/refresh_token",
+        "refreshUrl": "https://openapi.qoder.sh/api/v1/jobToken/refresh",
         "userInfoUrl": "https://openapi.qoder.sh/api/v1/userinfo",
         "quotaUsageUrl": "https://openapi.qoder.sh/api/v2/quota/usage",
         "loginUrl": "https://qoder.com/device/selectAccounts",

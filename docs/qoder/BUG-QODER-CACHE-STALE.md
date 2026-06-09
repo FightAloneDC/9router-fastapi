@@ -1,34 +1,34 @@
-# Qoder Bug: Model Test Gagal Setelah Switch Connection (Cache Stale)
+# Qoder Bug: Model Test Fails After Switching Connection (Stale Cache)
 
 > **Status:** Fixed  
-> **Tanggal:** 2026-06-09  
-> **File terkait:** `backend/app/routers/providers/connections.py`  
-> **Severity:** High — semua provider terdampak, bukan hanya Qoder
+> **Date:** 2026-06-09  
+> **Related file:** `backend/app/routers/providers/connections.py`  
+> **Severity:** High — all providers affected, not just Qoder
 
 ---
 
-## 1. Gejala
+## 1. Symptoms
 
-User melaporkan pola berikut di halaman `/providers/qoder`:
+User reported the following pattern on `/providers/qoder` page:
 
-1. Test model `qmodel_latest` via button di connection A → **berhasil**
+1. Test model `qmodel_latest` via button on connection A → **success**
 2. Disable connection A, enable connection B → test model → **error "Login expired"**
-3. Switch kembali ke connection A (disable B, enable A) → test model → **error "Login expired"**
-4. Backend test via API langsung (`POST /providers/{id}/test`) → **berhasil** (token valid)
+3. Switch back to connection A (disable B, enable A) → test model → **error "Login expired"**
+4. Backend test via direct API (`POST /providers/{id}/test`) → **success** (token valid)
 
-Token di DB tidak pernah expired. Error "Login expired" muncul hanya di UI/frontend
-setelah operasi switch connection.
+Token in DB never expired. "Login expired" error only appeared in UI/frontend
+after connection switch operations.
 
 ---
 
 ## 2. Root Cause
 
-### Connection Cache Tidak Di-invalidate
+### Connection Cache Not Invalidated
 
-`update_provider()` (PATCH `/providers/{id}`) mengupdate `is_active` di DB
-tetapi **tidak memanggil `invalidate_connection_cache()`**.
+`update_provider()` (PATCH `/providers/{id}`) updates `is_active` in DB
+but **did not call `invalidate_connection_cache()`**.
 
-Proxy service menggunakan in-memory cache dengan TTL 30 detik:
+Proxy service uses in-memory cache with 30-second TTL:
 
 ```python
 # backend/app/services/proxy.py
@@ -44,56 +44,56 @@ async def get_connections_cached(db, provider_id, force_refresh=False):
     # ... fresh DB query
 ```
 
-Cache hanya di-invalidate di 2 tempat:
-- `set_connection_error()` — saat connection error tercatat
-- `clear_connection_error()` — saat connection error dibersihkan
+Cache was only invalidated in 2 places:
+- `set_connection_error()` — when connection error is recorded
+- `clear_connection_error()` — when connection error is cleared
 
-Bukan di `update_provider()`.
+Not in `update_provider()`.
 
-### Dampak pada Model Test
+### Impact on Model Test
 
-Flow model test (`POST /models/test`):
+Model test flow (`POST /models/test`):
 
 ```
 Frontend → POST /models/test { model: "qd/qoder/qmodel_latest" }
   → resolve_model_to_targets()
     → _build_target_for_provider()
       → get_connections_cached("qoder")  ← STALE CACHE
-        → select_connection_for_provider()  ← pilih dari data lama
+        → select_connection_for_provider()  ← selects from old data
 ```
 
-Setelah user disable A dan enable B:
-- Cache masih menganggap A active, B tidak active
-- Model test bisa salah resolve ke connection yang sudah di-disable
-- Atau tidak menemukan connection sama sekali (jika B belum di-cache)
+After user disables A and enables B:
+- Cache still thinks A is active, B is not active
+- Model test may incorrectly resolve to disabled connection
+- Or not find any connection at all (if B is not yet cached)
 
-### Mengapa "Login expired"?
+### Why "Login expired"?
 
-Qoder mengembalikan error `{"code":"105","message":"Login expired"}` (HTTP 403)
-saat COSY-signed request menggunakan token yang sudah tidak valid atau
-connection yang sudah tidak aktif di sisi Qoder.
+Qoder returns error `{"code":"105","message":"Login expired"}` (HTTP 403)
+when COSY-signed request uses an invalid token or connection that is
+no longer active on Qoder's side.
 
-Error ini muncul karena model test salah resolve ke connection yang
-token-nya sudah expire di upstream Qoder (bukan di DB kita).
+This error appeared because model test incorrectly resolved to a connection
+whose token had expired in upstream Qoder (not in our DB).
 
 ---
 
-## 3. Langkah Investigasi
+## 3. Investigation Steps
 
-### 3.1 Verifikasi Token Masih Valid
+### 3.1 Verify Token Still Valid
 
 ```bash
-# Test userinfo langsung
+# Test userinfo directly
 curl -s "https://openapi.qoder.sh/api/v1/userinfo" \
   -H "Authorization: Bearer jt-JSbNAAWAsAGziAm4TAd3DIes"
-# Result: HTTP 200, user info lengkap
+# Result: HTTP 200, full user info
 
 # Test COSY-signed model list
-# (via backend python script dengan build_cosy_headers)
+# (via backend python script with build_cosy_headers)
 # Result: HTTP 200, 11 models
 ```
 
-### 3.2 Verifikasi DB State
+### 3.2 Verify DB State
 
 ```sql
 SELECT id, name, test_status,
@@ -103,7 +103,7 @@ FROM provider_connections WHERE provider = 'qoder';
 -- All connections: test_status='connected', last_error=NULL
 ```
 
-### 3.3 Verifikasi Backend Test Endpoint
+### 3.3 Verify Backend Test Endpoint
 
 ```bash
 curl -X POST "http://localhost:9000/providers/{id}/test" \
@@ -116,8 +116,8 @@ curl -X POST "http://localhost:9000/providers/{id}/test" \
 ```bash
 # Check where invalidate_connection_cache is called
 grep -rn "invalidate_connection_cache" backend/app/ --include="*.py"
-# Result: hanya di set_connection_error dan clear_connection_error
-# TIDAK di update_provider
+# Result: only in set_connection_error and clear_connection_error
+# NOT in update_provider
 ```
 
 ### 3.5 Reproduce Bug
@@ -125,73 +125,72 @@ grep -rn "invalidate_connection_cache" backend/app/ --include="*.py"
 ```bash
 # Disable connection
 curl -X PATCH "/providers/{id}" -d '{"is_active": false}'
-# Immediate model test → masih bisa resolve ke connection lama (stale cache)
+# Immediate model test → still resolves to old connection (stale cache)
 ```
 
 ### 3.6 Verify Fix
 
 ```bash
-# Setelah fix: disable connection
+# After fix: disable connection
 curl -X PATCH "/providers/{id}" -d '{"is_active": false}'
-# Immediate model test → "No active connection found" (cache sudah fresh)
+# Immediate model test → "No active connection found" (cache is fresh)
 ```
 
 ---
 
-## 4. Solusi
+## 4. Solution
 
-### Perubahan
+### Changes
 
 File: `backend/app/routers/providers/connections.py`
 
 ```python
-# Tambah import
+# Added import
 from app.services.proxy import invalidate_connection_cache
 
-# Di update_provider(), setelah db.flush():
+# In update_provider(), after db.flush():
 await db.flush()
 await db.refresh(conn)
 
-# ↓ Tambahan
+# ↓ Added
 invalidate_connection_cache(conn.provider)
 
 return _connection_to_out(conn)
 ```
 
-### Kenapa Ini Cukup
+### Why This Is Sufficient
 
-- `invalidate_connection_cache()` menghapus entry cache untuk provider tersebut
-- Request berikutnya akan `get_connections_cached()` → cache miss → fresh DB query
-- `is_active` yang baru langsung ter-reflect
-- Tidak perlu `reset_connection_rotation()` karena round-robin state tidak terkait
-  dengan enable/disable connection
+- `invalidate_connection_cache()` removes cache entry for that provider
+- Next request calls `get_connections_cached()` → cache miss → fresh DB query
+- New `is_active` value is immediately reflected
+- No need for `reset_connection_rotation()` because round-robin state is not related
+  to enable/disable connection
 
 ---
 
-## 5. Dampak
+## 5. Impact
 
-### Sebelum Fix
+### Before Fix
 
 ```
-User toggle connection → DB update → cache stale (30 detik)
-→ model test / chat request pakai data lama → error "Login expired"
+User toggle connection → DB update → cache stale (30 seconds)
+→ model test / chat request uses old data → error "Login expired"
 ```
 
-### Setelah Fix
+### After Fix
 
 ```
 User toggle connection → DB update → cache invalidated
-→ model test / chat request langsung pakai data baru → OK
+→ model test / chat request uses new data → OK
 ```
 
 ### Scope
 
-Bug ini **bukan Qoder-specific**. Semua provider yang menggunakan
-connection cache (`get_connections_cached`) terdampak. Qoder paling
-terasa karena:
-1. Token Qoder expire lebih cepat dari provider lain
-2. Qoder return error spesifik "Login expired" yang confusing
-3. User Qoder sering switch antar connection (multi-account)
+This bug is **NOT Qoder-specific**. All providers using connection cache
+(`get_connections_cached`) are affected. Qoder is most noticeable because:
+1. Qoder tokens expire faster than other providers
+2. Qoder returns specific "Login expired" error which is confusing
+3. Qoder users often switch between connections (multi-account)
 
 ---
 
@@ -199,20 +198,20 @@ terasa karena:
 
 ### Manual Test
 
-1. Buka `/providers/qoder`
-2. Test model `qmodel_latest` → harus OK
-3. Disable connection, enable connection lain
-4. Test model `qmodel_latest` → harus OK (atau "No active connection" jika yang baru belum fetch models)
-5. Switch kembali → test lagi → harus OK
+1. Open `/providers/qoder`
+2. Test model `qmodel_latest` → should be OK
+3. Disable connection, enable another connection
+4. Test model `qmodel_latest` → should be OK (or "No active connection" if new one hasn't fetched models yet)
+5. Switch back → test again → should be OK
 
 ### Automated Check
 
 ```bash
-# Pastikan backend tidak error setelah fix
+# Verify backend has no errors after fix
 docker compose -f docker-compose.dev.yml logs backend --tail=5 2>&1 | grep -i error
 # Expected: no errors
 
-# Pastikan import benar
+# Verify import is correct
 docker compose -f docker-compose.dev.yml exec backend uv run python3 -c "
 from app.routers.providers.connections import update_provider
 print('Import OK')

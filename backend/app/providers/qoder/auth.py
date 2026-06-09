@@ -1,5 +1,9 @@
 """Qoder authentication: device flow + PAT import + token refresh.
 
+⚠️  CRITICAL: Do NOT modify this provider without user approval.
+    Extensive investigation and trial-error has been done.
+    See docs/qoder/BUG-FIXING-LOG.md before making any changes.
+
 Device Flow:
   1. Generate a PKCE pair locally and a fresh nonce + machine id.
   2. Open https://qoder.com/device/selectAccounts?challenge=...&nonce=...

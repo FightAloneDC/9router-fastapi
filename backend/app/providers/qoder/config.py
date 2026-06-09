@@ -2,6 +2,10 @@
 
 Static provider characteristics — runtime data (OAuth tokens, PAT tokens)
 come from ProviderConnection.data in the database.
+
+⚠️  CRITICAL: Do NOT modify this provider without user approval.
+    Extensive investigation and trial-error has been done.
+    See docs/qoder/BUG-FIXING-LOG.md before making any changes.
 """
 
 from app.providers.base import BaseMetadata, BaseProviderConfig

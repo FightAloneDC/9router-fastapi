@@ -1,122 +1,122 @@
 # Qoder Bug Fixing — Full Discussion Log
 
-Tanggal: 2026-06-06 s/d 2026-06-09 (3 hari)
+Date: 2026-06-06 to 2026-06-09 (3 days)
 
 ---
 
-## Daftar Isi
+## Table of Contents
 
 1. [Bug #1: Connection Switch → Stale Cache (Login Expired)](#bug-1-connection-switch--stale-cache-login-expired)
-2. [Bug #2: Token Expire ~24 Jam (Bukan 30 Hari)](#bug-2-token-expire-24-jam-bukan-30-hari)
-3. [Bug #3: Refresh Token Endpoint Salah (403)](#bug-3-refresh-token-endpoint-salah-403)
-4. [Bug #4: Auto-Refresh Tidak Jalan untuk Idle Connection](#bug-4-auto-refresh-tidak-jalan-untuk-idle-connection)
-5. [Investigasi Mendalam: Qoder Token Types](#investigasi-mendalam-qoder-token-types)
-6. [Ringkasan Perubahan](#ringkasan-perubahan)
-7. [Dokumen Terkait](#dokumen-terkait)
+2. [Bug #2: Token Expires ~24 Hours (Not 30 Days)](#bug-2-token-expires-24-hours-not-30-days)
+3. [Bug #3: Refresh Token Endpoint Wrong (403)](#bug-3-refresh-token-endpoint-wrong-403)
+4. [Bug #4: Auto-Refresh Not Working for Idle Connections](#bug-4-auto-refresh-not-working-for-idle-connections)
+5. [Deep Investigation: Qoder Token Types](#deep-investigation-qoder-token-types)
+6. [Changes Summary](#changes-summary)
+7. [Related Documents](#related-documents)
 
 ---
 
 ## Bug #1: Connection Switch → Stale Cache (Login Expired)
 
-### Gejala
+### Symptoms
 
-User toggle enable/disable koneksi Qoder di UI, kemudian request berikutnya gagal dengan error "Login expired" meskipun koneksi yang di-enable punya token valid.
+User toggles enable/disable Qoder connection in UI, then subsequent requests fail with "Login expired" error even though the enabled connection has a valid token.
 
 ### Root Cause
 
-`update_provider()` di `backend/app/routers/providers/connections.py` **tidak memanggil `invalidate_connection_cache()`** setelah update DB. Proxy service punya cache 30 detik untuk connection data, jadi perubahan di DB tidak langsung ter-refleksi.
+`update_provider()` in `backend/app/routers/providers/connections.py` **did not call `invalidate_connection_cache()`** after DB update. Proxy service has a 30-second cache for connection data, so DB changes were not immediately reflected.
 
-### Investigasi
+### Investigation
 
 ```
 User toggle connection → update_provider() → DB updated
                                         ↓
-                              Cache masih pakai data lama (30s TTL)
+                              Cache still uses old data (30s TTL)
                                         ↓
-                              Proxy resolve → pakai koneksi lama (expired)
+                              Proxy resolve → uses old connection (expired)
                                         ↓
                               "Login expired"
 ```
 
 ### Fix
 
-Tambahkan `invalidate_connection_cache(conn.provider)` di `update_provider()` setelah `db.flush()` + `db.refresh(conn)`:
+Added `invalidate_connection_cache(conn.provider)` in `update_provider()` after `db.flush()` + `db.refresh(conn)`:
 
 ```python
 # backend/app/routers/providers/connections.py (line ~341)
 await db.flush()
 await db.refresh(conn)
-invalidate_connection_cache(conn.provider)  # ← TAMBAHAN
+invalidate_connection_cache(conn.provider)  # ← ADDED
 ```
 
-### File
+### Files
 
-- `backend/app/routers/providers/connections.py` — tambah import + invalidate cache
+- `backend/app/routers/providers/connections.py` — added import + invalidate cache
 
 ---
 
-## Bug #2: Token Expire ~24 Jam (Bukan 30 Hari)
+## Bug #2: Token Expires ~24 Hours (Not 30 Days)
 
-### Gejala
+### Symptoms
 
-Token Qoder yang di-import via PAT (`pt-xxx`) expire dalam ~24 jam, padahal dokumentasi qodercli bilang token berlaku ~30 hari.
+Qoder tokens imported via PAT (`pt-xxx`) expire in ~24 hours, even though qodercli documentation says tokens last ~30 days.
 
 ### Root Cause
 
-**Token types berbeda:**
+**Different token types:**
 
-| Token Type | Prefix | Lifetime | Sumber |
+| Token Type | Prefix | Lifetime | Source |
 |------------|--------|----------|--------|
-| Device Token | `dt-` | ~30 hari | Device flow (qodercli login) |
-| Job Token | `jt-` | ~24 jam | PAT exchange (`/api/v1/jobToken/exchange`) |
-| Refresh Token | `jrt-` | ~48 jam | Bersama job token |
+| Device Token | `dt-` | ~30 days | Device flow (qodercli login) |
+| Job Token | `jt-` | ~24 hours | PAT exchange (`/api/v1/jobToken/exchange`) |
+| Refresh Token | `jrt-` | ~48 hours | Comes with job token |
 
-9router menggunakan PAT import → dapat **Job Token** (`jt-`) yang expire ~24 jam, bukan Device Token (`dt-`) yang ~30 hari.
+9router uses PAT import → gets **Job Token** (`jt-`) which expires in ~24 hours, not Device Token (`dt-`) which lasts ~30 days.
 
-### Investigasi
+### Investigation
 
 ```bash
-# qodercli menyimpan device token (dt-) di ~/.qoder/.auth/user (encrypted)
+# qodercli stores device token (dt-) in ~/.qoder/.auth/user (encrypted)
 # 9router PAT exchange → /api/v1/jobToken/exchange → job token (jt-)
 ```
 
-Response dari PAT exchange:
+Response from PAT exchange:
 ```json
 {
   "token": "jt-xxx",
-  "expires_in": 86400000,    // 24 jam (dalam ms)
+  "expires_in": 86400000,    // 24 hours (in ms)
   "refreshToken": "jrt-xxx",
-  "refresh_token_expires_in": 172800000  // 48 jam
+  "refresh_token_expires_in": 172800000  // 48 hours
 }
 ```
 
-### Keputusan
+### Decision
 
-Tidak implement device flow karena:
-- Device flow butuh browser interaction (user harus buka URL)
-- PAT exchange lebih mudah (copy-paste token)
-- Dengan auto-refresh, token tidak pernah expire selama server jalan
+Not implementing device flow because:
+- Device flow requires browser interaction (user must open URL)
+- PAT exchange is easier (copy-paste token)
+- With auto-refresh, tokens never expire while server is running
 
 ---
 
-## Bug #3: Refresh Token Endpoint Salah (403)
+## Bug #3: Refresh Token Endpoint Wrong (403)
 
-### Gejala
+### Symptoms
 
-Semua percobaan refresh token gagal dengan HTTP 403.
+All refresh token attempts fail with HTTP 403.
 
 ### Root Cause
 
-Endpoint refresh yang dipakai **SALAH**:
+The refresh endpoint used was **WRONG**:
 
-| | Salah (9router lama) | Benar (qodercli) |
+| | Wrong (old 9router) | Correct (qodercli) |
 |---|---|---|
 | URL | `center.qoder.sh/algo/api/v3/user/refresh_token` | `openapi.qoder.sh/api/v1/jobToken/refresh` |
 | Response | 403 Forbidden | 200 OK |
 
-### Investigasi
+### Investigation
 
-Reverse-engineering dari `qodercli.js` (33MB bundle):
+Reverse-engineering from `qodercli.js` (33MB bundle):
 
 ```javascript
 // qodercli source (minified)
@@ -155,21 +155,21 @@ QODER_REFRESH_TOKEN_URL = f"{QODER_OPENAPI_BASE}/api/v1/jobToken/refresh"
 
 ---
 
-## Bug #4: Auto-Refresh Tidak Jalan untuk Idle Connection
+## Bug #4: Auto-Refresh Not Working for Idle Connections
 
-### Gejala
+### Symptoms
 
-Koneksi Qoder yang tidak dipakai > 24 jam expire dan tidak bisa dipakai lagi tanpa re-import PAT.
+Qoder connections that are idle for >24 hours expire and cannot be used without re-importing PAT.
 
 ### Root Cause
 
-Tidak ada mekanisme auto-refresh. Token hanya di-refresh saat request gagal (on-demand). Kalau tidak ada request, token expire diam-diam.
+No auto-refresh mechanism. Tokens were only refreshed when a request failed (on-demand). If no requests were made, tokens expired silently.
 
 ### Fix: Dual Refresh Strategy
 
-#### 1. On-Demand Refresh (saat request gagal)
+#### 1. On-Demand Refresh (when request fails)
 
-Proxy mendeteksi 401/403 dari Qoder → coba refresh → retry request (transparent ke client).
+Proxy detects 401/403 from Qoder → tries refresh → retries request (transparent to client).
 
 ```python
 # backend/app/routers/v1_proxy/chat.py
@@ -180,7 +180,7 @@ except httpx.HTTPStatusError as e:
             continue  # retry with fresh token
 ```
 
-Juga saat build request gagal:
+Also when build request fails:
 ```python
 except Exception as e:
     if target.provider == "qoder" and target.connection_id:
@@ -189,16 +189,16 @@ except Exception as e:
             continue  # retry with fresh token
 ```
 
-#### 2. Background Refresh (periodik setiap 5 menit)
+#### 2. Background Refresh (periodic every 5 minutes)
 
-Task background yang sudah ada di `token_refresh.py` dimodifikasi untuk juga me-refresh Qoder tokens:
+Existing background task in `token_refresh.py` was modified to also refresh Qoder tokens:
 
 ```python
 # backend/app/services/token_refresh.py
 async def check_and_refresh_tokens():
     # ... existing OAuth refresh logic ...
     
-    # Tambah Qoder refresh
+    # Add Qoder refresh
     from app.providers.qoder.auth import refresh_all_qoder_connections
     qoder_results = await refresh_all_qoder_connections()
 ```
@@ -215,99 +215,99 @@ async def refresh_all_qoder_connections() -> dict[str, bool]:
             # ... update DB
 ```
 
-### Token Lifecycle dengan Auto-Refresh
+### Token Lifecycle with Auto-Refresh
 
 ```
-Jam 0:     Import PAT → dapat jt-xxx + jrt-xxx
-Jam 0-24:  Token fresh, langsung jalan
-Jam 5:     Background refresh → token baru, timer reset
-Jam 10:    Background refresh → token baru, timer reset
-Jam 15:    Background refresh → token baru, timer reset
+Hour 0:     Import PAT → get jt-xxx + jrt-xxx
+Hour 0-24:  Token fresh, works directly
+Hour 5:     Background refresh → new token, timer reset
+Hour 10:    Background refresh → new token, timer reset
+Hour 15:    Background refresh → new token, timer reset
 ...
-(selama server jalan, token tidak pernah expire)
+(while server is running, tokens never expire)
 
-Jam X:     Server mati
-Jam X+48:  Refresh token expire → perlu re-import PAT
+Hour X:     Server down
+Hour X+48:  Refresh token expires → need to re-import PAT
 ```
 
 ---
 
-## Investigasi Mendalam: Qoder Token Types
+## Deep Investigation: Qoder Token Types
 
 ### Device Token (`dt-xxx`)
 
-- Didapat dari: Device flow (browser-based OAuth)
-- Lifetime: ~30 hari
-- Disimpan: `~/.qoder/.auth/user` (encrypted)
-- Dipakai: qodercli, Veria IDE
-- Bisa di-refresh: Ya, dengan device flow
+- Source: Device flow (browser-based OAuth)
+- Lifetime: ~30 days
+- Stored: `~/.qoder/.auth/user` (encrypted)
+- Used by: qodercli, Veria IDE
+- Refreshable: Yes, via device flow
 
 ### Job Token (`jt-xxx`)
 
-- Didapat dari: PAT exchange (`/api/v1/jobToken/exchange`)
-- Lifetime: ~24 jam
-- Disimpan: Database (plaintext in JSON blob)
-- Dipakai: 9router
-- Bisa di-refresh: Ya, dengan refresh token
+- Source: PAT exchange (`/api/v1/jobToken/exchange`)
+- Lifetime: ~24 hours
+- Stored: Database (plaintext in JSON blob)
+- Used by: 9router
+- Refreshable: Yes, with refresh token
 
 ### Refresh Token (`jrt-xxx`)
 
-- Didapat dari: Bersama job token
-- Lifetime: ~48 jam
-- Disimpan: Database (plaintext in JSON blob)
+- Source: Comes with job token
+- Lifetime: ~48 hours
+- Stored: Database (plaintext in JSON blob)
 - Endpoint: `POST openapi.qoder.sh/api/v1/jobToken/refresh`
-- Setiap refresh: dapat access token BARU + refresh token BARU
+- Each refresh: get NEW access token + NEW refresh token
 
 ### Personal Access Token (`pt-xxx`)
 
-- Didapat dari: qoder.com/account/integrations
-- Lifetime: Tidak expire (selama tidak di-revoke)
-- Dipakai: Untuk exchange ke job token
-- Tidak bisa langsung dipakai untuk API calls
+- Source: qoder.com/account/integrations
+- Lifetime: Does not expire (until revoked)
+- Used for: Exchange to job token
+- Cannot be used directly for API calls
 
-### Flow Lengkap
+### Complete Flow
 
 ```
-User dapat PAT (pt-xxx) dari qoder.com
+User gets PAT (pt-xxx) from qoder.com
         ↓
 9router: POST /api/v1/jobToken/exchange {personal_token: "pt-xxx"}
         ↓
 Response: {token: "jt-xxx", refreshToken: "jrt-xxx"}
         ↓
-Simpan di DB, pakai untuk COSY-signed requests
+Store in DB, use for COSY-signed requests
         ↓
-Setiap 5 menit: POST /api/v1/jobToken/refresh {refresh_token: "jrt-xxx"}
+Every 5 minutes: POST /api/v1/jobToken/refresh {refresh_token: "jrt-xxx"}
         ↓
-Response: {token: "jt-yyy", refreshToken: "jrt-yyy"}  ← token baru
+Response: {token: "jt-yyy", refreshToken: "jrt-yyy"}  ← new token
         ↓
 Update DB, reset timer
 ```
 
 ---
 
-## Ringkasan Perubahan
+## Changes Summary
 
 ### Files Modified
 
-| File | Perubahan |
-|------|-----------|
+| File | Changes |
+|------|---------|
 | `backend/app/providers/qoder/constants.py` | Fix refresh endpoint URL |
-| `backend/app/providers/qoder/auth.py` | Tambah `refresh_job_token()`, `try_refresh_connection()`, `refresh_all_qoder_connections()` |
+| `backend/app/providers/qoder/auth.py` | Added `refresh_job_token()`, `try_refresh_connection()`, `refresh_all_qoder_connections()` |
 | `backend/app/providers/qoder/handler.py` | `validate_connection()` calls `fetch_user_info()` |
 | `backend/app/providers/qoder/cosy.py` | Refactor COSY signing |
-| `backend/app/routers/providers/connections.py` | Tambah `invalidate_connection_cache()` setelah update |
+| `backend/app/routers/providers/connections.py` | Added `invalidate_connection_cache()` after update |
 | `backend/app/routers/models.py` | Reduce timeout 60s → 20s |
-| `backend/app/routers/v1_proxy/chat.py` | Tambah auto-refresh on 401/403 + build failure |
-| `backend/app/routers/v1_proxy/messages.py` | Tambah auto-refresh on 401/403 |
-| `backend/app/routers/v1_proxy/responses.py` | Tambah auto-refresh on 401/403 |
-| `backend/app/routers/v1_proxy/shared.py` | Tambah `_try_qoder_token_refresh()` helper |
-| `backend/app/services/token_refresh.py` | Tambah Qoder refresh ke background task |
+| `backend/app/routers/v1_proxy/chat.py` | Added auto-refresh on 401/403 + build failure |
+| `backend/app/routers/v1_proxy/messages.py` | Added auto-refresh on 401/403 |
+| `backend/app/routers/v1_proxy/responses.py` | Added auto-refresh on 401/403 |
+| `backend/app/routers/v1_proxy/shared.py` | Added `_try_qoder_token_refresh()` helper |
+| `backend/app/services/token_refresh.py` | Added Qoder refresh to background task |
 
 ### Files Created
 
-| File | Deskripsi |
-|------|-----------|
-| `backend/app/providers/DOCS/BUG-QODER-CACHE-STALE.md` | Dokumentasi bug cache stale |
+| File | Description |
+|------|-------------|
+| `backend/app/providers/DOCS/BUG-QODER-CACHE-STALE.md` | Cache stale bug documentation |
 | `backend/tests/test_qoder_cosy.py` | Unit tests COSY signing |
 
 ### Git Commit
@@ -318,17 +318,17 @@ Update DB, reset timer
 
 ---
 
-## Dokumen Terkait
+## Related Documents
 
-- [QODER_PROVIDER_DOC.md](./QODER_PROVIDER_DOC.md) — Arsitektur lengkap Qoder provider
-- [QODER_NEXT_SESSION_PROMPT.md](./QODER_NEXT_SESSION_PROMPT.md) — Context untuk AI session berikutnya
-- [BUG-QODER-CACHE-STALE.md](./BUG-QODER-CACHE-STALE.md) — Detail bug cache stale
+- [QODER_PROVIDER_DOC.md](./QODER_PROVIDER_DOC.md) — Full Qoder provider architecture
+- [QODER_NEXT_SESSION_PROMPT.md](./QODER_NEXT_SESSION_PROMPT.md) — Context for next AI session
+- [BUG-QODER-CACHE-STALE.md](./BUG-QODER-CACHE-STALE.md) — Cache stale bug details
 
 ---
 
 ## Testing
 
-### Test Auto-Refresh (Simulasi Token Expired)
+### Test Auto-Refresh (Simulate Token Expiration)
 
 ```bash
 # 1. Set fake expired token
@@ -338,7 +338,7 @@ SET data = jsonb_set(data::jsonb, '{accessToken}', '\"jt-FAKEEXPIRED\"')
 WHERE id = '597689c2-a5d3-4883-a0e0-1abb069e6aa2';
 "
 
-# 2. Test request (akan auto-refresh)
+# 2. Test request (will auto-refresh)
 curl -X POST http://localhost:9000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
@@ -372,12 +372,12 @@ WHERE id = '597689c2-a5d3-4883-a0e0-1abb069e6aa2';"
 
 ## Lessons Learned
 
-1. **Jangan asumsi endpoint** — Qoder punya 2 base URL berbeda (openapi vs center), endpoint yang sama bisa return 403 di satu dan 200 di lainnya.
+1. **Never assume endpoints** — Qoder has 2 different base URLs (openapi vs center), the same endpoint can return 403 on one and 200 on the other.
 
-2. **Reverse-engineer dari sumber** — qodercli bundle (33MB) punya semua jawaban, tapi perlu grep teliti karena minified.
+2. **Reverse-engineer from source** — qodercli bundle (33MB) has all the answers, but requires careful grep because it's minified.
 
-3. **Token types penting** — `dt-` vs `jt-` vs `jrt-` punya lifetime dan mekanisme refresh berbeda.
+3. **Token types matter** — `dt-` vs `jt-` vs `jrt-` have different lifetimes and refresh mechanisms.
 
-4. **Cache invalidation** — Selalu invalidate cache setelah update DB, terutama untuk proxy/router yang punya connection pool.
+4. **Cache invalidation** — Always invalidate cache after DB update, especially for proxy/router with connection pools.
 
-5. **Background task** — Untuk token expire, jangan hanya rely on-demand refresh. Background task memastikan token tetap hidup walau idle.
+5. **Background task** — For token expiration, don't rely only on on-demand refresh. Background tasks ensure tokens stay alive even when idle.
