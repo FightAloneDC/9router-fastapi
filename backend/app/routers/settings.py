@@ -1,15 +1,18 @@
 """Application settings endpoints."""
 
 import json
+import time
+from datetime import datetime, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.settings import SettingsModel
 from app.routers.auth import get_current_user
-from app.schemas.settings import SettingsOut, SettingsUpdate
+from app.schemas.settings import DatabaseImportRequest, SettingsOut, SettingsUpdate
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -161,3 +164,99 @@ async def check_require_login(db: AsyncSession = Depends(get_db)):
         }
     except Exception:
         return {"requireLogin": True}
+
+
+# --- Database export/import ---
+
+DB_TABLES: list[str] = [
+    "settings",
+    "users",
+    "provider_connections",
+    "provider_nodes",
+    "api_keys",
+    "combos",
+    "usage_daily",
+    "usage_history",
+    "request_details",
+    "chat_conversations",
+    "chat_messages",
+    "cli_tool_configs",
+    "proxy_pools",
+    "mitm_config",
+    "mitm_logs",
+    "kv",
+]
+
+
+@router.get("/database")
+async def export_database(
+    db: AsyncSession = Depends(get_db),
+    _user: object = Depends(get_current_user),
+) -> dict[str, object]:
+    """Export all database tables as JSON."""
+    result: dict[str, list[dict[str, object]]] = {}
+    for table in DB_TABLES:
+        rows = (await db.execute(text(f"SELECT * FROM {table}"))).mappings().all()
+        result[table] = [dict(r) for r in rows]
+
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "tables": result,
+    }
+
+
+@router.post("/database")
+async def import_database(
+    body: DatabaseImportRequest,
+    db: AsyncSession = Depends(get_db),
+    _user: object = Depends(get_current_user),
+) -> dict[str, object]:
+    """Import database tables from JSON export. Overwrites existing data."""
+    imported: dict[str, int] = {}
+    for table in DB_TABLES:
+        rows = body.tables.get(table, [])
+        if not rows:
+            continue
+        await db.execute(text(f"TRUNCATE TABLE {table} CASCADE"))
+        for row in rows:
+            clean = {k: v for k, v in row.items() if v is not None}
+            if clean:
+                cols = ", ".join(clean.keys())
+                placeholders = ", ".join([f":{k}" for k in clean.keys()])
+                await db.execute(
+                    text(f"INSERT INTO {table} ({cols}) VALUES ({placeholders})"),
+                    clean,
+                )
+        imported[table] = len(rows)
+
+    await db.commit()
+    return {"success": True, "imported": imported}
+
+
+# --- Proxy test ---
+
+@router.post("/proxy-test")
+async def test_proxy(
+    db: AsyncSession = Depends(get_db),
+    _user: object = Depends(get_current_user),
+) -> dict[str, object]:
+    """Test the configured outbound proxy by making a request to httpbin."""
+    row = await _get_or_create_settings(db)
+    data = json.loads(row.data)
+
+    if not data.get("outboundProxyEnabled"):
+        raise HTTPException(status_code=400, detail="Outbound proxy is not enabled")
+
+    proxy_url: str = data.get("outboundProxyUrl", "").strip()
+    if not proxy_url:
+        raise HTTPException(status_code=400, detail="No proxy URL configured")
+
+    start: float = time.monotonic()
+    try:
+        async with httpx.AsyncClient(proxy=proxy_url, timeout=10.0) as client:
+            resp = await client.get("https://httpbin.org/ip")
+            elapsed: int = int((time.monotonic() - start) * 1000)
+            return {"ok": True, "status": resp.status_code, "elapsedMs": elapsed}
+    except Exception as e:
+        elapsed = int((time.monotonic() - start) * 1000)
+        return {"ok": False, "error": str(e), "elapsedMs": elapsed}

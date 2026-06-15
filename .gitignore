@@ -100,3 +100,6 @@ build/
 .codex/
 .hermes/
 .openclaude/
+
+# Database backups (contain sensitive data)
+backups/

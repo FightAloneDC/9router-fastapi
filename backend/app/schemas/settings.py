@@ -107,3 +107,15 @@ class SettingsUpdate(BaseModel):
     # Password change (handled specially in router)
     newPassword: Optional[str] = None
     currentPassword: Optional[str] = None
+
+
+class DatabaseExport(BaseModel):
+    """Full database export payload."""
+    exported_at: str
+    tables: Dict[str, Any]
+
+
+class DatabaseImportRequest(BaseModel):
+    """Database import request — must include password for authentication."""
+    password: str
+    tables: Dict[str, Any]
