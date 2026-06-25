@@ -60,6 +60,12 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. Language Rules (MANDATORY)
+
+- **Code and documentation: ALWAYS English.** Every file, skill, config, comment, variable name, function name, doc, README — English only. No exceptions.
+- **Communication with user: ALWAYS Indonesian.** All conversation, explanations, questions, and responses in Bahasa Indonesia.
+- **This rule has been stated hundreds of times. Do not forget. Do not violate.**
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
@@ -159,7 +165,7 @@ docs/
 ### 1. Provider Data = JSON Blob
 All provider-specific data stored in a single `data` JSON TEXT column, NOT separate DB columns:
 ```json
-{"apiKey": "...", "models": ["gpt-4"], "baseUrl": "https://...", "testStatus": "connected"}
+{"apiKey": "***", "models": ["gpt-4"], "baseUrl": "https://...", "testStatus": "connected"}
 ```
 **NEVER add new columns to provider tables** — put everything in the JSON blob.
 
@@ -246,7 +252,7 @@ When working on a bug or feature, trace the full round-trip:
 ### Provider connection not showing in UI
 ```
 1. docker compose -f docker-compose.dev.yml logs backend
-2. curl http://localhost:9000/providers/client -H "Authorization: Bearer $TOKEN"
+2. curl http://localhost:9000/providers/client -H "Authorization: Bearer ***"
 3. Check snake_case vs camelCase field names
 4. Check ProvidersPage.jsx: uses catalogStore, not hardcoded constants
 5. Check catalogStore: is catalog loaded? (useCatalogStore.getState().loaded)
@@ -333,3 +339,62 @@ cd backend && ../.venv-local/bin/pytest tests/ -v
 8. **Use catalogStore** — Frontend gets provider metadata from backend via `/providers/catalog`. Don't hardcode provider lists.
 9. **Respect backup files** — Files with `-v*` suffix are intentional backups in `.gitignore`. Don't delete or modify them.
 10. **Docs in English** — All documentation and code comments must be in English. Use chat language (Indonesian) for user communication.
+
+---
+
+## Global Rules
+
+- Do not auto-commit, push, or tag without explicit permission
+- Do not delete files without asking first
+- Ask before judging existing configuration as broken
+- Do not expand scope beyond the specified focus
+- Report outcomes, do not claim success before testing
+- Prefer reading existing code before making changes
+- If file exceeds 200-300 lines, split or make modular
+- Never write test artifacts, scratch files, or temporary scripts to `/tmp`. Use a `tests/` folder inside the current workdir. The host has 1+ month uptime — `/tmp` does not auto-clean.
+
+## Python Rules (Backend — FastAPI)
+
+- Use venv in project workdir, never system-wide
+- Type annotations required for all function parameters and return values
+- Prefer stdlib over third-party packages
+- Max 80 characters per line
+- Guard clause pattern (early return, avoid deep nesting)
+- snake_case for functions/variables, UPPER_CASE for constants
+- One function = one responsibility
+- Import order: stdlib, third-party, local (blank line between groups)
+- Use async/await for all database and HTTP operations
+- Pydantic schemas for all request/response validation
+- Alembic for all database schema changes — never modify tables directly
+
+## JavaScript Rules (Frontend — React/Vite)
+
+- Prefer const over let, never use var
+- Use async/await over callbacks and .then()
+- ESLint config must be present
+- Max 80 characters per line
+- Destructure imports when possible
+- Use Zustand for state management — no prop drilling for global state
+- Components in `src/components/`, pages in `src/pages/`
+- API calls centralized in `src/api/` modules
+
+## Hermes Agent Rules
+
+- Never edit official packages (`@ai-sdk/*`, `node_modules`, `vendor/`, etc.) — breaks upstream trust.
+- Do not pollute `/tmp`. Place all scratch files, test artifacts, and temporary scripts inside the current workdir (e.g. `tests/`, `.scratch/`).
+- Use `uv` for Python dependency management and script execution.
+
+## User Preferences
+
+### Language Rules (MANDATORY)
+
+- **Code and documentation: ALWAYS English.** Every file, skill, config, comment, variable name, function name, doc, README — English only. No exceptions.
+- **Communication with user: ALWAYS Indonesian.** All conversation, explanations, questions, and responses in Bahasa Indonesia.
+- **This rule has been stated hundreds of times. Do not forget. Do not violate.**
+
+## Context
+
+- Languages: Python (backend), JavaScript (frontend)
+- Stack: FastAPI + SQLAlchemy (async), React 19 + Vite 8 + Zustand 5
+- Project: 9router-fastapi
+- Generated: 2026-06-26

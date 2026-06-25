@@ -103,3 +103,5 @@ build/
 
 # Database backups (contain sensitive data)
 backups/
+
+docs/superpowers/
