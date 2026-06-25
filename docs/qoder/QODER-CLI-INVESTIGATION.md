@@ -1,6 +1,80 @@
-# Qoder CLI v1.0.30 — Investigasi (In Progress)
+# Qoder CLI v1.0.30 — Investigasi
 
 > **Prinsip:** Setiap claim harus punya evidence. Tidak ada asumsi.
+
+---
+
+## Root Cause: Qoder Chat Timeout (2026-06-26)
+
+### Masalah
+
+Qoder chat request dari 9Router selalu timeout (30 detik, 0 bytes). Server accept request (HTTP 200) tapi tidak mengirim data.
+
+### Investigasi
+
+1. Capture actual request dari CLI v1.0.30 menggunakan Node.js `fetch` intercept
+2. Compare dengan request yang dikirim 9Router
+3. Ditemukan perbedaan signifikan di COSY headers
+
+### Root Cause
+
+**3 masalah yang menyebabkan timeout:**
+
+1. **Cosy-Version salah**: 9Router mengirim `1.0.14`, CLI mengirim `1.0.30`
+2. **9Router mengirim 4 header extra** yang tidak dikirim CLI:
+   - `Cosy-ClientIp` (berisi machine_id)
+   - `Accept-Encoding: identity`
+   - `X-Request-Id` (UUID)
+   - `X-Model-Key` / `X-Model-Source` (di handler.py)
+3. **3 header hilang** yang dikirim CLI tapi tidak ada di 9Router:
+   - `Cache-Control: no-cache`
+   - `Connection: keep-alive`
+   - `Accept: text/event-stream` (9Router pakai `application/json`)
+
+### Fix
+
+**File: `backend/app/providers/qoder/constants.py`**
+- `QODER_IDE_VERSION`: `"1.0.14"` → `"1.0.30"`
+
+**File: `backend/app/providers/qoder/cosy.py`**
+- Hapus: `Accept-Encoding`, `Cosy-ClientIp`, `X-Request-Id`
+- Tambah: `Cache-Control: no-cache`, `Connection: keep-alive`
+- Ubah: `Accept` dari `application/json` ke `text/event-stream`
+
+**File: `backend/app/providers/qoder/handler.py`**
+- Hapus: `X-Model-Key`, `X-Model-Source`, `Cache-Control`, `Accept`, `Accept-Encoding` (sudah dipindah ke cosy.py)
+
+### Hasil
+
+```
+Sebelum fix:  HTTP 200, 0 bytes, timeout 30 detik
+Sesudah fix:  HTTP 200, TTFB 813ms, streaming response OK
+```
+
+### Evidence
+
+Intercept actual CLI request (Node.js fetch hook):
+```
+Accept: text/event-stream
+Authorization: Bearer COSY.{payload}.{sig}
+Cache-Control: no-cache
+Connection: keep-alive
+Content-Type: application/json
+Cosy-Business-Product: cli
+Cosy-Business-Type: agent
+Cosy-ClientType: 5
+Cosy-Data-Policy: agree
+Cosy-Date: 1782425825
+Cosy-Key: ME+5DcidxAgDr8Jp6/Nl81SvPZC62hZOU+...
+Cosy-MachineId: e065e549-0b81-42df-ad0c-3915170a5cc9
+Cosy-MachineToken: e065e549-0b81-42df-ad0c-3915170a5cc9
+Cosy-MachineType: 5
+Cosy-Scene: assistant
+Cosy-User: 019ea17a-7195-7834-b70d-faaaa80b9b7b
+Cosy-Version: 1.0.30
+Login-Version: v2
+User-Agent: Qoder/1.0.30
+```
 
 ---
 

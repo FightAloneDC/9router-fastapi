@@ -161,15 +161,6 @@ class QoderHandler(BaseProviderHandler):
             machine_id=machine_id,
         )
 
-        # Add extra headers
-        model_source = (model_config or {}).get("source", "system")
-        cosy_headers["X-Model-Key"] = qoder_key
-        cosy_headers["X-Model-Source"] = model_source
-        cosy_headers["Cache-Control"] = "no-cache"
-        cosy_headers["Accept"] = "text/event-stream"
-        # gzip triggers signature validation failure on Qoder CDN
-        cosy_headers["Accept-Encoding"] = "identity"
-
         return encoded_bytes, cosy_headers
 
     def unwrap_response(self, response_text: str) -> dict[str, Any]:

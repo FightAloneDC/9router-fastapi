@@ -137,13 +137,13 @@ def build_cosy_headers(
     signature = _md5_hex(sig_input.encode("latin1"))
 
     return {
-        "Accept": "application/json",
-        "Accept-Encoding": "identity",
+        "Accept": "text/event-stream",
         "Authorization": f"Bearer COSY.{payload_b64}.{signature}",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
         "Content-Type": "application/json",
         "Cosy-Business-Product": "cli",
         "Cosy-Business-Type": "agent",
-        "Cosy-ClientIp": machine_id,
         "Cosy-ClientType": QODER_CLIENT_TYPE,
         "Cosy-Data-Policy": QODER_DATA_POLICY,
         "Cosy-Date": timestamp,
@@ -156,5 +156,4 @@ def build_cosy_headers(
         "Cosy-Version": QODER_IDE_VERSION,
         "Login-Version": QODER_LOGIN_VERSION,
         "User-Agent": f"Qoder/{QODER_IDE_VERSION}",
-        "X-Request-Id": str(uuid.uuid4()),
     }
