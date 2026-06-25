@@ -1,35 +1,35 @@
-# Qoder CLI v1.0.30 — Investigasi
+# Qoder CLI v1.0.30 Investigation
 
-> **Prinsip:** Setiap claim harus punya evidence. Tidak ada asumsi.
+> **Principle:** Every claim must have evidence. No assumptions.
 
 ---
 
 ## Root Cause: Qoder Chat Timeout (2026-06-26)
 
-### Masalah
+### Problem
 
-Qoder chat request dari 9Router selalu timeout (30 detik, 0 bytes). Server accept request (HTTP 200) tapi tidak mengirim data.
+Qoder chat requests from 9Router always timed out (30 seconds, 0 bytes). Server accepted the request (HTTP 200) but never sent any data.
 
-### Investigasi
+### Investigation
 
-1. Capture actual request dari CLI v1.0.30 menggunakan Node.js `fetch` intercept
-2. Compare dengan request yang dikirim 9Router
-3. Ditemukan perbedaan signifikan di COSY headers
+1. Captured actual request from CLI v1.0.30 using Node.js `fetch` intercept
+2. Compared with request sent by 9Router
+3. Found significant differences in COSY headers
 
 ### Root Cause
 
-**3 masalah yang menyebabkan timeout:**
+**3 issues that caused the timeout:**
 
-1. **Cosy-Version salah**: 9Router mengirim `1.0.14`, CLI mengirim `1.0.30`
-2. **9Router mengirim 4 header extra** yang tidak dikirim CLI:
-   - `Cosy-ClientIp` (berisi machine_id)
+1. **Wrong Cosy-Version**: 9Router sent `1.0.14`, CLI sent `1.0.30`
+2. **9Router sent 4 extra headers** not sent by CLI:
+   - `Cosy-ClientIp` (containing machine_id)
    - `Accept-Encoding: identity`
    - `X-Request-Id` (UUID)
-   - `X-Model-Key` / `X-Model-Source` (di handler.py)
-3. **3 header hilang** yang dikirim CLI tapi tidak ada di 9Router:
+   - `X-Model-Key` / `X-Model-Source` (in handler.py)
+3. **3 missing headers** sent by CLI but absent in 9Router:
    - `Cache-Control: no-cache`
    - `Connection: keep-alive`
-   - `Accept: text/event-stream` (9Router pakai `application/json`)
+   - `Accept: text/event-stream` (9Router used `application/json`)
 
 ### Fix
 
@@ -37,23 +37,23 @@ Qoder chat request dari 9Router selalu timeout (30 detik, 0 bytes). Server accep
 - `QODER_IDE_VERSION`: `"1.0.14"` → `"1.0.30"`
 
 **File: `backend/app/providers/qoder/cosy.py`**
-- Hapus: `Accept-Encoding`, `Cosy-ClientIp`, `X-Request-Id`
-- Tambah: `Cache-Control: no-cache`, `Connection: keep-alive`
-- Ubah: `Accept` dari `application/json` ke `text/event-stream`
+- Removed: `Accept-Encoding`, `Cosy-ClientIp`, `X-Request-Id`
+- Added: `Cache-Control: no-cache`, `Connection: keep-alive`
+- Changed: `Accept` from `application/json` to `text/event-stream`
 
 **File: `backend/app/providers/qoder/handler.py`**
-- Hapus: `X-Model-Key`, `X-Model-Source`, `Cache-Control`, `Accept`, `Accept-Encoding` (sudah dipindah ke cosy.py)
+- Removed: `X-Model-Key`, `X-Model-Source`, `Cache-Control`, `Accept`, `Accept-Encoding` (moved to cosy.py)
 
-### Hasil
+### Result
 
 ```
-Sebelum fix:  HTTP 200, 0 bytes, timeout 30 detik
-Sesudah fix:  HTTP 200, TTFB 813ms, streaming response OK
+Before fix:  HTTP 200, 0 bytes, timeout after 30 seconds
+After fix:   HTTP 200, TTFB 813ms, streaming response OK
 ```
 
 ### Evidence
 
-Intercept actual CLI request (Node.js fetch hook):
+Intercepted actual CLI request (Node.js fetch hook):
 ```
 Accept: text/event-stream
 Authorization: Bearer COSY.{payload}.{sig}
@@ -78,11 +78,11 @@ User-Agent: Qoder/1.0.30
 
 ---
 
-## 1. Fakta Runtime (dari ~/.qoder/)
+## 1. Runtime Facts (from ~/.qoder/)
 
 ### 1.1 Endpoint Selection
 
-**Fakta:** Qoder CLI menggunakan `api2.qoder.sh` sebagai primary endpoint.
+**Fact:** Qoder CLI uses `api2.qoder.sh` as primary endpoint.
 
 **Evidence:** `~/.qoder/.cache/endpoint-cache.json`:
 ```json
@@ -98,7 +98,7 @@ User-Agent: Qoder/1.0.30
 }
 ```
 
-**Catatan:** 9Router menggunakan `api3.qoder.sh`. Tapi test langsung ke api2 dan api3 dari backend container menghasilkan timeout yang sama. Jadi perbedaan endpoint **bukan** root cause timeout.
+**Note:** 9Router uses `api3.qoder.sh`. However, direct tests against both api2 and api3 from the backend container produced the same timeout. Therefore, the endpoint difference is **not** the root cause of the timeout.
 
 ### 1.2 DNS Cache
 
@@ -110,29 +110,29 @@ User-Agent: Qoder/1.0.30
 }
 ```
 
-**Catatan:** api3.qoder.sh tidak ada di DNS cache — CLI tidak pernah resolve api3.
+**Note:** api3.qoder.sh is not in the DNS cache — CLI never resolves api3.
 
-### 1.3 Machine ID & Installation ID
+### 1.3 Machine ID and Installation ID
 
-**Fakta:** Qoder CLI punya persistent machine ID dan installation ID.
+**Fact:** Qoder CLI has persistent machine ID and installation ID.
 
 **Evidence:**
 - `~/.qoder/.auth/machine_id`: `e065e549-0b81-42df-ad0c-3915170a5cc9`
 - `~/.qoder/installation_id`: `0b51e318-3a4b-4437-a9a1-89fbe4379edc`
 
-**Catatan:** Setiap koneksi di 9Router punya machine_id yang di-generate baru saat device flow / PAT import. Tidak persisten seperti CLI.
+**Note:** Each 9Router connection generates a new machine_id during device flow or PAT import. Not persistent like CLI.
 
 ### 1.4 Auth File
 
-**Fakta:** Token di `~/.qoder/.auth/user` ter-encrypt (binary, bukan plaintext).
+**Fact:** Token in `~/.qoder/.auth/user` is encrypted (binary, not plaintext).
 
-**Evidence:** File 840 bytes, base64-like encoded.
+**Evidence:** 840-byte file, base64-like encoded.
 
-**Catatan:** 9Router simpan token plaintext di DB JSON blob.
+**Note:** 9Router stores token as plaintext in DB JSON blob.
 
 ### 1.5 Default Model
 
-**Fakta:** Default model adalah `qmodel_latest`.
+**Fact:** Default model is `qmodel_latest`.
 
 **Evidence:** `~/.qoder/.models/default`:
 ```json
@@ -146,13 +146,13 @@ User-Agent: Qoder/1.0.30
 
 ### 1.6 Run Logs
 
-**Fakta:** 75+ session logs tersimpan di `~/.qoder/logs/runs/`. Terakhir: `2026-06-26T03-58-24`.
+**Fact:** 75+ session logs stored in `~/.qoder/logs/runs/`. Latest: `2026-06-26T03-58-24`.
 
-**Evidence:** `ls ~/.qoder/logs/runs/` menunjukkan 75+ direktori.
+**Evidence:** `ls ~/.qoder/logs/runs/` shows 75+ directories.
 
 ### 1.7 Changelog
 
-**Fakta:** CLI v1.0.30 changelog.
+**Fact:** CLI v1.0.30 changelog entries.
 
 **Evidence:** `~/.qoder/cache/changelog.json`:
 ```
@@ -161,35 +161,33 @@ CLI 1.0.29: Added configurable first-packet and stream-idle timeouts for model S
 CLI 1.0.28: Optimized the model list cache mechanism
 ```
 
-**Catatan:** v1.0.29 menambahkan "first-packet timeout" dan "stream-idle timeout" — ini fitur baru yang 9Router tidak punya.
+**Note:** v1.0.29 added "first-packet timeout" and "stream-idle timeout" — new features not in 9Router.
 
 ### 1.8 Dynamic Texts
 
-**Fakta:** CLI punya model selector metadata.
+**Fact:** CLI has model selector metadata.
 
-**Evidence:** `~/.qoder/.auth/dynamic-texts.json` — version `1.0.229`, namespace `qoder-ide`. Berisi label/description untuk semua model. Tidak relevan dengan request flow.
+**Evidence:** `~/.qoder/.auth/dynamic-texts.json` — version `1.0.229`, namespace `qoder-ide`. Contains labels/descriptions for all models. Not relevant to request flow.
 
 ### 1.9 External Commands
 
-**Fakta:** CLI punya plugin system (`wiki` command).
+**Fact:** CLI has a plugin system (`wiki` command).
 
-**Evidence:** `~/.qoder/external-commands/registry.json` — berisi `wiki-cli` binary. Tidak relevan dengan chat flow.
+**Evidence:** `~/.qoder/external-commands/registry.json` — contains `wiki-cli` binary. Not relevant to chat flow.
 
 ### 1.10 Model Catalog Cache
 
-**Fakta:** Model catalog ter-encrypt di `~/.qoder/.models/`.
+**Fact:** Model catalog is encrypted on disk in `~/.qoder/.models/`.
 
 **Evidence:**
 - `~/.qoder/.models/default` → `{"key": "qmodel_latest", ...}`
 - `~/.qoder/.models/019ea17a-7195-7834-b70d-faaaa80b9b7b/catalog-v5` → 45KB, encrypted binary
 - `~/.qoder/.models/019ea17a-7195-7834-b70d-faaaa80b9b7b/catalog-v2` → 34KB, encrypted binary
-- Ada 3 user profiles: `019dfeb4`, `019e3ead`, `019ea17a`
+- 3 user profiles: `019dfeb4`, `019e3ead`, `019ea17a`
 
-**Catatan:** 9Router fetch catalog via COSY-signed request dan cache in-memory. CLI cache ke disk (encrypted).
+**Note:** 9Router fetches catalog via COSY-signed request and caches in-memory. CLI caches to disk (encrypted).
 
 ### 1.11 Settings
-
-**Fakta:** CLI settings.
 
 **Evidence:** `~/.qoder/settings.json`:
 ```json
@@ -199,7 +197,7 @@ CLI 1.0.28: Optimized the model list cache mechanism
 }
 ```
 
-**Catatan:** Auth type `qoder-browser` = device flow via browser.
+**Note:** Auth type `qoder-browser` = device flow via browser.
 
 ### 1.12 State
 
@@ -210,13 +208,13 @@ CLI 1.0.28: Optimized the model list cache mechanism
 
 ---
 
-## 2. CLI Startup Sequence (dari log 2026-06-26)
+## 2. CLI Startup Sequence (from log 2026-06-26)
 
 ### 2.1 Startup Flow
 
-**Fakta:** CLI melakukan 5 network calls sebelum chat.
+**Fact:** CLI makes 5 network calls before chat.
 
-**Evidence:** Dari `~/.qoder/logs/runs/2026-06-26T03-58-24*/qodercli.log`:
+**Evidence:** From `~/.qoder/logs/runs/2026-06-26T03-58-24*/qodercli.log`:
 
 ```
 Step 1: GET center.qoder.sh/algo/api/v3/service/region/endpoints
@@ -229,7 +227,7 @@ Step 2: GET openapi.qoder.sh/api/v1/userinfo
 Step 3: GET center.qoder.sh/algo/api/v2/config/getDataPolicy?requestId=...
         → Data policy
 
-Step 4: Feature gates (dari config server):
+Step 4: Feature gates (from config server):
         - model_server_transport: {enabled: false, protocol: undefined}
         - sse_body_null_diagnostics: {enabled: true, compression: 'zstd', chunkSizeChars: 48000}
         - httpdns: {enabled: false}
@@ -241,111 +239,145 @@ Step 5: GET api2.qoder.sh/algo/api/v2/model/list?Encode=1
 
 ### 2.2 Endpoint Discovery
 
-**Fakta:** CLI fetch endpoint list dari `center.qoder.sh` setiap startup.
+**Fact:** CLI fetches endpoint list from `center.qoder.sh` on every startup.
 
-**Evidence:** Log menunjukkan `syncEndpointAsync` dipanggil ke `center.qoder.sh/algo/api/v3/service/region/endpoints`.
+**Evidence:** Log shows `syncEndpointAsync` called to `center.qoder.sh/algo/api/v3/service/region/endpoints`.
 
-**Catatan:** 9Router hardcode `api3.qoder.sh`. Tidak ada endpoint discovery. **BELUM DIVERIFIKASI** apakah ini penyebab timeout.
+**Note:** 9Router hardcodes `api3.qoder.sh`. No endpoint discovery.
 
 ### 2.3 Feature Gates
 
-**Fakta:** CLI fetch feature gates dari config server.
+**Fact:** CLI fetches feature gates from config server.
 
-**Evidence:** Dari log:
+**Evidence:** From log:
 ```
 model_server_transport: {enabled: false, protocol: undefined, logRequestResponse: false}
 sse_body_null_diagnostics: {enabled: true, compression: 'zstd', chunkSizeChars: 48000}
 ```
 
-**Catatan:** `model_server_transport: false` artinya CLI pakai **legacy transport** (bukan model_server). `sse_body_null_diagnostics` dengan `compression: 'zstd'` — ini fitur baru.
+**Note:** `model_server_transport: false` means CLI uses **legacy transport** (not model_server). `sse_body_null_diagnostics` with `compression: 'zstd'` is a new feature.
 
 ---
 
-## 3. CLI Chat Request (dari log 2026-06-26)
+## 3. CLI Chat Request (from log 2026-06-26)
 
 ### 3.1 Request Flow
 
-**Fakta:** CLI mengirim chat request ke `api2.qoder.sh`.
+**Fact:** CLI sends chat request to `api2.qoder.sh`.
 
-**Evidence:** Dari log:
+**Evidence:** From log:
 ```
-[qoder-server-request] --> operation=sendRemoteChatAsk method=POST 
+[qoder-server-request] --> operation=sendRemoteChatAsk method=POST
   url=https://api2.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1
 ```
 
 ### 3.2 Request Timing
 
-**Fakta:** CLI mendapat response dalam ~4 detik.
+**Fact:** CLI receives response within ~4 seconds.
 
-**Evidence:** Dari `UndiciStreamDiagnostic` log:
+**Evidence:** From `UndiciStreamDiagnostic` log:
 ```
-phase=body_sent,   elapsedMs=121     → body terkirim dalam 121ms
-phase=headers,     elapsedMs=2535,   status=200  → TTFB 2.5 detik
-phase=trailers,    elapsedMs=4065,   bytes=1292, chunkCount=51  → selesai 4 detik, 51 chunks
+phase=body_sent,   elapsedMs=121     → body sent in 121ms
+phase=headers,     elapsedMs=2535,   status=200  → TTFB 2.5 seconds
+phase=trailers,    elapsedMs=4065,   bytes=1292, chunkCount=51  → finished in 4 seconds, 51 chunks
 ```
 
-**Catatan:** 9Router test dari backend container: 200 OK tapi 0 chunks, timeout 30 detik. **Server accept request tapi tidak kirim data.**
+**Note:** 9Router test from backend container: HTTP 200 but 0 chunks, timeout after 30 seconds. **Server accepted request but never sent data.**
 
 ### 3.3 Transport
 
-**Fakta:** CLI menggunakan `transport=legacy`.
+**Fact:** CLI uses `transport=legacy`.
 
-**Evidence:** Dari log:
+**Evidence:** From log:
 ```
 [ModelResponse] transport=legacy, phase=headers_received, status=200
 ```
 
 ### 3.4 Request ID
 
-**Fakta:** CLI menggunakan `qoderRequestId` format UUID.
+**Fact:** CLI uses `qoderRequestId` in UUID format.
 
-**Evidence:** Dari log:
+**Evidence:** From log:
 ```
 qoderRequestId=9ae04def-5725-43db-a609-54e66ae7973a
 ```
 
 ---
 
-## 4. Perbandingan: 9Router vs CLI
+## 4. Comparison: 9Router vs CLI
 
-### 4.1 Sudah Diverifikasi Sama
+### 4.1 Verified as Same
 
 | Field | Status |
 |---|---|
-| Chat path | ✅ Sama (`/algo/api/v2/service/pro/sse/agent_chat_generation`) |
-| Encode | ✅ Sama (`Encode=1`) |
-| RSA | ✅ Sama (1024-bit) |
-| AES | ✅ Sama (AES-128-CBC) |
-| Data Policy | ✅ Sama (`agree`) |
-| chat_task | ✅ Sama (`FREE_INPUT`) |
-| FetchKeys | ✅ Sama (`llm_model_result`) |
-| AgentId | ✅ Sama (`agent_common`) |
+| Chat path | ✅ Same (`/algo/api/v2/service/pro/sse/agent_chat_generation`) |
+| Encode | ✅ Same (`Encode=1`) |
+| RSA | ✅ Same (1024-bit) |
+| AES | ✅ Same (AES-128-CBC) |
+| Data Policy | ✅ Same (`agree`) |
+| chat_task | ✅ Same (`FREE_INPUT`) |
+| FetchKeys | ✅ Same (`llm_model_result`) |
+| AgentId | ✅ Same (`agent_common`) |
 
-### 4.2 Beda tapi BUKAN Root Cause
+### 4.2 Different but NOT Root Cause
 
 | Field | 9Router | CLI | Evidence |
 |---|---|---|---|
-| Endpoint host | `api3.qoder.sh` | `api2.qoder.sh` | Test ke api2 juga timeout |
-| Default model | `qmodel_latest` | `qmodel_latest` | Sama |
+| Endpoint host | `api3.qoder.sh` | `api2.qoder.sh` | Test against api2 also timed out |
+| Default model | `qmodel_latest` | `qmodel_latest` | Same |
 
-### 4.3 BELUM Diverifikasi (Potential Root Cause)
+### 4.3 Verified as Different (Root Cause)
 
-| # | Field | 9Router | CLI | Perlu Verifikasi |
+| # | Field | 9Router | CLI | Status |
 |---|---|---|---|---|
-| 1 | **RSA public key** | Dari IDE v0.9 | Bundle v1.0.30 (ter-encrypt) | Capture actual COSY header dari CLI |
-| 2 | **COSY headers lengkap** | 17 headers | ? | Capture actual headers dari CLI |
-| 3 | **session_type** | `"qodercli"` | env-based | Capture actual request body |
-| 4 | **Request body fields** | Ada 25+ fields | ? | Capture actual request body |
-| 5 | **WAF encoding alphabet** | Dari qoder2api/QoderEncoding.java | ? | Capture actual encoded body |
-| 6 | **Endpoint discovery** | Tidak ada | Fetch dari center.qoder.sh | Mungkin server reject tanpa ini |
-| 7 | **Machine ID** | Generated per connection | Persistent file | Mungkin server track machine |
-| 8 | **Version string** | `"1.0.0"` (business.version) | ? | Capture actual request |
+| 1 | **Cosy-Version** | `1.0.14` | `1.0.30` | ❌ **ROOT CAUSE — fixed** |
+| 2 | **Cosy-ClientIp** | Sent (machine_id) | Not sent | ❌ Extra header — fixed |
+| 3 | **Accept-Encoding** | Sent (`identity`) | Not sent | ❌ Extra header — fixed |
+| 4 | **X-Request-Id** | Sent (UUID) | Not sent | ❌ Extra header — fixed |
+| 5 | **X-Model-Key** | Sent | Not sent | ❌ Extra header — fixed |
+| 6 | **X-Model-Source** | Sent | Not sent | ❌ Extra header — fixed |
+| 7 | **Cache-Control** | Not sent | `no-cache` | ❌ Missing header — fixed |
+| 8 | **Connection** | Not sent | `keep-alive` | ❌ Missing header — fixed |
+| 9 | **Accept** | `application/json` | `text/event-stream` | ❌ Wrong value — fixed |
 
 ---
 
-## 7. Auth Flow — OAuth Device Flow (dari `oauth.py` + `auth.py`)
+## 5. Actual Request Capture (from intercept)
 
-### 7.1 OAuth Device Flow — Full Sequence
+### 5.1 COSY Authorization Payload (CLI v1.0.30)
+
+**Fact:** CLI sends `cosyVersion: "1.0.30"`.
+
+**Evidence:** Decoded from Authorization header:
+```json
+{
+    "version": "v1",
+    "requestId": "494153b7-8ebc-4dd0-adb6-7c8baca9e4fa",
+    "info": "KLAfnv79lLk6aqfnDF5PLRG8lJYl/0AHwlzKSF5pkSWeolbNi2p8PIJvWFp5nU0HrZWfZ0wlGbujW1+CuWjB9lDYGJXXL1zHMro8vyThB7s=",
+    "cosyVersion": "1.0.30",
+    "ideVersion": ""
+}
+```
+
+**Note:** 9Router sent `cosyVersion: "1.0.14"` (from `QODER_IDE_VERSION`). **This was different.**
+
+### 5.2 Actual Headers (CLI v1.0.30)
+
+**Fact:** CLI sends 15 headers (including Authorization).
+
+**Evidence:** Full list in Section 4.3 above.
+
+### 5.3 Request Body
+
+**Fact:** Body is WAF-bypass encoded. CLI sends ~2KB encoded body.
+
+**Evidence:** Body starts with `%hxHIMBgK.u*dwDxjwNYdru(jiuH%QBoi.N(` — this is the encoded format.
+
+---
+
+## 6. Auth Flow — OAuth Device Flow (from `oauth.py` + `auth.py`)
+
+### 6.1 OAuth Device Flow — Full Sequence
 
 ```
 1. initiate_device_flow() [auth.py:62-88]
@@ -379,36 +411,36 @@ qoderRequestId=9ae04def-5725-43db-a609-54e66ae7973a
    └── Returns: {userInfo: {...}}
 
 6. oauth.py: map_tokens() [oauth.py:116-141]
-   ├── Extract userId dari tokens.user_id ATAU userInfo.id
-   ├── Extract machineId dari tokens._qoderMachineId
+   ├── Extract userId from tokens.user_id OR userInfo.id
+   ├── Extract machineId from tokens._qoderMachineId
    └── Returns: {accessToken: "dt-xxx", refreshToken, expiresIn, email, displayName, providerSpecificData: {userId, machineId}}
 ```
 
-### 7.2 Token Type: Device Token (`dt-xxx`)
+### 6.2 Token Type: Device Token (`dt-xxx`)
 
 | Property | Value | Evidence |
 |---|---|---|
 | Prefix | `dt-` | auth.py:145 `data.get("token")` |
-| Lifetime | ~30 hari | auth.py:158 `30 * 24 * 60 * 60` default |
-| Refreshable | Ya (via refresh_token) | auth.py:310 `refresh_job_token()` |
-| COSY signing | Ya | handler.py:158 `auth_token=access_token` |
+| Lifetime | ~30 days | auth.py:158 `30 * 24 * 60 * 60` default |
+| Refreshable | Yes (via refresh_token) | auth.py:310 `refresh_job_token()` |
+| COSY signing | Yes | handler.py:158 `auth_token=access_token` |
 
-### 7.3 OAuth Flow — Key Details
+### 6.3 OAuth Flow — Key Details
 
-**Machine ID**: Generate baru per koneksi (UUID). Tidak persisten seperti CLI.
+**Machine ID**: Generated per connection (UUID). Not persistent like CLI.
 
-**Token Storage**: Plaintext di DB JSON blob `provider_connections.data`.
+**Token Storage**: Plaintext in DB JSON blob `provider_connections.data`.
 
-**ProviderSpecificData**: `{userId, machineId}` — ini yang dipakai COSY signing.
+**ProviderSpecificData**: `{userId, machineId}` — used for COSY signing.
 
 ---
 
-## 8. Auth Flow — PAT Import (dari `auth.py`)
+## 7. Auth Flow — PAT Import (from `auth.py`)
 
-### 8.1 PAT Import — Full Sequence
+### 7.1 PAT Import — Full Sequence
 
 ```
-1. User dapat PAT (pt-xxx) dari qoder.com/account/integrations
+1. User obtains PAT (pt-xxx) from qoder.com/account/integrations
 
 2. import_pat(personal_token) [auth.py:363-413]
    ├── Step 1: exchange_personal_token(personal_token) [auth.py:233-307]
@@ -425,43 +457,43 @@ qoderRequestId=9ae04def-5725-43db-a609-54e66ae7973a
    ├── Step 2: fetch_user_info(access_token) [auth.py:173-230]
    │   ├── GET https://openapi.qoder.sh/api/v1/userinfo
    │   │   Headers: {Authorization: Bearer {jt-xxx}}
-   │   ├── Jika gagal, coba: GET userinfo?accessToken={jt-xxx}
+   │   ├── If fails, retry: GET userinfo?accessToken={jt-xxx}
    │   └── Returns: {id, email, name, username, ...}
    │
-   └── Step 3: Generate machine_id = UUID baru
+   └── Step 3: Generate machine_id = new UUID
        Return: {access_token, refresh_token, expires_in, user_id, email, display_name, machine_id, organization_id}
 ```
 
-### 8.2 Token Type: Job Token (`jt-xxx`)
+### 7.2 Token Type: Job Token (`jt-xxx`)
 
 | Property | Value | Evidence |
 |---|---|---|
 | Prefix | `jt-` | auth.py:284 |
-| Lifetime | ~24 jam | BUG-FIXING-LOG.md:76 |
-| Refresh Token | `jrt-xxx`, ~48 jam | BUG-FIXING-LOG.md:91 |
+| Lifetime | ~24 hours | BUG-FIXING-LOG.md:76 |
+| Refresh Token | `jrt-xxx`, ~48 hours | BUG-FIXING-LOG.md:91 |
 | Refresh Endpoint | `openapi.qoder.sh/api/v1/jobToken/refresh` | auth.py:316 |
-| COSY signing | Ya | handler.py:158 |
+| COSY signing | Yes | handler.py:158 |
 
-### 8.3 PAT Flow — Key Details
+### 7.3 PAT Flow — Key Details
 
-**Perbedaan dengan OAuth:**
-- OAuth → `dt-xxx` (device token, 30 hari)
-- PAT → `jt-xxx` (job token, 24 jam, perlu refresh)
+**Difference from OAuth:**
+- OAuth → `dt-xxx` (device token, 30 days)
+- PAT → `jt-xxx` (job token, 24 hours, needs refresh)
 
-**Machine ID**: Generate baru per koneksi (UUID).
+**Machine ID**: Generated per connection (UUID).
 
-**Token Storage**: Plaintext di DB JSON blob.
+**Token Storage**: Plaintext in DB JSON blob.
 
 ---
 
-## 9. Token Refresh Flow (dari `auth.py`)
+## 8. Token Refresh Flow (from `auth.py`)
 
-### 9.1 On-Demand Refresh
+### 8.1 On-Demand Refresh
 
 ```
-Proxy menerima 401/403 dari Qoder
+Proxy receives 401/403 from Qoder
   → try_refresh_connection(db, connection_id) [auth.py:416-470]
-    ├── Baca refresh_token dari DB
+    ├── Read refresh_token from DB
     ├── refresh_job_token(refresh_token) [auth.py:310-360]
     │   ├── POST https://openapi.qoder.sh/api/v1/jobToken/refresh
     │   │   Body: {refresh_token: "jrt-xxx"}
@@ -471,116 +503,34 @@ Proxy menerima 401/403 dari Qoder
     └── invalidate_connection_cache("qoder")
 ```
 
-### 9.2 Background Refresh (setiap 5 menit)
+### 8.2 Background Refresh (every 5 minutes)
 
 ```
 refresh_all_qoder_connections() [auth.py:473-533]
-  ├── Query semua Qoder connections yang is_active=true
-  ├── Untuk setiap connection:
-  │   ├── Baca refresh_token dari data
+  ├── Query all Qoder connections where is_active=true
+  ├── For each connection:
+  │   ├── Read refresh_token from data
   │   ├── refresh_job_token(refresh_token)
-  │   └── Update DB jika berhasil
+  │   └── Update DB on success
   └── invalidate_connection_cache("qoder")
 ```
 
-### 9.3 Refresh Endpoint
+### 8.3 Refresh Endpoint
 
-**Fakta:** Endpoint refresh yang benar adalah `openapi.qoder.sh/api/v1/jobToken/refresh`.
+**Fact:** The correct refresh endpoint is `openapi.qoder.sh/api/v1/jobToken/refresh`.
 
 **Evidence:** auth.py:20 `QODER_REFRESH_TOKEN_URL = f"{QODER_OPENAPI_BASE}/api/v1/jobToken/refresh"`
 
-**Catatan:** Endpoint lama `center.qoder.sh/algo/api/v3/user/refresh_token` return 403 (BUG-FIXING-LOG.md:110-113).
+**Note:** The old endpoint `center.qoder.sh/algo/api/v3/user/refresh_token` returns 403 (BUG-FIXING-LOG.md:110-113).
 
 ---
 
-## 10. Perbedaan Auth: CLI vs 9Router
+## 9. Auth Comparison: CLI vs 9Router
 
-| Aspek | CLI v1.0.30 | 9Router |
+| Aspect | CLI v1.0.30 | 9Router |
 |---|---|---|
-| Machine ID | Persistent di `~/.qoder/.auth/machine_id` | Generate baru per koneksi |
-| Token Storage | Encrypted di `~/.qoder/.auth/user` | Plaintext di DB |
+| Machine ID | Persistent in `~/.qoder/.auth/machine_id` | Generated per connection |
+| Token Storage | Encrypted in `~/.qoder/.auth/user` | Plaintext in DB |
 | Auth Type | `qoder-browser` (device flow) | OAuth + PAT import |
-| Token Format | `dt-xxx` (device) | `dt-xxx` (OAuth) atau `jt-xxx` (PAT) |
+| Token Format | `dt-xxx` (device) | `dt-xxx` (OAuth) or `jt-xxx` (PAT) |
 | Refresh | Background + on-demand | Background + on-demand ✅ |
-
----
-
-## 11. Temuan: COSY Headers Perbedaan (dari intercept Section 5)
-
-### 5.1 COSY Authorization Payload (CLI v1.0.30)
-
-**Fakta:** CLI mengirim `cosyVersion: "1.0.30"`.
-
-**Evidence:** Decode dari Authorization header:
-```json
-{
-    "version": "v1",
-    "requestId": "494153b7-8ebc-4dd0-adb6-7c8baca9e4fa",
-    "info": "KLAfnv79lLk6aqfnDF5PLRG8lJYl/0AHwlzKSF5pkSWeolbNi2p8PIJvWFp5nU0HrZWfZ0wlGbujW1+CuWjB9lDYGJXXL1zHMro8vyThB7s=",
-    "cosyVersion": "1.0.30",
-    "ideVersion": ""
-}
-```
-
-**Catatan:** 9Router mengirim `cosyVersion: "1.0.14"` (dari `QODER_IDE_VERSION`). **Ini beda.**
-
-### 5.2 Actual Headers (CLI v1.0.30)
-
-**Fakta:** CLI mengirim 15 headers (termasuk Authorization).
-
-**Evidence:**
-```
-Accept: text/event-stream
-Authorization: Bearer COSY.{payload}.{signature}
-Cache-Control: no-cache
-Connection: keep-alive
-Content-Type: application/json
-Cosy-Business-Product: cli
-Cosy-Business-Type: agent
-Cosy-ClientType: 5
-Cosy-Data-Policy: agree
-Cosy-Date: 1782425825
-Cosy-Key: ME+5DcidxAgDr8Jp6/Nl81SvPZC62hZOU+...
-Cosy-MachineId: e065e549-0b81-42df-ad0c-3915170a5cc9
-Cosy-MachineToken: e065e549-0b81-42df-ad0c-3915170a5cc9
-Cosy-MachineType: 5
-Cosy-Scene: assistant
-Cosy-User: 019ea17a-7195-7834-b70d-faaaa80b9b7b
-Cosy-Version: 1.0.30
-Login-Version: v2
-traceparent: 00-9770df7174b0a8089beb6af012fb6dfb-5b280b4343450389-01
-```
-
-### 5.3 Perbandingan Headers (KRITIS)
-
-| Header | CLI v1.0.30 | 9Router | Status |
-|---|---|---|---|
-| **Cosy-Version** | **`1.0.30`** | **`1.0.14`** | ❌ **BEDA — root cause?** |
-| Cosy-MachineId | Persistent (file) | Generated per conn | ⚠️ Beda |
-| Cosy-MachineToken | Persistent (file) | Generated per conn | ⚠️ Beda |
-| Cosy-ClientIp | **TIDAK ADA** | machine_id | ❌ 9Router kirim extra |
-| Cosy-MachineOs | **TIDAK ADA** | `x86_64_windows` | ❌ 9Router kirim extra |
-| Cosy-BodyHash | **TIDAK ADA** | MD5(body) | ❌ 9Router kirim extra |
-| Cosy-BodyLength | **TIDAK ADA** | len(body) | ❌ 9Router kirim extra |
-| Cosy-SigPath | **TIDAK ADA** | URL path | ❌ 9Router kirim extra |
-| X-Model-Key | **TIDAK ADA** | model key | ❌ 9Router kirim extra |
-| X-Model-Source | **TIDAK ADA** | source | ❌ 9Router kirim extra |
-| X-Request-Id | **TIDAK ADA** | UUID | ❌ 9Router kirim extra |
-| Accept-Encoding | **TIDAK ADA** | `identity` | ❌ 9Router kirim extra |
-| Connection | `keep-alive` | TIDAK ADA | ⚠️ CLI punya, 9Router tidak |
-| traceparent | Ada (OTel) | TIDAK ADA | Normal (CLI telemetry) |
-
-**KESIMPULAN:** 9Router mengirim **10 header extra** yang TIDAK dikirim CLI. Dan `Cosy-Version` beda (`1.0.14` vs `1.0.30`).
-
-### 5.4 Request Body
-
-**Fakta:** Body ter-encode (WAF bypass). CLI mengirim ~2KB encoded body.
-
-**Evidence:** Body dimulai dengan `%hxHIMBgK.u*dwDxjwNYdru(jiuH%QBoi.N(` — ini encoded format.
-
----
-
-## 6. Langkah Selanjutnya
-
-Perlu **capture actual network traffic** dari Qoder CLI untuk membandingkan dengan 9Router.
-Pilihan: NODE_DEBUG, strace, tcpdump, atau mitmproxy.
