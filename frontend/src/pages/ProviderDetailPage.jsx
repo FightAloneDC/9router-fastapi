@@ -1848,11 +1848,14 @@ export default function ProviderDetailPage() {
   }, [fetchConnections, fetchAliases, fetchDisabledModels])
 
   // Fetch suggested models from provider's public API (if configured)
+  // Only auto-fetch if connections already have models (user hasn't cleared them)
   useEffect(() => {
     const fetcher = info?.modelsFetcher
     if (!fetcher) return
+    const hasModels = connections.some(c => (c.models || []).length > 0)
+    if (!hasModels) return
     fetchSuggestedModels(fetcher).then(setSuggestedModels)
-  }, [providerId, info])
+  }, [providerId, info, connections])
 
   useEffect(() => {
     setSelectedConnectionIds((prev) => prev.filter((id) => connections.some((conn) => conn.id === id)))
@@ -2153,8 +2156,16 @@ export default function ProviderDetailPage() {
                 </div>
               )}
             </div>
+            {info?.notice?.text && (
+              <div className="flex items-start gap-1.5 mt-1">
+                <Info size={12} className="text-zinc-500 mt-0.5 shrink-0" />
+                <p className="text-xs text-zinc-400">{info.notice.text}</p>
+              </div>
+            )}
             <p className="text-zinc-500">
-              {connections.length} connection{connections.length === 1 ? '' : 's'} configured
+              {isFreeNoAuth
+                ? 'No authentication required'
+                : `${connections.length} connection${connections.length === 1 ? '' : 's'} configured`}
             </p>
           </div>
         </div>
@@ -2192,8 +2203,9 @@ export default function ProviderDetailPage() {
       <Card>
         <CardContent>
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-lg font-semibold text-zinc-100">Connections</h2>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+            <h2 className="text-lg font-semibold text-zinc-100">Status</h2>
+            {!isFreeNoAuth && (
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
               {/* Bulk proxy button */}
               {connections.length > 0 && proxyPools.length > 0 && (
                 <Button size="sm" variant="secondary" onClick={() => setShowBulkProxyModal(true)}>
@@ -2244,9 +2256,68 @@ export default function ProviderDetailPage() {
                 </div>
               )}
             </div>
+            )}
           </div>
 
-          {connections.length === 0 ? (
+          {/* ── noAuth provider: simplified status ── */}
+          {isFreeNoAuth ? (
+            connections.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-10">
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-500/10 text-emerald-400 mb-4">
+                  <Plug size={20} />
+                </div>
+                <p className="text-sm text-zinc-400 mb-4">Ready to use — no API key required</p>
+                <Button size="sm" onClick={handleNoAuthConnect} disabled={connectingNoAuth}>
+                  {connectingNoAuth ? (
+                    <><Loader2 size={14} className="animate-spin mr-1" /> Connecting...</>
+                  ) : (
+                    <><CheckCircle2 size={14} className="mr-1" /> Enable</>
+                  )}
+                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4">
+                {/* Connected status */}
+                <div className="flex items-center gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
+                  <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-emerald-300 font-medium">Connected</p>
+                    <p className="text-xs text-zinc-500">No authentication required — requests use default credentials</p>
+                  </div>
+                  <Toggle
+                    checked={connections[0]?.is_active !== false}
+                    onChange={(checked) => handleToggleActive(connections[0].id, checked)}
+                  />
+                </div>
+                {/* Proxy pool selector for noAuth */}
+                {activePools.length > 0 && (
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-zinc-400 font-medium">Proxy Pool</span>
+                    <select
+                      value={connections[0]?.proxy_pool_id || '__none__'}
+                      onChange={async (e) => {
+                        const poolId = e.target.value === '__none__' ? null : e.target.value
+                        try {
+                          await providersApi.updateProvider(connections[0].id, { proxyPoolId: poolId })
+                          setConnections(prev => prev.map(c =>
+                            c.id === connections[0].id ? { ...c, proxy_pool_id: poolId } : c
+                          ))
+                        } catch (err) {
+                          console.error('Error updating proxy:', err)
+                        }
+                      }}
+                      className="px-2 py-1 text-xs border border-zinc-700 rounded-md bg-zinc-800/50 text-zinc-200 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                    >
+                      <option value="__none__">None</option>
+                      {activePools.map(pool => (
+                        <option key={pool.id} value={pool.id}>{pool.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )
+          ) : connections.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-10">
               <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary-600/10 text-primary-400 mb-4">
                 {isOAuth ? <Lock size={20} /> : <Key size={20} />}
