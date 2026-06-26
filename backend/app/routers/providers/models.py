@@ -46,16 +46,20 @@ async def _fetch_builtin_models(
     provider: str, api_key: str, data: dict,
 ) -> list[dict]:
     """Fetch models from a built-in provider using the Provider handler."""
-    token: str = data.get("accessToken") or api_key
-    if not token:
-        raise HTTPException(status_code=401, detail="No valid token found")
-
     try:
         p = Provider(provider)
         handler = p.handler()
-        return await handler.fetch_models(token, data)
     except (ValueError, ModuleNotFoundError):
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    token: str = data.get("accessToken") or api_key
+
+    # noAuth providers (like OpenCode Free) don't need a token
+    if not token and not p.config().NO_AUTH:
+        raise HTTPException(status_code=401, detail="No valid token found")
+
+    try:
+        return await handler.fetch_models(token, data)
     except httpx.ConnectError:
         raise HTTPException(status_code=502, detail=f"Cannot connect to {provider}")
     except httpx.TimeoutException:
@@ -168,7 +172,11 @@ async def clear_provider_models(
     db: AsyncSession = Depends(get_db),
     _user=Depends(get_current_user),
 ) -> dict:
-    """Clear all stored models from a provider connection and remove disabled models."""
+    """Clear all stored models from a provider connection.
+
+    Disabled models history is preserved in settings so that
+    Fetch Models can restore the enable/disable state.
+    """
     result = await db.execute(
         select(ProviderConnection).where(ProviderConnection.id == conn_id)
     )
@@ -188,20 +196,8 @@ async def clear_provider_models(
     data["models"] = []
     conn.data = json.dumps(data)
 
-    # Also clear disabled models for this provider alias from settings
-    provider_alias: str = ID_TO_ALIAS.get(conn.provider, conn.provider)
-    settings_result = await db.execute(select(SettingsModel).where(SettingsModel.id == 1))
-    settings_row = settings_result.scalar_one_or_none()
-    if settings_row:
-        try:
-            settings_data: dict = json.loads(settings_row.data) if settings_row.data else {}
-        except (json.JSONDecodeError, TypeError):
-            settings_data = {}
-        disabled: dict = settings_data.get("disabledModels", {})
-        if provider_alias in disabled:
-            del disabled[provider_alias]
-            settings_data["disabledModels"] = disabled
-            settings_row.data = json.dumps(settings_data)
+    # Note: disabled models history is preserved in settings
+    # so that Fetch Models can restore the enable/disable state
 
     await db.flush()
     return {"ok": True, "clearedCount": cleared_count}
