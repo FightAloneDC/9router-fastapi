@@ -17,6 +17,32 @@ from app.schemas.settings import DatabaseImportRequest, SettingsOut, SettingsUpd
 
 BACKUP_DIR = Path("backups")
 
+_DATETIME_FMTS = (
+    "%Y-%m-%dT%H:%M:%S.%f%z",
+    "%Y-%m-%dT%H:%M:%S%z",
+    "%Y-%m-%dT%H:%M:%S.%f",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d",
+)
+
+
+def _parse_datetimes(rows: list[dict]) -> list[dict]:
+    """Convert ISO datetime strings to datetime objects for asyncpg."""
+    out = []
+    for row in rows:
+        clean = {}
+        for k, v in row.items():
+            if isinstance(v, str) and len(v) > 10:
+                for fmt in _DATETIME_FMTS:
+                    try:
+                        v = datetime.strptime(v, fmt)
+                        break
+                    except ValueError:
+                        continue
+            clean[k] = v
+        out.append(clean)
+    return out
+
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 # Default settings values — mirrors original settingsRepo.js DEFAULT_SETTINGS
@@ -239,7 +265,7 @@ async def import_database(
         if not rows:
             continue
         await db.execute(text(f"TRUNCATE TABLE {table} CASCADE"))
-        for row in rows:
+        for row in _parse_datetimes(rows):
             clean = {k: v for k, v in row.items() if v is not None}
             if clean:
                 cols = ", ".join(clean.keys())
