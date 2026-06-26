@@ -1373,7 +1373,22 @@ export default function ProviderDetailPage() {
         filtered.forEach(c => (c.models || []).forEach(m => allModels.add(typeof m === 'string' ? m : m.id)))
         const mergedModels = [...allModels]
         setModels(mergedModels)
-        setEnabledModelIds(new Set(mergedModels))
+
+        // Fetch disabled models to respect user's enable/disable history
+        let disabledIds = []
+        try {
+          const { default: client } = await import('../api/client')
+          const disabledRes = await client.get('/models/disabled', { params: { providerAlias: providerStorageAlias } })
+          disabledIds = disabledRes.data?.ids || []
+          setDisabledModelIds(disabledIds)
+        } catch {
+          // Disabled models endpoint may not exist yet
+        }
+
+        // Only enable models that are NOT in the disabled list
+        const disabledSet = new Set(disabledIds)
+        const enabledIds = mergedModels.filter(m => !disabledSet.has(m))
+        setEnabledModelIds(new Set(enabledIds))
       } else {
         setModels([])
         setEnabledModelIds(new Set())
