@@ -294,7 +294,7 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
   const [azureData, setAzureData] = useState({ azureEndpoint: "", apiVersion: "2024-10-01-preview", deployment: "", organization: "" })
   const [cloudflareData, setCloudflareData] = useState({ accountId: "" })
   const [region, setRegion] = useState(defaultRegion)
-  const [defaultModel, setDefaultModel] = useState('')
+
   const [showApiKey, setShowApiKey] = useState(false)
   const [creating, setCreating] = useState(false)
   const [validating, setValidating] = useState(false)
@@ -310,7 +310,6 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
         setProxyPoolId(editConnection.proxy_pool_id || '')
         setApiKey('')
         setBaseUrl(editConnection.base_url || '')
-        setDefaultModel(editConnection.default_model || '')
         const ps = editConnection.providerSpecificData || editConnection.provider_specific || {}
         setOllamaHostUrl(ps.baseUrl || editConnection.base_url || '')
         setAzureData({
@@ -327,7 +326,6 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
         setProxyPoolId('')
         setApiKey('')
         setBaseUrl('')
-        setDefaultModel('')
         setOllamaHostUrl('')
         setAzureData({ azureEndpoint: "", apiVersion: "2024-10-01-preview", deployment: "", organization: "" })
         setCloudflareData({ accountId: "" })
@@ -385,7 +383,6 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
     if (!providerId) return
     if (!isOllamaLocal && !apiKey.trim() && !isEdit) return
     if (!isOllamaLocal && !name.trim() && !isEdit) return
-    if (isCompatible && !defaultModel.trim()) return
 
     setCreating(true)
     setError('')
@@ -397,7 +394,6 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
           providerSpecificData: buildProviderSpecificData(),
           priority: priority,
           proxyPoolId: proxyPoolId || null,
-          defaultModel: isCompatible ? defaultModel.trim() : undefined,
         }
         if (apiKey.trim()) {
           updateData.apiKey = apiKey.trim()
@@ -413,7 +409,6 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
           providerSpecificData: buildProviderSpecificData(),
           priority: priority,
           proxyPoolId: proxyPoolId || null,
-          defaultModel: isCompatible ? defaultModel.trim() : undefined,
         })
       }
       await onCreated()
@@ -434,7 +429,6 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
 
   const submitDisabled = creating
     || (!isOllamaLocal && !isEdit && (!name.trim() || !apiKey.trim()))
-    || (isCompatible && !defaultModel.trim())
     || (isAzure && !isEdit && (!azureData.azureEndpoint || !azureData.deployment || !azureData.organization))
     || (isCloudflareAi && !isEdit && !cloudflareData.accountId)
 
@@ -533,28 +527,9 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
           </div>
         )}
 
-        {isCompatible && (
-          <Input
-            label="Default Model"
-            value={defaultModel}
-            onChange={(e) => setDefaultModel(e.target.value)}
-            placeholder={isAnthropicCompatible ? "claude-3-5-sonnet-latest" : "gpt-4o-mini"}
-          />
-        )}
 
-        {isCompatible && (
-          <div>
-            <Input
-              label="Base URL"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder={editConnection?.base_url || "https://api.example.com/v1"}
-            />
-            <p className="text-xs text-zinc-400 mt-1">
-              Enter the model ID exactly as your compatible endpoint expects it. This model will be saved as the connection default.
-            </p>
-          </div>
-        )}
+
+
 
         {validationResult && (
           <div className={`rounded-lg border p-3 ${validationResult.valid ? 'bg-emerald-950/30 border-emerald-700/40' : 'bg-red-950/30 border-red-700/40'}`}>

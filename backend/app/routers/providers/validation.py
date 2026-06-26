@@ -7,6 +7,34 @@ from app.schemas.provider import ProviderValidateResponse
 
 async def _validate_provider(provider: str, api_key: str, data: dict | None = None) -> ProviderValidateResponse:
     """Validate provider credentials using provider handler."""
+    # Check if this is a compatible provider node
+    import json as _json
+    from sqlalchemy import select
+    from app.models.provider import ProviderNode
+    from app.database import async_session
+
+    async with async_session() as db:
+        node_result = await db.execute(
+            select(ProviderNode).where(ProviderNode.id == provider)
+        )
+        node = node_result.scalar_one_or_none()
+
+    if node:
+        node_data = {}
+        try:
+            node_data = _json.loads(node.data) if node.data else {}
+        except (_json.JSONDecodeError, TypeError):
+            pass
+
+        base_url = node_data.get("baseUrl", "")
+        extra_headers = node_data.get("extraHeaders")
+
+        if node.type == "anthropic-compatible":
+            return await _validate_custom_anthropic(api_key, base_url)
+        else:
+            return await _validate_custom_openai(api_key, base_url, extra_headers)
+
+    # Built-in provider
     try:
         p = Provider(provider)
         handler = p.handler()
