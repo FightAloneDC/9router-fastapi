@@ -33,6 +33,7 @@ SUGGESTED_MODELS_FILTERS = {
         {"id": m.get("id"), "name": m.get("id")}
         for m in models
         if m.get("id", "").endswith("-free")
+           or m.get("id") == "big-pickle"
     ],
     "kilo-gateway": lambda models: [
         {"id": m.get("id"), "name": m.get("name") or m.get("id")}
