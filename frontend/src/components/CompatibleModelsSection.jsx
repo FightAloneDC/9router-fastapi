@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { Plus, Download, Trash2, Copy, Check, FlaskConical, Loader2, Bot } from 'lucide-react'
 import Button from './ui/Button'
+import Toggle from './ui/Toggle'
 
-function CompatibleModelRow({ modelId, fullModel, copied, onCopy, onDelete, onTest, testStatus, isTesting }) {
+function CompatibleModelRow({ modelId, fullModel, copied, onCopy, onDelete, onTest, testStatus, isTesting, isDisabled, onToggle }) {
   const borderColor =
     testStatus === 'ok'
       ? 'border-emerald-500/40'
@@ -43,6 +44,12 @@ function CompatibleModelRow({ modelId, fullModel, copied, onCopy, onDelete, onTe
           )}
         </div>
       </div>
+      {onToggle && (
+        <Toggle
+          checked={!isDisabled}
+          onChange={(checked) => onToggle(modelId, !checked)}
+        />
+      )}
       <button
         onClick={onDelete}
         className="p-1 opacity-0 group-hover:opacity-100 hover:bg-red-500/10 rounded text-zinc-500 hover:text-red-400 transition-all cursor-pointer"
@@ -71,6 +78,8 @@ function CompatibleModelRow({ modelId, fullModel, copied, onCopy, onDelete, onTe
  * @param {Function} onDeleteAlias - Remove model alias (alias)
  * @param {Array} connections - Provider connections (for /models import)
  * @param {boolean} isAnthropic - Whether this is an Anthropic-compatible node
+ * @param {Array} disabledModelIds - List of disabled model IDs
+ * @param {Function} onToggleModel - Toggle model enable/disable (modelId, disable)
  */
 export default function CompatibleModelsSection({
   providerStorageAlias,
@@ -82,6 +91,8 @@ export default function CompatibleModelsSection({
   onDeleteAlias,
   connections,
   isAnthropic,
+  disabledModelIds = [],
+  onToggleModel,
 }) {
   const [newModel, setNewModel] = useState('')
   const [adding, setAdding] = useState(false)
@@ -107,11 +118,33 @@ export default function CompatibleModelsSection({
     ([, model]) => model.startsWith(`${providerStorageAlias}/`)
   )
 
-  const allModels = providerAliases.map(([alias, fullModel]) => ({
+  // Get models from aliases
+  const aliasModels = providerAliases.map(([alias, fullModel]) => ({
     modelId: fullModel.replace(`${providerStorageAlias}/`, ''),
     fullModel,
     alias,
   }))
+
+  // Get models from connections (fetched via Fetch Models)
+  const connectionModelIds = new Set()
+  connections.forEach(c => {
+    (c.models || []).forEach(m => {
+      const id = typeof m === 'string' ? m : m.id
+      connectionModelIds.add(id)
+    })
+  })
+
+  // Merge: alias models + connection models not in aliases
+  const aliasModelIds = new Set(aliasModels.map(m => m.modelId))
+  const connectionOnlyModels = [...connectionModelIds]
+    .filter(id => !aliasModelIds.has(id))
+    .map(id => ({
+      modelId: id,
+      fullModel: `${providerStorageAlias}/${id}`,
+      alias: id,
+    }))
+
+  const allModels = [...aliasModels, ...connectionOnlyModels]
 
   const generateDefaultAlias = (modelId) => {
     const parts = modelId.split('/')
@@ -231,13 +264,15 @@ export default function CompatibleModelsSection({
               onTest={connections.length > 0 ? () => handleTestModel(modelId) : undefined}
               testStatus={modelTestResults[modelId]}
               isTesting={testingModelId === modelId}
+              isDisabled={disabledModelIds.includes(modelId)}
+              onToggle={onToggleModel}
             />
           ))}
         </div>
       )}
 
       {allModels.length === 0 && (
-        <p className="text-xs text-zinc-500 py-4 text-center">No models configured yet</p>
+        <p className="text-xs text-zinc-500 py-4 text-center">No models configured yet. Click "Fetch Models" above or add models manually.</p>
       )}
     </div>
   )

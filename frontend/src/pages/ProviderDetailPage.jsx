@@ -19,7 +19,6 @@ import { proxyPoolsApi } from '../api/proxyPools'
 import { settingsApi } from '../api/settings'
 import useCatalogStore from '../stores/catalogStore'
 import { copyToClipboard } from '../utils/clipboard'
-import CompatibleModelsSection from '../components/CompatibleModelsSection'
 import { fetchSuggestedModels } from '../utils/providerModelsFetcher'
 import EditCompatibleNodeModal from '../components/EditCompatibleNodeModal'
 import OAuthModal from '../components/OAuthModal'
@@ -1247,6 +1246,8 @@ export default function ProviderDetailPage() {
   const [newModel, setNewModel] = useState('')
   const [showAddCustomModel, setShowAddCustomModel] = useState(false)
   const [modelAliases, setModelAliases] = useState({})
+  const modelAliasesRef = useRef({})
+  useEffect(() => { modelAliasesRef.current = modelAliases }, [modelAliases])
   const [disabledModelIds, setDisabledModelIds] = useState([])
   const [modelTestResults, setModelTestResults] = useState({})
   const [testingModelId, setTestingModelId] = useState(null)
@@ -1367,10 +1368,19 @@ export default function ProviderDetailPage() {
       setConnections(filtered)
       setProxyPools((proxyRes.data || []).filter((p) => p.is_active !== false))
 
-      // Derive models from ALL connections (union)
+      // Derive models from ALL connections (union) + aliases
       if (filtered.length > 0) {
         const allModels = new Set()
         filtered.forEach(c => (c.models || []).forEach(m => allModels.add(typeof m === 'string' ? m : m.id)))
+
+        // Also include models from aliases (for compatible providers)
+        Object.entries(modelAliasesRef.current).forEach(([, fullModel]) => {
+          const prefix = `${providerStorageAlias}/`
+          if (fullModel.startsWith(prefix)) {
+            allModels.add(fullModel.slice(prefix.length))
+          }
+        })
+
         const mergedModels = [...allModels]
         setModels(mergedModels)
 
@@ -1437,7 +1447,7 @@ export default function ProviderDetailPage() {
     } finally {
       setLoading(false)
     }
-  }, [providerId])
+  }, [providerId, providerStorageAlias])
 
   const handleChangeModelType = useCallback(async (modelId, newType) => {
     const connId = connections[0]?.id
@@ -1588,6 +1598,20 @@ export default function ProviderDetailPage() {
           providersApi.clearProviderModels(c.id)
         )
       )
+
+      // For compatible providers, also clear aliases
+      if (isCompatible) {
+        const providerAliases = Object.entries(modelAliases)
+          .filter(([, fullModel]) => fullModel.startsWith(`${providerStorageAlias}/`))
+        const { default: client } = await import('../api/client')
+        await Promise.all(
+          providerAliases.map(([alias]) =>
+            client.delete('/models/alias', { params: { alias } })
+          )
+        )
+        await fetchAliases()
+      }
+
       setModels([])
       setEnabledModelIds(new Set())
       setSuggestedModels([])
@@ -1639,6 +1663,14 @@ export default function ProviderDetailPage() {
       await fetchDisabledModels()
     } catch (error) {
       console.log('Error enabling model:', error)
+    }
+  }
+
+  const handleToggleModel = async (modelId, disable) => {
+    if (disable) {
+      await handleDisableModel(modelId)
+    } else {
+      await handleEnableModel(modelId)
     }
   }
 
@@ -1892,22 +1924,6 @@ export default function ProviderDetailPage() {
 
   // ── Render models section ──
   const renderModelsSection = () => {
-    if (isCompatible) {
-      return (
-        <CompatibleModelsSection
-          providerStorageAlias={providerStorageAlias}
-          providerDisplayAlias={providerDisplayAlias}
-          modelAliases={modelAliases}
-          copied={copied}
-          onCopy={handleCopy}
-          onSetAlias={handleSetAlias}
-          onDeleteAlias={handleDeleteAlias}
-          connections={connections}
-          isAnthropic={isAnthropicCompatible}
-        />
-      )
-    }
-
     if (info?.passthroughModels) {
       return (
         <PassthroughModelsSection
@@ -2428,7 +2444,7 @@ export default function ProviderDetailPage() {
         <CardContent>
           <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-lg font-semibold text-zinc-100">Available Models</h2>
-            {!isCompatible && models.length > 0 && (() => {
+            {models.length > 0 && (() => {
               const disabledSet = new Set(disabledModelIds)
               const activeIds = models.filter((m) => !disabledSet.has(typeof m === 'string' ? m : m.id))
               return (
@@ -2454,7 +2470,7 @@ export default function ProviderDetailPage() {
                 </div>
               )
             })()}
-            {!isCompatible && models.length === 0 && connections.length > 0 && (
+            {models.length === 0 && connections.length > 0 && (
               <Button size="sm" variant="secondary" onClick={handleFetchModels} disabled={fetchingModels}>
                 {fetchingModels ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                 {fetchingModels ? 'Fetching...' : 'Fetch Models'}
@@ -2469,7 +2485,7 @@ export default function ProviderDetailPage() {
       </Card>
 
       {/* ── Chat Test Playground ── */}
-      <ChatTestPlayground providerId={providerId} providerAlias={providerAlias} connections={connections} />
+      <ChatTestPlayground providerId={providerId} providerAlias={providerDisplayAlias} connections={connections} />
 
       {/* ── Bulk Proxy Modal ── */}
       <Modal

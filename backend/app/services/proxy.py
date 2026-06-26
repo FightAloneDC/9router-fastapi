@@ -691,6 +691,20 @@ async def _build_target_for_provider(
     """
     provider_ids = _resolve_provider_aliases(provider_name)
 
+    # If not found in built-in aliases, check provider node prefixes
+    if provider_ids == [provider_name]:
+        from app.models.provider import ProviderNode
+        import json as _json
+        node_result = await db.execute(select(ProviderNode))
+        for node in node_result.scalars().all():
+            try:
+                node_data = _json.loads(node.data) if node.data else {}
+            except (_json.JSONDecodeError, TypeError):
+                node_data = {}
+            if node_data.get("prefix") == provider_name:
+                provider_ids = [node.id]
+                break
+
     # Try each provider for this alias until we find active connections
     for resolved_provider in provider_ids:
         connections = await get_connections_cached(db, resolved_provider)
