@@ -1387,8 +1387,22 @@ export default function ProviderDetailPage() {
 
         // Only enable models that are NOT in the disabled list
         const disabledSet = new Set(disabledIds)
-        const enabledIds = mergedModels.filter(m => !disabledSet.has(m))
-        setEnabledModelIds(new Set(enabledIds))
+
+        // If no disabled history exists (first fetch), disable all models by default
+        if (disabledIds.length === 0 && mergedModels.length > 0) {
+          setDisabledModelIds(mergedModels)
+          setEnabledModelIds(new Set())
+          // Save to backend so next visit respects this state
+          try {
+            const { default: client } = await import('../api/client')
+            await client.post('/models/disabled', { providerAlias: providerStorageAlias, ids: mergedModels })
+          } catch {
+            // Best effort
+          }
+        } else {
+          const enabledIds = mergedModels.filter(m => !disabledSet.has(m))
+          setEnabledModelIds(new Set(enabledIds))
+        }
       } else {
         setModels([])
         setEnabledModelIds(new Set())
