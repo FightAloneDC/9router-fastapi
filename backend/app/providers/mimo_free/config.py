@@ -27,7 +27,7 @@ class MimoFreeMetadata(BaseMetadata):
     name: str = "MiMo Code Free"
     color: str = "#FF6900"
     textIcon: str = "MF"
-    icon: str = "smart_toy"
+    icon: str = "/providers/mimo-free.png"
     website: str = "https://xiaomimimo.com"
     notice: dict | None = {
         "text": "Free AI models via MiMo Code CLI. No API key required.",
