@@ -14,7 +14,9 @@ class XiaomiTokenplanHandler(BaseProviderHandler):
 
     def _resolve_base_url(self, data: dict | None = None) -> str:
         if data:
-            region = data.get("region", "sgp")
+            # Region can be at top level or inside providerSpecificData
+            psd = data.get("providerSpecificData", {})
+            region = data.get("region") or psd.get("region", "sgp")
             if region in self.REGION_URLS:
                 return self.REGION_URLS[region].rstrip("/")
             if data.get("baseUrl"):

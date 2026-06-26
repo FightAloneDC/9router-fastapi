@@ -529,17 +529,22 @@ def _resolve_base_url(provider: str, data: dict | None = None) -> str:
     if data is None:
         data = {}
 
-    # Check if custom baseUrl is provided in connection data
+    # Try handler first — it may have region-aware URL logic
+    try:
+        p = Provider(provider)
+        handler_url = p.resolve_base_url(data)
+        if handler_url:
+            return handler_url
+    except (ValueError, ModuleNotFoundError):
+        pass
+
+    # Fallback to custom baseUrl from connection data
     if data.get("baseUrl"):
         return data["baseUrl"]
 
-    try:
-        p = Provider(provider)
-        return p.resolve_base_url(data)
-    except (ValueError, ModuleNotFoundError):
-        # Fallback for unknown providers
-        cfg = _get_provider_proxy_config(provider)
-        return cfg.get("base_url", "")
+    # Last resort: provider config
+    cfg = _get_provider_proxy_config(provider)
+    return cfg.get("base_url", "")
 
 def _build_upstream_url(provider: str, base_url: str, stream: bool = False, data: dict | None = None, model: str = "") -> str:
     """Build the upstream URL for a provider using handler."""
