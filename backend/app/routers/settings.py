@@ -3,6 +3,7 @@
 import json
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -13,6 +14,8 @@ from app.database import get_db
 from app.models.settings import SettingsModel
 from app.routers.auth import get_current_user
 from app.schemas.settings import DatabaseImportRequest, SettingsOut, SettingsUpdate
+
+BACKUP_DIR = Path("backups")
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -211,7 +214,25 @@ async def import_database(
     db: AsyncSession = Depends(get_db),
     _user: object = Depends(get_current_user),
 ) -> dict[str, object]:
-    """Import database tables from JSON export. Overwrites existing data."""
+    """Import database tables from JSON export.
+
+    Auto-backs up all tables before overwriting.
+    """
+    # Step 1: Auto-backup current data before any destructive operation
+    backup_data: dict[str, list[dict[str, object]]] = {}
+    for table in DB_TABLES:
+        rows = (await db.execute(text(f"SELECT * FROM {table}"))).mappings().all()
+        backup_data[table] = [dict(r) for r in rows]
+
+    backup_dir = BACKUP_DIR.resolve()
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    backup_path = backup_dir / f"auto-pre-import-{stamp}.json"
+    backup_path.write_text(
+        json.dumps({"exported_at": stamp, "tables": backup_data}, indent=2, default=str)
+    )
+
+    # Step 2: Import with TRUNCATE
     imported: dict[str, int] = {}
     for table in DB_TABLES:
         rows = body.tables.get(table, [])
@@ -230,7 +251,7 @@ async def import_database(
         imported[table] = len(rows)
 
     await db.commit()
-    return {"success": True, "imported": imported}
+    return {"success": True, "imported": imported, "backup": backup_path}
 
 
 # --- Proxy test ---

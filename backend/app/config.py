@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     GITHUB_CLIENT_ID: str
     KIMI_CODING_CLIENT_ID: str
 
+    # Paths
+    BACKUP_DIR: str = "backups"
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 
