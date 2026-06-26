@@ -182,6 +182,17 @@ async def _stream_response(
     When *raw_body* is provided (bytes), it is sent as-is instead of JSON-
     encoding *body*.  This is required for Qoder's WAF-bypass encoding.
     """
+    # Call provider's prepare_request hook (e.g. mimo-free JWT bootstrap)
+    try:
+        from app.providers.provider import Provider
+        p = Provider(target.provider)
+        handler = p.handler()
+        target.headers, body = await handler.prepare_request(
+            target.headers, body, stream=True,
+        )
+    except (ValueError, ModuleNotFoundError):
+        pass
+
     # Determine send mode: raw bytes (Qoder) vs JSON (everything else)
     send_kwargs: dict = {"headers": target.headers}
     if raw_body is not None:
@@ -310,6 +321,17 @@ async def _non_stream_response(
 
     Returns (JSONResponse, raw_data_dict) so callers can extract usage info.
     """
+    # Call provider's prepare_request hook (e.g. mimo-free JWT bootstrap)
+    try:
+        from app.providers.provider import Provider
+        p = Provider(target.provider)
+        handler = p.handler()
+        target.headers, body = await handler.prepare_request(
+            target.headers, body, stream=False,
+        )
+    except (ValueError, ModuleNotFoundError):
+        pass
+
     send_kwargs: dict = {"headers": target.headers}
     if raw_body is not None:
         send_kwargs["content"] = raw_body

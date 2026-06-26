@@ -328,6 +328,17 @@ async def test_model(
         if signed_headers:
             send_headers = signed_headers
 
+        # Call provider's prepare_request hook (e.g. mimo-free JWT bootstrap)
+        try:
+            from app.providers.provider import Provider
+            p = Provider(target.provider)
+            handler = p.handler()
+            send_headers, test_body = await handler.prepare_request(
+                send_headers, test_body, stream=False,
+            )
+        except (ValueError, ModuleNotFoundError):
+            pass
+
         async with httpx.AsyncClient(timeout=20.0) as client:
             if body.kind == "embedding":
                 # For embeddings, use the embeddings endpoint

@@ -95,6 +95,22 @@ class BaseProviderHandler:
     def __init__(self, config: BaseProviderConfig) -> None:
         self.config = config
 
+    async def prepare_request(
+        self,
+        headers: dict[str, str],
+        body: dict,
+        stream: bool = False,
+    ) -> tuple[dict[str, str], dict]:
+        """Async hook to modify headers/body before sending upstream request.
+
+        Override for providers that need pre-request steps (e.g. JWT bootstrap).
+        Called by the proxy after build_headers but before sending the request.
+
+        Returns:
+            (headers, body) — possibly modified.
+        """
+        return headers, body
+
     async def validate(self, api_key: str, data: dict | None = None) -> ValidateResult:
         """Validate provider credentials."""
         if not api_key:
