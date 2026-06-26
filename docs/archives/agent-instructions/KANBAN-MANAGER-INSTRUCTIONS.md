@@ -52,8 +52,8 @@ Hot-reload: YES — volume mounts, DO NOT rebuild unless dependencies change
 ### Auth
 ```
 Default admin login: POST /auth/login with {"password":"123456"}
-Supabase password: 2prN4qpazxShYgFz (project ref: axtxomcmegcubhwiqxui)
-DB: user=dev_9route, db=db_9route, password=dev_9route_pass
+Supabase: see backups/SENSITIVE-CREDENTIALS.md (gitignored)
+DB: see .env.docker (gitignored, copy from .env.docker.example)
 ```
 
 ---

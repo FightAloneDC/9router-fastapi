@@ -23,13 +23,28 @@ from urllib.parse import urlparse
 # Note: Supabase direct connection is IPv6-only. If your VM lacks IPv6,
 # use the Supavisor pooler (port 6543) or the IPv4 add-on.
 #
-# You can override via env var: DATABASE_URL=<your-url>
+# Loads from backend/.env if python-dotenv is available.
+# Override via env var: DATABASE_URL=<your-url>
 
 import os
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://dev_9route:dev_9route_pass@localhost:5432/db_9route"
-)
+from pathlib import Path
+
+# Attempt to load .env from backend/ directory
+_env_file = Path(__file__).resolve().parent.parent / ".env"
+if _env_file.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_file)
+    except ImportError:
+        pass  # python-dotenv not installed, rely on shell env
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+if not DATABASE_URL:
+    print("ERROR: DATABASE_URL not set.")
+    print("Either:")
+    print("  1. Create backend/.env with DATABASE_URL=...")
+    print("  2. Export DATABASE_URL in your shell")
+    sys.exit(1)
 
 # All tables expected by the app models
 EXPECTED_TABLES = [
