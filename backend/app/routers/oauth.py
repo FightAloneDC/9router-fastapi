@@ -17,7 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.provider import ProviderConnection
-from app.providers import PROVIDER_GROK_CLI, PROVIDER_QODER
+from app.providers import (
+    PROVIDER_BLACKBOX,
+    PROVIDER_GROK_CLI,
+    PROVIDER_QODER,
+)
+from app.providers.blackbox.bulk import (
+    mask_key as blackbox_mask_key,
+    parse_api_key_entry as parse_blackbox_key_entry,
+)
 from app.providers.codex.proxy import CodexProxy
 from app.providers.grok_cli.bulk import (
     is_expired,
@@ -603,9 +611,17 @@ async def qoder_pat_import(
 # ── Bulk Import (grok-farm-modular style JSON exports) ──────────────
 
 # provider -> (farm entry parser, connection auth_type)
-_BULK_PARSERS: dict[str, tuple[Callable[[Any], dict], str]] = {
-    PROVIDER_GROK_CLI: (parse_grok_farm_entry, "oauth"),
-    PROVIDER_QODER: (parse_qoder_farm_entry, "apikey"),
+# provider -> (kind, parse_entry, auth_type); kind selects the
+# import loop: "farm" = email/token account exports, "apikeys" =
+# plain API key lines (parsing lives in the provider module).
+_BULK_PARSERS: dict[
+    str, tuple[str, Callable[[Any], dict], str]
+] = {
+    PROVIDER_GROK_CLI: ("farm", parse_grok_farm_entry, "oauth"),
+    PROVIDER_QODER: ("farm", parse_qoder_farm_entry, "apikey"),
+    PROVIDER_BLACKBOX: (
+        "apikeys", parse_blackbox_key_entry, "apikey",
+    ),
 }
 
 
@@ -616,13 +632,15 @@ async def provider_bulk_import(
     replace: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
-    """Bulk import grok-farm-modular account exports.
+    """Bulk import connections from account/key exports.
 
-    Body accepts an array, a single object, or ``{"accounts": [...]}``.
-    Each entry needs ``email`` + ``tokens.access_token`` (farm format).
-    Entries with an expired ``tokens.expires_at`` are skipped. Existing
-    emails are upserted when ``replace=true``, otherwise skipped.
-    Tokens are never echoed back in the response.
+    Body accepts an array, a single entry, or ``{"accounts": [...]}``.
+    Entry shape depends on the provider's bulk format: farm exports
+    need ``email`` + ``tokens.access_token`` (expired entries are
+    skipped); API-key providers accept ``key`` or ``key|name`` lines.
+    Existing entries are deduplicated by email (farm) or key
+    (apikeys) and upserted when ``replace=true``, otherwise skipped.
+    Secrets are never echoed back in the response.
     """
     entry = _BULK_PARSERS.get(provider)
     if entry is None:
@@ -630,7 +648,7 @@ async def provider_bulk_import(
             status_code=400,
             detail=f"Bulk import not supported for '{provider}'",
         )
-    parse_farm_entry, auth_type = entry
+    kind, parse_entry, auth_type = entry
 
     try:
         body = await request.json()
@@ -651,6 +669,11 @@ async def provider_bulk_import(
     if not accounts:
         raise HTTPException(status_code=400, detail="No accounts provided")
 
+    if kind == "apikeys":
+        return await _bulk_import_api_keys(
+            db, provider, accounts, parse_entry, replace,
+        )
+
     counts = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
     results: list[dict] = []
 
@@ -658,7 +681,7 @@ async def provider_bulk_import(
     # parallel calls would race (mirrors the Node.js reference).
     for i, raw in enumerate(accounts):
         try:
-            parsed = parse_farm_entry(raw)
+            parsed = parse_entry(raw)
         except ValueError as e:
             results.append({
                 "index": i, "status": "failed", "error": str(e),
@@ -726,3 +749,94 @@ def _update_bulk_connection(conn: ProviderConnection, parsed: dict) -> None:
     # Bulk-imported connections are always named by email
     conn.name = parsed["email"]
     conn.email = parsed["email"]
+
+
+async def _bulk_import_api_keys(
+    db: AsyncSession,
+    provider: str,
+    accounts: list,
+    parse_entry: Callable[[Any], dict],
+    replace: bool,
+) -> dict:
+    """Bulk import plain API keys (one connection per key).
+
+    Connections are deduplicated by the key stored in the data
+    blob. Existing keys are upserted when ``replace=true``,
+    otherwise skipped. Keys are never echoed in the response.
+    """
+    counts = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+    results: list[dict] = []
+
+    # Index the provider's existing connections by blob apiKey
+    rows = (await db.execute(
+        select(ProviderConnection).where(
+            ProviderConnection.provider == provider,
+        )
+    )).scalars().all()
+    by_key: dict[str, ProviderConnection] = {}
+    for conn in rows:
+        try:
+            blob = json.loads(conn.data or "{}")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        key = blob.get("apiKey")
+        if isinstance(key, str) and key:
+            by_key[key] = conn
+
+    # Serial loop — connection creation touches shared state
+    # (priority); parallel calls would race.
+    for i, raw in enumerate(accounts):
+        try:
+            parsed = parse_entry(raw)
+        except ValueError as e:
+            results.append({
+                "index": i, "status": "failed", "error": str(e),
+            })
+            counts["failed"] += 1
+            continue
+
+        key = parsed["api_key"]
+        name = parsed["name"]
+        existing = by_key.get(key)
+
+        if existing and not replace:
+            results.append({
+                "index": i, "name": existing.name,
+                "status": "skipped_duplicate",
+            })
+            counts["skipped"] += 1
+            continue
+
+        if existing:
+            blob = json.loads(existing.data or "{}")
+            blob["apiKey"] = key
+            blob["testStatus"] = "active"
+            if name:
+                blob["displayName"] = name
+                existing.name = name
+            existing.data = json.dumps(blob)
+            display = existing.name
+            status = "updated"
+        else:
+            display = name or blackbox_mask_key(key)
+            conn = await _save_connection(
+                db, provider,
+                {
+                    "apiKey": key,
+                    "displayName": display,
+                    "providerSpecificData": {
+                        "authMethod": "bulk_import",
+                    },
+                },
+                auth_type="apikey",
+            )
+            by_key[key] = conn
+            status = "created"
+
+        results.append({
+            "index": i, "name": display, "status": status,
+        })
+        counts[status] += 1
+
+    await db.commit()
+    return {**counts, "results": results}

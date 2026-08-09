@@ -4,7 +4,7 @@ import Modal from '../ui/Modal'
 import Button from '../ui/Button'
 import { oauthApi } from '../../api/oauth'
 
-const PLACEHOLDER = `[
+const FARM_PLACEHOLDER = `[
   {
     "email": "user@example.com",
     "tokens": {
@@ -14,6 +14,9 @@ const PLACEHOLDER = `[
     }
   }
 ]`
+
+const API_KEYS_PLACEHOLDER = `bb_key_abcdef1234567890
+bb_key_0987654321zyxwvu|Work account`
 
 function normalizeToArray(parsed) {
   if (Array.isArray(parsed)) return parsed
@@ -28,9 +31,11 @@ export default function BulkImportModal({
   isOpen,
   providerId,
   providerName = '',
+  format = 'farm-json',
   onClose,
   onSuccess,
 }) {
+  const isApiKeys = format === 'api-keys'
   const [jsonText, setJsonText] = useState('')
   const [replace, setReplace] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -63,14 +68,23 @@ export default function BulkImportModal({
     if (!trimmed) return
 
     let accounts
-    try {
-      accounts = normalizeToArray(JSON.parse(trimmed))
-    } catch (err) {
-      setError(`Invalid JSON: ${err.message}`)
-      return
+    if (isApiKeys) {
+      accounts = trimmed
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+    } else {
+      try {
+        accounts = normalizeToArray(JSON.parse(trimmed))
+      } catch (err) {
+        setError(`Invalid JSON: ${err.message}`)
+        return
+      }
     }
     if (!accounts || accounts.length === 0) {
-      setError('No accounts found in input')
+      setError(
+        isApiKeys ? 'No API keys found in input' : 'No accounts found in input'
+      )
       return
     }
 
@@ -103,14 +117,18 @@ export default function BulkImportModal({
     >
       <div className="flex flex-col gap-4">
         <p className="text-xs text-zinc-400">
-          Paste a grok-farm-modular JSON export (array of accounts with
-          email + tokens), or upload the .json file. Accounts with an
-          expired token are skipped.
+          {isApiKeys
+            ? 'Paste API keys one per line — format: key or key|name — ' +
+              'or upload a .txt/.json file. Existing keys are skipped ' +
+              'unless replace is enabled.'
+            : 'Paste a grok-farm-modular JSON export (array of accounts ' +
+              'with email + tokens), or upload the .json file. Accounts ' +
+              'with an expired token are skipped.'}
         </p>
 
         <textarea
           className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-sm font-mono resize-y min-h-[220px] text-zinc-200 focus:outline-none focus:ring-1 focus:ring-primary-500"
-          placeholder={PLACEHOLDER}
+          placeholder={isApiKeys ? API_KEYS_PLACEHOLDER : FARM_PLACEHOLDER}
           value={jsonText}
           onChange={(e) => setJsonText(e.target.value)}
           disabled={submitting}
@@ -125,7 +143,9 @@ export default function BulkImportModal({
               onChange={(e) => setReplace(e.target.checked)}
               disabled={submitting}
             />
-            Replace existing (upsert by email)
+            {isApiKeys
+              ? 'Replace existing (upsert by API key)'
+              : 'Replace existing (upsert by email)'}
           </label>
           <Button
             size="sm"
@@ -133,12 +153,17 @@ export default function BulkImportModal({
             onClick={() => fileRef.current?.click()}
             disabled={submitting}
           >
-            <Upload size={14} className="mr-1" /> Upload JSON File
+            <Upload size={14} className="mr-1" />
+            {isApiKeys ? 'Upload File' : 'Upload JSON File'}
           </Button>
           <input
             ref={fileRef}
             type="file"
-            accept=".json,application/json"
+            accept={
+              isApiKeys
+                ? '.txt,.json,text/plain,application/json'
+                : '.json,application/json'
+            }
             className="hidden"
             onChange={handleFile}
           />
@@ -175,7 +200,10 @@ export default function BulkImportModal({
               <ul className="rounded-lg border border-zinc-700/50 bg-zinc-950 p-2 text-xs font-mono max-h-40 overflow-y-auto">
                 {problemItems.map((item) => (
                   <li key={item.index} className="text-yellow-400">
-                    [{item.index}] {item.email ? `${item.email}: ` : ''}
+                    [{item.index}]{' '}
+                    {item.email || item.name
+                      ? `${item.email || item.name}: `
+                      : ''}
                     {item.status}
                     {item.error ? ` — ${item.error}` : ''}
                   </li>

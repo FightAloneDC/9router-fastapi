@@ -53,6 +53,10 @@ class BaseProviderConfig(BaseModel):
     MODELS_FETCHER: dict | None = None
     SUPPORTS_PAT: bool = False
     SUPPORTS_BULK_IMPORT: bool = False
+    # Bulk import payload shape: "farm-json" (array of accounts
+    # with email + tokens) or "api-keys" (one key per line,
+    # optionally "key|name").
+    BULK_IMPORT_FORMAT: str = "farm-json"
     REQUIRES_PROXY: bool = False
     CUSTOM_MODAL: str = ""  # frontend modal component name (e.g. "kiro", "cursor", "gitlab")
     PROVIDER_SPECIFIC_DATA: bool = False  # needs extra form fields in AddKeyModal

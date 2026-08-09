@@ -16,6 +16,8 @@ class BlackboxConfig(BaseProviderConfig):
     ALIAS: str = "bb"
     BASE_URL: str = "https://api.blackbox.ai/v1"
     SERVICE_KINDS: list[str] = ["llm"]
+    SUPPORTS_BULK_IMPORT: bool = True
+    BULK_IMPORT_FORMAT: str = "api-keys"
 
 
 class BlackboxMetadata(BaseMetadata):

@@ -2612,6 +2612,7 @@ export default function ProviderDetailPage() {
           isOpen={showBulkImport}
           providerId={providerId}
           providerName={info?.name || ''}
+          format={info?.bulkImportFormat || 'farm-json'}
           onClose={() => setShowBulkImport(false)}
           onSuccess={fetchConnections}
         />

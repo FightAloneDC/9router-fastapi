@@ -161,6 +161,7 @@ def _build_provider_entry(
         "modelsFetcher": config.MODELS_FETCHER,
         "supportsPAT": config.SUPPORTS_PAT,
         "supportsBulkImport": config.SUPPORTS_BULK_IMPORT,
+        "bulkImportFormat": config.BULK_IMPORT_FORMAT,
         "requiresProxy": config.REQUIRES_PROXY,
         "customModal": config.CUSTOM_MODAL or None,
     }
