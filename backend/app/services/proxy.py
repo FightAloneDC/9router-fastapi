@@ -1,13 +1,13 @@
 """Core proxy service — resolve model to provider, forward request, stream response."""
 
+import asyncio
 import json
+import logging
 import random
 import time
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,7 +15,6 @@ from app.models.combo import Combo
 from app.models.provider import ProviderConnection, ProviderNode
 from app.models.settings import SettingsModel
 from app.providers.provider import Provider
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +209,7 @@ def get_rotated_targets(
 # Connection cache (avoid DB query on every request)
 # ──────────────────────────────────────────────
 _connection_cache: dict[str, tuple[list, float]] = {}
+_connection_cache_lock = asyncio.Lock()
 CACHE_TTL = 30  # seconds
 
 
@@ -226,21 +226,31 @@ async def get_connections_cached(
         if now - timestamp < CACHE_TTL:
             return connections
 
-    result = await db.execute(
-        select(ProviderConnection)
-        .where(
-            ProviderConnection.provider == provider_id,
-            ProviderConnection.is_active == True,
+    # Lock around the async DB read so a concurrent call to
+    # invalidate_connection_cache() cannot race the check-then-assign and
+    # leave a stale snapshot in the cache (TOCTOU across the await).
+    async with _connection_cache_lock:
+        # Re-check inside the lock: another request may have filled it.
+        if not force_refresh and provider_id in _connection_cache:
+            connections, timestamp = _connection_cache[provider_id]
+            if now - timestamp < CACHE_TTL:
+                return connections
+        result = await db.execute(
+            select(ProviderConnection)
+            .where(
+                ProviderConnection.provider == provider_id,
+                ProviderConnection.is_active == True,
+            )
+            .order_by(ProviderConnection.priority)
         )
-        .order_by(ProviderConnection.priority)
-    )
-    connections = result.scalars().all()
-    _connection_cache[provider_id] = (connections, now)
+        connections = result.scalars().all()
+        _connection_cache[provider_id] = (connections, now)
     return connections
 
 
 def invalidate_connection_cache(provider_id: str = None):
     """Invalidate connection cache."""
+    # Rebuild via a fresh sync assignment (lock handled in get_connections_cached).
     if provider_id:
         _connection_cache.pop(provider_id, None)
     else:
@@ -715,8 +725,9 @@ async def _build_target_for_provider(
 
     # If not found in built-in aliases, check provider node prefixes
     if provider_ids == [provider_name]:
-        from app.models.provider import ProviderNode
         import json as _json
+
+        from app.models.provider import ProviderNode
         node_result = await db.execute(select(ProviderNode))
         for node in node_result.scalars().all():
             try:

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.request_detail import RequestDetail
 from app.models.usage import UsageDaily, UsageHistory
 from app.routers.usage_stream import notify_usage_update
+from app.services.active_requests import push_recent_request
 
 logger = logging.getLogger(__name__)
 
@@ -458,6 +459,15 @@ async def save_request_tracking(
 
         # Commit all at once
         await db.commit()
+
+        # Push to recent ring buffer for SSE real-time updates
+        push_recent_request(
+            provider=provider or "unknown",
+            model=model or "unknown",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            status="ok",
+        )
 
         # Notify SSE clients of usage update
         notify_usage_update()

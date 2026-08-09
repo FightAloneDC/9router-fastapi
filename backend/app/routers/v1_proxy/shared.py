@@ -1,5 +1,6 @@
 """Shared utilities for v1 proxy endpoints."""
 
+import asyncio
 import json
 import time
 
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.proxy import should_fallback_on_error
 from app.services.quota import observe_upstream_response
 from app.services.usage_tracking import save_request_tracking
-
+from app.services.active_requests import track_request_end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared helper classes / types
@@ -186,6 +187,7 @@ async def _stream_response(
     request_body: dict | None = None,
     request_start_time: float | None = None,
     raw_body: bytes | None = None,
+    active_request_id: str | None = None,
 ) -> StreamingResponse:
     """Forward request to upstream and stream SSE back to client.
 
@@ -291,6 +293,13 @@ async def _stream_response(
                             usage = _capture_qoder_usage(
                                 unwrapped, usage,
                             )
+            except asyncio.CancelledError:
+                raise
+            except GeneratorExit:
+                # Client disconnected mid-stream. Do not yield [DONE] here:
+                # yielding inside finally during GeneratorExit raises
+                # "generator ignored GeneratorExit" and spams logs.
+                raise
             except Exception as e:
                 error_data = json.dumps({
                     "error": {
@@ -299,7 +308,8 @@ async def _stream_response(
                     }
                 })
                 yield f"data: {error_data}\n\n".encode()
-            finally:
+                yield b"data: [DONE]\n\n"
+            else:
                 yield b"data: [DONE]\n\n"
 
         # Save usage tracking AFTER stream is consumed (usage is now available)
@@ -337,6 +347,10 @@ async def _stream_response(
                     )
             except Exception as e:
                 print(f"[STREAM TRACKING ERROR] {e}", flush=True)
+
+        # End active request tracking when stream finishes
+        if active_request_id:
+            track_request_end(active_request_id)
 
     return StreamingResponse(
         generate(),

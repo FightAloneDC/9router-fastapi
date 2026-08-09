@@ -1160,7 +1160,6 @@ export default function UsagePage() {
   const [loading, setLoading] = useState(true)
   const [hasData, setHasData] = useState(false)
   const [activeRequests, setActiveRequests] = useState([])
-  const [lastProvider, setLastProvider] = useState('')
   const [errorProvider, setErrorProvider] = useState('')
 
   // Table view & sort from URL
@@ -1209,7 +1208,7 @@ export default function UsagePage() {
     }
   }, [period, fetchData, activeTab])
 
-  // SSE for real-time updates
+  // SSE for real-time updates — lightweight fields only (no full REST re-fetch)
   useEffect(() => {
     if (activeTab !== 'overview') return
     const token = localStorage.getItem('token')
@@ -1218,25 +1217,35 @@ export default function UsagePage() {
     let eventSource
     let reconnectTimer
 
+    const handleSSEData = (data) => {
+      if (data.activeRequests) {
+        setActiveRequests(data.activeRequests)
+      }
+      // Only merge recentRequests if SSE has entries — don't let empty
+      // ring buffer (e.g. after server restart) overwrite REST-fetched data
+      if (data.recentRequests && data.recentRequests.length > 0) {
+        setStats((prev) => {
+          if (!prev) return prev
+          return { ...prev, recentRequests: data.recentRequests }
+        })
+      }
+      if (data.errorProvider !== undefined) {
+        setErrorProvider(data.errorProvider)
+      }
+    }
+
     const connect = () => {
       eventSource = new EventSource(`/api/usage/stream?token=${token}`)
 
       eventSource.addEventListener('update', (e) => {
         try {
-          const data = JSON.parse(e.data || '{}')
-          if (data.activeRequests) {
-            setActiveRequests(data.activeRequests)
-          }
+          handleSSEData(JSON.parse(e.data || '{}'))
         } catch { /* ignore parse errors */ }
-        fetchData(period)
       })
 
       eventSource.addEventListener('keepalive', (e) => {
         try {
-          const data = JSON.parse(e.data || '{}')
-          if (data.activeRequests) {
-            setActiveRequests(data.activeRequests)
-          }
+          handleSSEData(JSON.parse(e.data || '{}'))
         } catch { /* ignore parse errors */ }
       })
 
@@ -1248,18 +1257,11 @@ export default function UsagePage() {
 
     connect()
 
-    // Polling fallback: refresh data every 30s in case SSE misses events
-    const pollTimer = setInterval(() => {
-      fetchData(period)
-    }, 30000)
-
     return () => {
-      clearInterval(pollTimer)
       if (eventSource) eventSource.close()
       if (reconnectTimer) clearTimeout(reconnectTimer)
     }
-  }, [activeTab, period, fetchData])
-  // }, [activeTab, period, fetchData])
+  }, [activeTab])
 
   return (
     <div className="space-y-6">
@@ -1320,7 +1322,7 @@ export default function UsagePage() {
                   <ProviderTopology
                     providers={stats?.byProvider || []}
                     activeRequests={activeRequests}
-                    lastProvider={lastProvider}
+                    lastProvider={stats?.recentRequests?.[0]?.provider || ''}
                     errorProvider={errorProvider}
                   />
                 </div>

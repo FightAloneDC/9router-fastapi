@@ -136,6 +136,7 @@ async def chat_completions(
                         connection_id=target.connection_id,
                         request_body=body,
                         request_start_time=request_start_time,
+                        active_request_id=active_request_id,
                     )
                 elif is_responses_upstream:
                     resp = await _stream_grok_responses(
@@ -146,6 +147,7 @@ async def chat_completions(
                         request_body=body,
                         request_start_time=request_start_time,
                         raw_body=raw_body,
+                        active_request_id=active_request_id,
                     )
                 else:
                     resp = await _stream_response(
@@ -156,6 +158,7 @@ async def chat_completions(
                         request_body=body,
                         request_start_time=request_start_time,
                         raw_body=raw_body,
+                        active_request_id=active_request_id,
                     )
             else:
                 if is_claude_upstream:
@@ -201,12 +204,15 @@ async def chat_completions(
                     response_body=resp_data,
                 )
             # Streaming: usage tracking happens inside _stream_response generator
+            # and track_request_end is called inside the generator when stream finishes.
+            # For non-streaming: end tracking here after response is received.
+            if not stream:
+                track_request_end(active_request_id)
 
-            track_request_end(active_request_id)
             return resp
 
         except httpx.HTTPStatusError as e:
-            track_request_end(active_request_id)
+            track_request_end(active_request_id, status="error")
             last_error_detail = e.response.text[:500]
             last_error_status = e.response.status_code
 
@@ -249,7 +255,7 @@ async def chat_completions(
             continue
 
         except httpx.ConnectError as e:
-            track_request_end(active_request_id)
+            track_request_end(active_request_id, status="error")
             last_error_detail = str(e)
             last_error_status = 503
             if target.connection_id:
@@ -257,7 +263,7 @@ async def chat_completions(
             continue
 
         except Exception as e:
-            track_request_end(active_request_id)
+            track_request_end(active_request_id, status="error")
             last_error_detail = str(e)
             last_error_status = 500
             if target.connection_id:
@@ -384,6 +390,7 @@ async def _stream_claude_response(
     connection_id: str | None = None,
     request_body: dict | None = None,
     request_start_time: float | None = None,
+    active_request_id: str | None = None,
 ) -> StreamingResponse:
     """Streaming call to FORMAT=claude upstream.
 
@@ -486,6 +493,10 @@ async def _stream_claude_response(
                 provider_response_body=usage,
                 response_body=usage,
             )
+
+        # End active request tracking when stream finishes
+        if active_request_id:
+            track_request_end(active_request_id)
 
     return StreamingResponse(
         generate(),
@@ -603,6 +614,7 @@ async def _stream_grok_responses(
     request_body: dict | None = None,
     request_start_time: float | None = None,
     raw_body: bytes | None = None,
+    active_request_id: str | None = None,
 ) -> StreamingResponse:
     """Streaming call to FORMAT=openai-responses upstream.
 
@@ -699,6 +711,10 @@ async def _stream_grok_responses(
                 provider_response_body=usage,
                 response_body=usage,
             )
+
+        # End active request tracking when stream finishes
+        if active_request_id:
+            track_request_end(active_request_id)
 
     return StreamingResponse(
         generate(),

@@ -136,7 +136,7 @@ async def embeddings(
                 )
 
         except httpx.HTTPStatusError as e:
-            track_request_end(active_request_id)
+            track_request_end(active_request_id, status="error")
             last_error_detail = e.response.text[:500]
             last_error_status = e.response.status_code
             if not _should_fallback_on_error(e.response.status_code, e.response.text):
@@ -163,14 +163,14 @@ async def embeddings(
                 exclude_ids.add(target.connection_id)
             continue
         except httpx.ConnectError as e:
-            track_request_end(active_request_id)
+            track_request_end(active_request_id, status="error")
             last_error_detail = str(e)
             last_error_status = 503
             if target.connection_id:
                 exclude_ids.add(target.connection_id)
             continue
         except Exception as e:
-            track_request_end(active_request_id)
+            track_request_end(active_request_id, status="error")
             last_error_detail = str(e)
             last_error_status = 500
             if target.connection_id:

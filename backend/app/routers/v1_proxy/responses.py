@@ -139,6 +139,7 @@ async def responses_endpoint(
                         request_body=body,
                         request_start_time=request_start_time,
                         raw_body=raw_body,
+                        active_request_id=active_request_id,
                     )
                 else:
                     resp = await _stream_responses(
@@ -147,6 +148,7 @@ async def responses_endpoint(
                         connection_id=target.connection_id,
                         request_body=body,
                         request_start_time=request_start_time,
+                        active_request_id=active_request_id,
                     )
                 resp_data: dict = {}
             else:
@@ -189,12 +191,15 @@ async def responses_endpoint(
                     response_body=resp_data,
                 )
             # Streaming: usage tracking happens inside _stream_responses generator
+            # and track_request_end is called inside the generator when stream finishes.
+            # For non-streaming: end tracking here after response is received.
+            if not stream:
+                track_request_end(active_request_id)
 
-            track_request_end(active_request_id)
             return resp
 
         except httpx.HTTPStatusError as e:
-            track_request_end(active_request_id)
+            track_request_end(active_request_id, status="error")
             last_error_detail = e.response.text[:500]
             last_error_status = e.response.status_code
 
@@ -227,14 +232,14 @@ async def responses_endpoint(
                 exclude_ids.add(target.connection_id)
             continue
         except httpx.ConnectError as e:
-            track_request_end(active_request_id)
+            track_request_end(active_request_id, status="error")
             last_error_detail = str(e)
             last_error_status = 503
             if target.connection_id:
                 exclude_ids.add(target.connection_id)
             continue
         except Exception as e:
-            track_request_end(active_request_id)
+            track_request_end(active_request_id, status="error")
             last_error_detail = str(e)
             last_error_status = 500
             if target.connection_id:
@@ -276,6 +281,7 @@ async def _stream_responses(
     connection_id: str | None = None,
     request_body: dict | None = None,
     request_start_time: float | None = None,
+    active_request_id: str | None = None,
 ) -> StreamingResponse:
     """Streaming: translate Chat Completions SSE to Responses API SSE."""
     translator = ResponsesStreamTranslator(model=model)
@@ -336,6 +342,10 @@ async def _stream_responses(
                     )
             except Exception as e:
                 print(f"[RESPONSES STREAM TRACKING ERROR] {e}", flush=True)
+
+        # End active request tracking when stream finishes
+        if active_request_id:
+            track_request_end(active_request_id)
 
     return StreamingResponse(
         generate(),
@@ -423,6 +433,7 @@ async def _stream_responses_passthrough(
     request_body: dict | None = None,
     request_start_time: float | None = None,
     raw_body: bytes | None = None,
+    active_request_id: str | None = None,
 ) -> StreamingResponse:
     """Streaming passthrough: forward Responses API SSE events as-is."""
     send_kwargs: dict = {"headers": target.headers}
@@ -512,6 +523,10 @@ async def _stream_responses_passthrough(
                     f"[RESPONSES PASSTHROUGH TRACKING ERROR] {e}",
                     flush=True,
                 )
+
+        # End active request tracking when stream finishes
+        if active_request_id:
+            track_request_end(active_request_id)
 
     return StreamingResponse(
         generate(),

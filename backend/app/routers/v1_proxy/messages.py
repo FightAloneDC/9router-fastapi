@@ -133,6 +133,7 @@ async def messages_endpoint(
                     db=db, provider=target.provider, model=target.model,
                     connection_id=target.connection_id,
                     request_body=body, request_start_time=request_start_time,
+                    active_request_id=active_request_id,
                 )
                 resp_data: dict = {}
             else:
@@ -191,12 +192,15 @@ async def messages_endpoint(
                     response_body=resp_data,
                 )
             # Streaming: usage tracking happens inside _messages_stream_response generator
+            # and track_request_end is called inside the generator when stream finishes.
+            # For non-streaming: end tracking here after response is received.
+            if not is_stream:
+                track_request_end(active_request_id)
 
-            track_request_end(active_request_id)
             return resp
 
         except httpx.HTTPStatusError as e:
-            track_request_end(active_request_id)
+            track_request_end(active_request_id, status="error")
             last_error_detail = e.response.text[:500]
             last_error_status = e.response.status_code
 
@@ -242,14 +246,14 @@ async def messages_endpoint(
                 exclude_ids.add(target.connection_id)
             continue
         except httpx.ConnectError as e:
-            track_request_end(active_request_id)
+            track_request_end(active_request_id, status="error")
             last_error_detail = str(e)
             last_error_status = 503
             if target.connection_id:
                 exclude_ids.add(target.connection_id)
             continue
         except Exception as e:
-            track_request_end(active_request_id)
+            track_request_end(active_request_id, status="error")
             last_error_detail = str(e)
             last_error_status = 500
             if target.connection_id:
@@ -280,6 +284,7 @@ async def _messages_stream_response(
     connection_id: str | None = None,
     request_body: dict | None = None,
     request_start_time: float | None = None,
+    active_request_id: str | None = None,
 ) -> StreamingResponse:
     """Stream response for /v1/messages endpoint.
 
@@ -409,6 +414,10 @@ async def _messages_stream_response(
                     )
             except Exception as e:
                 print(f"[MESSAGES STREAM TRACKING ERROR] {e}", flush=True)
+
+        # End active request tracking when stream finishes
+        if active_request_id:
+            track_request_end(active_request_id)
 
     return StreamingResponse(
         tracked_generate(),

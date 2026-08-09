@@ -7,7 +7,11 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.routers.auth import get_current_user
-from app.services.active_requests import get_active_requests
+from app.services.active_requests import (
+    get_active_requests,
+    get_error_provider,
+    get_recent_requests,
+)
 
 router = APIRouter(tags=["usage-stream"])
 
@@ -24,18 +28,27 @@ def notify_usage_update():
             pass
 
 
+def _build_sse_payload() -> str:
+    """Build SSE data payload with real-time fields only."""
+    payload = {
+        "activeRequests": get_active_requests(),
+        "recentRequests": get_recent_requests(),
+        "errorProvider": get_error_provider(),
+    }
+    return json.dumps(payload)
+
+
 async def _event_generator(queue: asyncio.Queue):
     """SSE generator that yields events from the queue."""
     try:
         while True:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=25)
-                active = get_active_requests()
-                yield f"event: {event}\ndata: {json.dumps({'activeRequests': active})}\n\n"
+                data = _build_sse_payload()
+                yield f"event: {event}\ndata: {data}\n\n"
             except asyncio.TimeoutError:
-                # Send keepalive with active requests
-                active = get_active_requests()
-                yield f"event: keepalive\ndata: {json.dumps({'activeRequests': active})}\n\n"
+                data = _build_sse_payload()
+                yield f"event: keepalive\ndata: {data}\n\n"
     except asyncio.CancelledError:
         pass
 
