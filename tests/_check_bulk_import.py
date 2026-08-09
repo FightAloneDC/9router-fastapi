@@ -6,10 +6,12 @@ paths, then deletes the connection again.
 """
 
 import json
+import sys
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
 BASE = "http://localhost:8013"
+PROVIDER = sys.argv[1] if len(sys.argv) > 1 else "grok-cli"
 EMAIL = "bulk-test-1@example.com"
 
 
@@ -37,6 +39,7 @@ def _entry(expires_at: str) -> dict:
             "expires_at": expires_at,
             "expires_in": 21600,
             "email": EMAIL,
+            "display_name": "Should Not Appear",
             "scope": "openid grok-cli:access",
         },
     }
@@ -49,7 +52,7 @@ def main() -> None:
     ]
 
     catalog = _req("GET", "/providers/catalog", token=token)
-    flag = catalog["providers"]["grok-cli"].get("supportsBulkImport")
+    flag = catalog["providers"][PROVIDER].get("supportsBulkImport")
     print("catalog supportsBulkImport:", flag)
     assert flag is True
 
@@ -69,7 +72,7 @@ def main() -> None:
         ],
     }
     res = _req(
-        "POST", "/oauth/grok-cli/bulk-import", body, token,
+        "POST", f"/oauth/{PROVIDER}/bulk-import", body, token,
     )
     print("round1:", {k: res[k] for k in (
         "created", "updated", "skipped", "failed")})
@@ -79,7 +82,7 @@ def main() -> None:
 
     # Round 2: duplicate without replace -> skipped
     res = _req(
-        "POST", "/oauth/grok-cli/bulk-import",
+        "POST", f"/oauth/{PROVIDER}/bulk-import",
         {"accounts": [_entry(future)]}, token,
     )
     print("round2:", res["results"][0]["status"])
@@ -88,7 +91,7 @@ def main() -> None:
 
     # Round 3: duplicate with replace -> updated
     res = _req(
-        "POST", "/oauth/grok-cli/bulk-import?replace=true",
+        "POST", f"/oauth/{PROVIDER}/bulk-import?replace=true",
         {"accounts": [_entry(future)]}, token,
     )
     print("round3:", res["results"][0]["status"])

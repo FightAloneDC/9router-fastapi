@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-09
 **Severity:** High — makes agentic tool calling unreliable through the proxy
-**Status:** Open
+**Status:** Resolved (root cause found + fixed 2026-08-09)
 **Reporter:** AI agent session (dogfooding 9Router as its own LLM proxy)
 
 ## Summary
@@ -101,3 +101,85 @@ Implication: any literal that looks like a weak/known secret may be
 silently replaced before reaching disk or the shell. Code that builds
 sensitive values at runtime (string concatenation, env vars) is not
 affected.
+
+## Resolution 2026-08-09: Root Cause Found and Fixed
+
+### Root cause
+
+`_stream_response()` in `backend/app/routers/v1_proxy/shared.py`,
+Qoder branch. Qoder wraps each OpenAI chunk in an SSE envelope
+(`{"statusCodeValue":200,"body":"..."}`). The relay decoded each
+httpx read independently and split it on newlines **without carrying
+partial lines over to the next read**:
+
+```python
+async for chunk in resp.aiter_bytes():
+    text = chunk.decode("utf-8", errors="ignore")
+    for line in text.split("\n"):          # fragments dropped
+        unwrapped = _unwrap_qoder_sse_line(line)
+```
+
+A `data:` line split across two TCP reads was processed as two
+invalid fragments; `_unwrap_qoder_sse_line()` returned `None` for
+both and they were silently dropped. Consequences:
+
+- A dropped `tool_calls[].function.arguments` delta truncated or
+  emptied the arguments -> `Invalid args ... must have required
+  property 'command'` (Class 1).
+- A dropped `content` delta removed substrings from text and command
+  strings (Class 2).
+- Multi-byte UTF-8 chars split across reads were eaten by
+  `errors="ignore"`.
+
+Read boundaries are arbitrary, so failures were intermittent and grew
+with payload size — exactly the observed ~1/3 failure rate on long
+agent contexts.
+
+### Why only this path
+
+- All Kimi Code CLI traffic used the Qoder connection
+  (`qd/qoder/kmodel_latest` in `request_details`), so every agent
+  turn went through this branch.
+- Other providers use raw byte passthrough in the same function —
+  split frames reach the client intact and are reassembled there.
+- The Claude/Responses/Grok/Messages translation paths already buffer
+  lines across reads (`while b"\n" in buffer: ...`) and were safe.
+
+### Fix
+
+Byte-level line buffer with carry-over in the Qoder branch (the same
+pattern the other paths already use), plus a final-line flush for
+payloads without a trailing newline. Usage capture moved into a
+`_capture_qoder_usage()` helper. No behavior change for non-Qoder
+providers — the change is fully contained in the `is_qoder` branch.
+
+### Verification
+
+- `backend/tests/test_qoder_stream.py` — a fake upstream writes the
+  wrapped SSE in small delayed pieces so lines split across reads:
+  tool-call arguments and multi-byte text reassemble intact; a final
+  line without trailing newline is flushed. All 5 tests pass.
+- The old logic, replayed against the same splitting server, parsed 0
+  complete lines and reassembled the tool arguments as an empty
+  string — reproducing Class 1 exactly.
+- Live: streaming `/v1/chat/completions` through a real Qoder
+  connection (`stream: true`, one `Bash` tool) returned 42 chunks,
+  `finish_reason: tool_calls`, and the full valid arguments JSON.
+- Full pytest suite: no new failures (7 pre-existing failures
+  unrelated to this change, verified against the base code).
+
+## Related Findings (not fixed here)
+
+1. **Double upstream request** — `_stream_response()` fires a full
+   pre-flight POST (which consumes the entire completion) before the
+   real request for every non-Qoder streaming call. This doubles
+   upstream quota usage per request. The pre-flight exists so HTTP
+   errors can trigger connection fallback before streaming starts;
+   the streaming translation paths skip it entirely.
+2. **Responses-API tool-call indices** —
+   `ResponsesStreamTranslator._flush_finish()` emits every tool
+   call's `output_item.done` with the same `output_index`, emits no
+   `output_item.added`/argument-delta events for tool calls, and
+   sends `response.completed` with an empty `output` array. Parallel
+   tool calls through `/v1/responses` can collide or be lost. Not on
+   the path that failed here, but the same bug family.

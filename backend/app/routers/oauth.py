@@ -6,8 +6,9 @@ and special flows (cursor import, codex proxy).
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -16,9 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.provider import ProviderConnection
-from app.providers import PROVIDER_GROK_CLI
+from app.providers import PROVIDER_GROK_CLI, PROVIDER_QODER
 from app.providers.codex.proxy import CodexProxy
-from app.providers.grok_cli.bulk import is_expired, parse_farm_entry
+from app.providers.grok_cli.bulk import (
+    is_expired,
+    parse_farm_entry as parse_grok_farm_entry,
+)
+from app.providers.qoder.bulk import (
+    parse_farm_entry as parse_qoder_farm_entry,
+)
 from app.providers.cursor.oauth import CursorImportRequest
 from app.providers.gitlab.oauth import GitLabPATRequest
 from app.providers.kiro.oauth import KiroImportRequest, KiroSocialExchangeRequest
@@ -593,11 +600,18 @@ async def qoder_pat_import(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Grok CLI Bulk Import (grok-farm-modular export) ─────────────────────
+# ── Bulk Import (grok-farm-modular style JSON exports) ──────────────
+
+# provider -> (farm entry parser, connection auth_type)
+_BULK_PARSERS: dict[str, tuple[Callable[[Any], dict], str]] = {
+    PROVIDER_GROK_CLI: (parse_grok_farm_entry, "oauth"),
+    PROVIDER_QODER: (parse_qoder_farm_entry, "apikey"),
+}
 
 
-@router.post("/grok-cli/bulk-import")
-async def grok_cli_bulk_import(
+@router.post("/{provider}/bulk-import")
+async def provider_bulk_import(
+    provider: str,
     request: Request,
     replace: bool = False,
     db: AsyncSession = Depends(get_db),
@@ -610,6 +624,14 @@ async def grok_cli_bulk_import(
     emails are upserted when ``replace=true``, otherwise skipped.
     Tokens are never echoed back in the response.
     """
+    entry = _BULK_PARSERS.get(provider)
+    if entry is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bulk import not supported for '{provider}'",
+        )
+    parse_farm_entry, auth_type = entry
+
     try:
         body = await request.json()
     except Exception as e:
@@ -654,7 +676,7 @@ async def grok_cli_bulk_import(
 
         existing = (await db.execute(
             select(ProviderConnection).where(
-                ProviderConnection.provider == PROVIDER_GROK_CLI,
+                ProviderConnection.provider == provider,
                 func.lower(ProviderConnection.email) == email,
             )
         )).scalar_one_or_none()
@@ -671,7 +693,7 @@ async def grok_cli_bulk_import(
             status = "updated"
         else:
             conn = await _save_connection(
-                db, PROVIDER_GROK_CLI, parsed["token_data"],
+                db, provider, parsed["token_data"], auth_type=auth_type,
             )
             _apply_absolute_expiry(conn, parsed["expires_at"])
             status = "created"
@@ -690,15 +712,17 @@ def _update_bulk_connection(conn: ProviderConnection, parsed: dict) -> None:
     blob["accessToken"] = token_data["accessToken"]
     if token_data.get("refreshToken"):
         blob["refreshToken"] = token_data["refreshToken"]
-    id_token = (token_data.get("providerSpecificData") or {}).get("idToken")
-    if id_token:
-        blob["idToken"] = id_token
     if token_data.get("scope"):
         blob["scope"] = token_data["scope"]
     if parsed["expires_at"]:
         blob["expiresAt"] = parsed["expires_at"]
+    # providerSpecificData lands flat in the blob (see _save_connection)
+    psd = token_data.get("providerSpecificData") or {}
+    for key, value in psd.items():
+        if value is not None:
+            blob[key] = value
     blob["testStatus"] = "active"
     conn.data = json.dumps(blob)
-    # Email doubles as the display name for farm accounts
+    # Bulk-imported connections are always named by email
     conn.name = parsed["email"]
     conn.email = parsed["email"]

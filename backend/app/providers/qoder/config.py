@@ -25,6 +25,8 @@ class QoderConfig(BaseProviderConfig):
     FORMAT: str = "qoder"  # Custom format — not OpenAI-compatible
     VALIDATION_TYPE: str = "qoder"
     SUPPORTS_PAT: bool = True
+    # Accepts bulk JSON account import (grok-farm-modular export)
+    SUPPORTS_BULK_IMPORT: bool = True
 
 
 class QoderMetadata(BaseMetadata):

@@ -152,6 +152,22 @@ def _unwrap_qoder_sse_line(line: str) -> str | None:
     return f"data: {sanitized}"
 
 
+def _capture_qoder_usage(line: str, current: dict) -> dict:
+    """Extract the usage object from an unwrapped Qoder SSE line.
+
+    Returns *current* unchanged when the line carries no usage data.
+    """
+    if not line.startswith("data: ") or line.strip() == "data: [DONE]":
+        return current
+    try:
+        data = json.loads(line[6:])
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return current
+    if isinstance(data, dict) and data.get("usage"):
+        return data["usage"]
+    return current
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Generic stream / non-stream helpers (used by chat + messages + responses)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -225,24 +241,30 @@ async def _stream_response(
                     target.url,
                     **send_kwargs,
                 ) as resp:
+                    # Qoder SSE lines may be split across read boundaries;
+                    # buffer bytes until a full line is available, or the
+                    # fragments are dropped and deltas are lost (corrupted
+                    # tool-call arguments / mangled text).
+                    qoder_buf = b""
                     async for chunk in resp.aiter_bytes():
                         chunk_count += 1
                         if is_qoder:
-                            # Qoder sends wrapped SSE: {"statusCodeValue":200,"body":"..."}
-                            # Unwrap each line before forwarding
-                            text = chunk.decode("utf-8", errors="ignore")
-                            for line in text.split("\n"):
+                            # Qoder sends wrapped SSE:
+                            # {"statusCodeValue":200,"body":"..."}
+                            qoder_buf += chunk
+                            while b"\n" in qoder_buf:
+                                line_b, qoder_buf = qoder_buf.split(
+                                    b"\n", 1,
+                                )
+                                line = line_b.decode(
+                                    "utf-8", errors="ignore",
+                                )
                                 unwrapped = _unwrap_qoder_sse_line(line)
                                 if unwrapped:
                                     yield f"{unwrapped}\n\n".encode()
-                                    # Parse for usage tracking
-                                    try:
-                                        if unwrapped.startswith("data: ") and unwrapped.strip() != "data: [DONE]":
-                                            data = json.loads(unwrapped[6:])
-                                            if "usage" in data and data["usage"]:
-                                                usage = data["usage"]
-                                    except (json.JSONDecodeError, UnicodeDecodeError):
-                                        pass
+                                    usage = _capture_qoder_usage(
+                                        unwrapped, usage,
+                                    )
                         else:
                             yield chunk
                             # Parse SSE to capture usage from last chunk
@@ -255,6 +277,15 @@ async def _stream_response(
                                             usage = data["usage"]
                             except (json.JSONDecodeError, UnicodeDecodeError):
                                 pass
+                    # Flush a final Qoder line without trailing newline
+                    if is_qoder and qoder_buf:
+                        line = qoder_buf.decode("utf-8", errors="ignore")
+                        unwrapped = _unwrap_qoder_sse_line(line)
+                        if unwrapped:
+                            yield f"{unwrapped}\n\n".encode()
+                            usage = _capture_qoder_usage(
+                                unwrapped, usage,
+                            )
             except Exception as e:
                 error_data = json.dumps({
                     "error": {
