@@ -208,7 +208,13 @@ async def get_disabled_models(
     data = await _get_settings_data(db)
     all_disabled = data.get("disabledModels", {})
     if providerAlias:
-        return {"ids": all_disabled.get(providerAlias, [])}
+        # Key presence = provider was initialized before, even if the list
+        # is empty (all models enabled). Frontend uses this to detect
+        # first fetch.
+        return {
+            "ids": all_disabled.get(providerAlias, []),
+            "initialized": providerAlias in all_disabled,
+        }
     return {"disabled": all_disabled}
 
 
@@ -253,14 +259,13 @@ async def enable_models(
     data = await _get_settings_data(db)
     disabled = data.get("disabledModels", {})
     if id:
-        # Remove single model
+        # Remove single model; keep the key (even if empty) so the
+        # "initialized" state for this provider is preserved.
         current = disabled.get(providerAlias, [])
         disabled[providerAlias] = [m for m in current if m != id]
-        if not disabled[providerAlias]:
-            del disabled[providerAlias]
     else:
-        # Remove all for provider
-        disabled.pop(providerAlias, None)
+        # Enable all models for provider; keep key as empty list.
+        disabled[providerAlias] = []
     data["disabledModels"] = disabled
     await _save_settings_data(db, data)
     return {"success": True}

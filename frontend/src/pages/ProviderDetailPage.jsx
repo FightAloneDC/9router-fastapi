@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import {
   ArrowLeft, Plus, Trash2, Key, Eye, EyeOff,
-  ChevronUp, ChevronDown, CheckCircle2, AlertCircle,
+  ChevronUp, ChevronDown, ChevronLeft, ChevronRight,
+  CheckCircle2, AlertCircle,
   Loader2, Wifi, Edit2, ExternalLink, X, Copy, Check,
   Beaker, Download, Network, Ban, RotateCcw, Search, Play, MessageSquare,
   Cookie, Lock, TriangleAlert, Info, Plug, Upload,
@@ -1218,6 +1219,10 @@ export default function ProviderDetailPage() {
   const [testResults, setTestResults] = useState({})
   const [connectingNoAuth, setConnectingNoAuth] = useState(false)
 
+  // Connection list pagination
+  const CONNECTIONS_PER_PAGE = 10
+  const [connectionPage, setConnectionPage] = useState(1)
+
   // Models state
   const [models, setModels] = useState([])
   const [newModel, setNewModel] = useState('')
@@ -1375,21 +1380,10 @@ export default function ProviderDetailPage() {
         // Only enable models that are NOT in the disabled list
         const disabledSet = new Set(disabledIds)
 
-        // If no disabled history exists (first fetch), disable all models by default
-        if (disabledIds.length === 0 && mergedModels.length > 0) {
-          setDisabledModelIds(mergedModels)
-          setEnabledModelIds(new Set())
-          // Save to backend so next visit respects this state
-          try {
-            const { default: client } = await import('../api/client')
-            await client.post('/models/disabled', { providerAlias: providerStorageAlias, ids: mergedModels })
-          } catch {
-            // Best effort
-          }
-        } else {
-          const enabledIds = mergedModels.filter(m => !disabledSet.has(m))
-          setEnabledModelIds(new Set(enabledIds))
-        }
+        // On page load, just trust the backend state as-is.
+        // Auto-disable-all-on-first-fetch is handled in handleFetchModels only.
+        const enabledIds = mergedModels.filter(m => !disabledSet.has(m))
+        setEnabledModelIds(new Set(enabledIds))
       } else {
         setModels([])
         setEnabledModelIds(new Set())
@@ -1544,6 +1538,18 @@ export default function ProviderDetailPage() {
         await Promise.all(
           otherConns.map(c => providersApi.updateProvider(c.id, { models: fetchedArray }))
         )
+      }
+
+      // First fetch: disable all models by default (user requested behavior)
+      try {
+        const { default: client } = await import('../api/client')
+        const disabledRes = await client.get('/models/disabled', { params: { providerAlias: providerStorageAlias } })
+        // Only auto-disable if this provider has no disabled-models history yet
+        if (!disabledRes.data?.initialized && fetchedArray.length > 0) {
+          await client.post('/models/disabled', { providerAlias: providerStorageAlias, ids: fetchedArray })
+        }
+      } catch {
+        // Best effort - non-critical if disabled-models endpoint fails
       }
 
       setSuggestedModels([])
@@ -1889,6 +1895,11 @@ export default function ProviderDetailPage() {
     fetchDisabledModels()
   }, [fetchConnections, fetchAliases, fetchDisabledModels])
 
+  // Reset connection pagination when switching providers
+  useEffect(() => {
+    setConnectionPage(1)
+  }, [providerId])
+
   // Fetch suggested models from provider's public API (if configured)
   // Only auto-fetch if connections already have models (user hasn't cleared them)
   useEffect(() => {
@@ -2136,6 +2147,24 @@ export default function ProviderDetailPage() {
 
   const activePools = proxyPools.filter((p) => p.is_active === true)
 
+  // Connection pagination computed values
+  const connTotalPages = Math.max(1, Math.ceil(connections.length / CONNECTIONS_PER_PAGE))
+  const connCurrentPage = Math.min(connectionPage, connTotalPages)
+  const connStart = (connCurrentPage - 1) * CONNECTIONS_PER_PAGE
+  const connEnd = Math.min(connStart + CONNECTIONS_PER_PAGE, connections.length)
+  const pagedConnections = connections.slice(connStart, connEnd)
+
+  // Page number buttons (max 5 visible)
+  const connPageNumbers = (() => {
+    const pages = []
+    const maxVisible = 5
+    let s = Math.max(1, connCurrentPage - Math.floor(maxVisible / 2))
+    let e = Math.min(connTotalPages, s + maxVisible - 1)
+    if (e - s + 1 < maxVisible) s = Math.max(1, e - maxVisible + 1)
+    for (let i = s; i <= e; i++) pages.push(i)
+    return pages
+  })()
+
   return (
     <div className="flex min-w-0 flex-col gap-6 px-1 sm:gap-8 sm:px-0">
       {/* ── Header ── */}
@@ -2379,38 +2408,77 @@ export default function ProviderDetailPage() {
           ) : (
             <>
               <div className="flex min-w-0 flex-col divide-y divide-zinc-800/50">
-                {connections.map((conn, index) => (
-                  <div key={conn.id} className="flex min-w-0 items-stretch">
-                    <div className="flex-1 min-w-0">
-                      <ConnectionRow
-                        connection={conn}
-                        proxyPools={proxyPools}
-                        isFirst={index === 0}
-                        isLast={index === connections.length - 1}
-                        isOAuth={isOAuth}
-                        onMoveUp={() => handleSwapPriority(index, index - 1)}
-                        onMoveDown={() => handleSwapPriority(index, index + 1)}
-                        onToggleActive={(isActive) => handleToggleActive(conn.id, isActive)}
-                        onUpdateProxy={async (proxyPoolId) => {
-                          try {
-                            await providersApi.updateProvider(conn.id, { proxyPoolId: proxyPoolId || null })
-                            setConnections(prev => prev.map(c =>
-                              c.id === conn.id ? { ...c, proxy_pool_id: proxyPoolId || null } : c
-                            ))
-                          } catch (error) {
-                            console.error('Error updating proxy:', error)
-                          }
-                        }}
-                        onEdit={() => { setSelectedConnection(conn); setShowEditModal(true) }}
-                        onDelete={() => handleDelete(conn.id)}
-                        onTest={() => handleTestConnectionRow(conn.id)}
-                        testing={testingConnectionId === conn.id}
-                        testResult={testResults[conn.id]}
-                      />
+                {pagedConnections.map((conn, index) => {
+                  const actualIndex = connStart + index
+                  return (
+                    <div key={conn.id} className="flex min-w-0 items-stretch">
+                      <div className="flex-1 min-w-0">
+                        <ConnectionRow
+                          connection={conn}
+                          proxyPools={proxyPools}
+                          isFirst={actualIndex === 0}
+                          isLast={actualIndex === connections.length - 1}
+                          isOAuth={isOAuth}
+                          onMoveUp={() => handleSwapPriority(actualIndex, actualIndex - 1)}
+                          onMoveDown={() => handleSwapPriority(actualIndex, actualIndex + 1)}
+                          onToggleActive={(isActive) => handleToggleActive(conn.id, isActive)}
+                          onUpdateProxy={async (proxyPoolId) => {
+                            try {
+                              await providersApi.updateProvider(conn.id, { proxyPoolId: proxyPoolId || null })
+                              setConnections(prev => prev.map(c =>
+                                c.id === conn.id ? { ...c, proxy_pool_id: proxyPoolId || null } : c
+                              ))
+                            } catch (error) {
+                              console.error('Error updating proxy:', error)
+                            }
+                          }}
+                          onEdit={() => { setSelectedConnection(conn); setShowEditModal(true) }}
+                          onDelete={() => handleDelete(conn.id)}
+                          onTest={() => handleTestConnectionRow(conn.id)}
+                          testing={testingConnectionId === conn.id}
+                          testResult={testResults[conn.id]}
+                        />
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
+              {connTotalPages > 1 && (
+                <div className="mt-3 flex items-center justify-between">
+                  <span className="text-xs text-zinc-500">
+                    {connStart + 1}–{connEnd} of {connections.length}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setConnectionPage(p => Math.max(1, p - 1))}
+                      disabled={connCurrentPage === 1}
+                      className="p-1.5 rounded hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                    >
+                      <ChevronLeft size={16} className="text-zinc-400" />
+                    </button>
+                    {connPageNumbers.map((page) => (
+                      <button
+                        key={page}
+                        onClick={() => setConnectionPage(page)}
+                        className={`min-w-[32px] h-8 rounded text-xs font-medium transition-colors cursor-pointer ${
+                          page === connCurrentPage
+                            ? 'bg-primary-600 text-white'
+                            : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setConnectionPage(p => Math.min(connTotalPages, p + 1))}
+                      disabled={connCurrentPage === connTotalPages}
+                      className="p-1.5 rounded hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                    >
+                      <ChevronRight size={16} className="text-zinc-400" />
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="mt-4 flex justify-stretch sm:justify-start gap-2">
                 <Button size="sm" onClick={() => {
                   if (isOAuth) {
