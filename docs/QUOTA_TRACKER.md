@@ -2,193 +2,179 @@
 
 ## Overview
 
-The Quota Tracker monitors API usage limits for provider connections. Each provider (GitHub, Claude, Codex, Kiro, etc.) has its own usage API that returns quota data. The system fetches this data per-connection and displays it in a unified dashboard.
+The Quota Tracker monitors API usage limits for provider
+connections. Each supported provider ships its own usage API
+handler; the system fetches quota data per connection and
+displays it in a unified dashboard at `/quota-tracker`.
+
+Upstream polling is deliberately throttled: most connections are
+farmed accounts, and aggressive balance polling risks bans. See
+[Polling Policy](#polling-policy-ban-risk-reduction).
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Frontend                                  │
-│                                                                  │
-│  QuotaTrackerPage                                                │
-│    ├── fetchData() ─────────── GET /quota ──────────┐           │
-│    ├── auto-refresh (30s/60s/180s)                  │           │
-│    ├── localStorage cache (5 min TTL)               │           │
-│    └── per-connection refresh ── GET /usage/{id} ──┐│           │
-│                                                     ││           │
-└─────────────────────────────────────────────────────┘│───────────┘
-                                                       │
-┌──────────────────────────────────────────────────────┘│───────────┐
-│                        Backend                         │           │
-│                                                        │           │
-│  GET /quota                                            │           │
-│    └── List all connections (DB)                       │           │
-│        └── Return: { id, provider, name, is_active,   │           │
-│                       quotas: [], plan: null }         │           │
-│                                                        │           │
-│  GET /usage/{connectionId}                             │           │
-│    ├── 1. Get connection from DB                       │           │
-│    ├── 2. Refresh OAuth token (if needed)              │           │
-│    ├── 3. Call provider-specific usage handler ────────┘           │
-│    └── 4. Return standardized quota data                          │
-│                                                                    │
-│  Usage Handlers (per provider):                                    │
-│    ├── getGitHubUsage(accessToken)                                │
-│    ├── getClaudeUsage(accessToken)                                │
-│    ├── getCodexUsage(accessToken)                                 │
-│    ├── getKiroUsage(accessToken, providerSpecificData)            │
-│    ├── getQoderUsage(accessToken)                                 │
-│    └── ... (15+ providers)                                        │
-│                                                                    │
-└────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                        Frontend                               │
+│                                                               │
+│  QuotaTrackerPage                                             │
+│    ├── fetchData() ─────────── GET /quota ─────────┐          │
+│    ├── auto-refresh (30s/60s/180s)                 │          │
+│    ├── localStorage cache (5 min TTL)              │          │
+│    └── per-connection refresh ─ GET /usage/{id} ──┐│          │
+└───────────────────────────────────────────────────┘│──────────┘
+                                                     │
+┌────────────────────────────────────────────────────┘──────────┐
+│                        Backend                                 │
+│                                                                │
+│  GET /quota                                                    │
+│    └── List connections of SUPPORTED providers only            │
+│        (filtered by quota handler registry)                    │
+│                                                                │
+│  GET /usage/{connectionId}[?force=true]                        │
+│    ├── 1. Get connection from DB                               │
+│    ├── 2. Serve quota_cache table row if usable (not force)    │
+│    ├── 3. Refresh OAuth token if expired                       │
+│    ├── 4. Call provider usage handler (PS hook) ──────────────┐│
+│    └── 5. Upsert result into quota_cache, return it           ││
+│                                                               ││
+│  Usage handlers (PS rule — one per provider folder):          ││
+│    providers/github/quota.py  ── GitHubUsageHandler           ││
+│    providers/claude/quota.py  ── ClaudeUsageHandler           ││
+│    providers/codex/quota.py   ── CodexUsageHandler            ││
+│    providers/kiro/quota.py    ── KiroUsageHandler             ││
+│    providers/qoder/quota.py   ── QoderUsageHandler ◄──────────┘│
+│                                                                │
+│  services/quota/                                               │
+│    ├── base.py        ── BaseUsageHandler + shared schemas     │
+│    └── __init__.py    ── discovery registry (auto-imports      │
+│                           providers/<name>/quota.py)           │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-## Data Flow
+## PS Rule — Handlers Live in Provider Folders
 
-### 1. Initial Page Load
+Provider-specific quota logic (endpoint URL, auth headers,
+response parsing) MUST live in
+`backend/app/providers/<provider>/quota.py`, never in a global
+service file.
 
-```
-User opens /quota-tracker
-    │
-    ├── Frontend checks localStorage cache
-    │   ├── Cache hit (< 5 min) → Show cached data immediately
-    │   └── Cache miss → Show loading skeleton
-    │
-    ├── Frontend calls GET /quota
-    │   └── Backend returns all connections with empty quotas
-    │
-    ├── Frontend displays connection cards (no quota data yet)
-    │
-    └── Frontend calls GET /usage/{id} for each connection
-        └── Backend fetches real quota from provider API
-            └── Frontend updates cards with quota data
-```
+`services/quota/__init__.py` is a generic registry with zero
+hardcoded provider names. At import time it scans
+`app/providers/` (pkgutil), tries to import
+`app.providers.<name>.quota` (importlib), and registers any
+`BaseUsageHandler` subclass it finds there — the same discovery
+idiom as `services/catalog.py`.
 
-### 2. Per-Connection Quota Fetch
+**Adding quota support for a new provider:**
 
-```
-Frontend: GET /usage/{connectionId}
-    │
-    ▼
-Backend: /api/usage/[connectionId]/route.js
-    │
-    ├── 1. Get connection from DB
-    │      └── Validate: must be OAuth or whitelisted apikey provider
-    │
-    ├── 2. Refresh OAuth credentials (if expired)
-    │      └── executor.refreshCredentials(credentials)
-    │      └── Update DB with new tokens
-    │
-    ├── 3. Call provider-specific usage handler
-    │      │
-    │      ├── USAGE_HANDLERS[provider](connection)
-    │      │
-    │      ├── GitHub: GET copilot_internal/user
-    │      │   └── Returns: { plan, quotas: { chat, completions, premium } }
-    │      │
-    │      ├── Claude: GET /v1/organizations/{org}/usage
-    │      │   └── Returns: { plan, quotas: { "session (5h)", "weekly (7d)" } }
-    │      │
-    │      ├── Codex: GET /v1/usage
-    │      │   └── Returns: { plan, quotas: { session, weekly, review_session, review_weekly } }
-    │      │
-    │      ├── Kiro: GET CodeWhisperer/GetUsageLimits
-    │      │   └── Returns: { plan, quotas: { agentic_request, ... } }
-    │      │
-    │      └── Qoder: GET /v1/user/usage
-    │          └── Returns: { quotas: { user, organization } }
-    │
-    └── 4. Return standardized response
-           {
-             plan: "Pro",
-             quotas: {
-               "session": { used: 45, total: 100, remaining: 55, resetAt: "..." },
-               "weekly": { used: 200, total: 1000, remaining: 800, resetAt: "..." }
-             }
-           }
-```
+1. Create `backend/app/providers/<name>/quota.py`.
+2. Define one class extending `BaseUsageHandler`
+   (set `PROVIDER_ID`, implement `fetch()`).
+3. Done — the registry picks it up; `GET /quota` and the UI
+   dropdown include it automatically. No global file edits.
 
-### 3. Frontend Data Normalization
+## Endpoints
 
-Each provider returns different quota shapes. The frontend normalizes them:
+### `GET /quota`
 
-```javascript
-// GitHub returns:
-{ quotas: { chat: { used, total, resetAt }, completions: {...} } }
+Returns connections **only for providers that have a usage
+handler** (`supported_providers()`), each with empty `quotas`.
+Real data is fetched per connection via `/usage/{id}`. The
+frontend derives both the card list and the provider filter
+dropdown from this response, so unsupported providers never
+appear on the quota tracker page.
 
-// Claude returns:
-{ quotas: { "session (5h)": { used, total, resetAt }, "weekly (7d)": {...} } }
+### `GET /usage/{connectionId}`
 
-// Codex returns:
-{ quotas: { session: { used, total, resetAt }, weekly: {...} } }
+1. Validate id is a UUID (rejects stray paths like
+   `/usage/stream` hitting the param route).
+2. Look up the connection; reject providers without a handler
+   with an informational message.
+3. If `force` is false, serve the `quota_cache` row when usable
+   (see polling policy below).
+4. Otherwise: extract access token from the data blob, refresh
+   expired OAuth tokens, call the provider handler, upsert the
+   result into `quota_cache`, and return it.
 
-// All normalized to:
-[{ name: "session", used: 45, total: 100, resetAt: "2026-06-27T15:00:00Z" }]
-```
+`force=true` always polls upstream (used by the card refresh
+button).
 
-### 4. Auto-Refresh Cycle
+### `GET /usage/stream` (related)
+
+SSE endpoint for real-time active-request stats. Registered in
+`main.py` BEFORE the quota router — otherwise
+`/usage/{connection_id}` shadows it (connection_id="stream").
+
+## Cache: `quota_cache` Table
+
+Quota balances are cached per connection in a dedicated table
+(alembic `9a3d69805d5d`), NOT in the connection data blob —
+with thousands of farmed accounts per provider, blob storage
+would bloat every connection row.
 
 ```
-┌─────────────────────────────────────────────┐
-│  Auto-Refresh Loop (every 30s/60s/180s)     │
-│                                              │
-│  1. Check tab visibility                     │
-│     └── If tab hidden → pause, skip refresh  │
-│                                              │
-│  2. Fetch fresh data                         │
-│     └── GET /quota → update all connections  │
-│                                              │
-│  3. Update localStorage cache                │
-│     └── setQuotaCache(data)                  │
-│                                              │
-│  4. Reset countdown timer                    │
-│     └── setCountdown(refreshInterval)        │
-│                                              │
-└─────────────────────────────────────────────┘
+quota_cache
+├── connection_id   UUID PK, FK → provider_connections (CASCADE)
+├── plan            VARCHAR(100), nullable
+├── quotas          TEXT — JSON list of QuotaItem
+├── limit_reached   BOOLEAN
+└── fetched_at      TIMESTAMPTZ
 ```
+
+`_store_quota_cache()` upserts by `connection_id` after every
+successful upstream fetch.
+
+Legacy note: an earlier implementation stored `quotaCache` in
+the connection data blob. Existing blobs were migrated once by
+`tests/_backfill_quota_cache.py` (idempotent, re-runnable). The
+blob field is dead data — never read anymore.
+
+## Polling Policy (Ban-Risk Reduction)
+
+Constants in `routers/quota.py`:
+
+- `CACHE_MIN_AGE_S = 900` — cache younger than 15 min is always
+  served, no upstream call.
+- `IN_USE_WINDOW_S = 3600` — a connection counts as "in use" if
+  it served a proxied request within the last hour
+  (`lastUsedAt` in the data blob).
+
+Decision (`_quota_cache_usable`):
+
+| Cache age | Connection in use | Result |
+|-----------|-------------------|--------|
+| < 15 min  | any               | serve cache |
+| ≥ 15 min  | idle (or never)   | serve cache — never re-poll |
+| ≥ 15 min  | in use            | re-poll upstream |
+
+So idle accounts are polled at most once (on first fetch), and
+active accounts at most every 15 minutes.
 
 ## Provider-Specific Usage APIs
 
 ### GitHub Copilot
 ```
 Endpoint: GET https://api.github.com/copilot_internal/user
-Auth: GitHub OAuth token (not copilotToken)
+Auth: GitHub OAuth token
 Headers: Authorization: token {accessToken}
 
-Response (Paid):
-{
-  "copilot_plan": "individual",
-  "quota_snapshots": {
-    "chat": { "entitlement": 1500, "remaining": 1200, "unlimited": false },
-    "completions": { "entitlement": 3000, "remaining": 2800 },
-    "premium_interactions": { "entitlement": 300, "remaining": 250 }
-  },
-  "quota_reset_date": "2026-07-01T00:00:00Z"
-}
-
-Response (Free):
-{
-  "monthly_quotas": { "chat": 50, "completions": 2000 },
-  "limited_user_quotas": { "chat": 10, "completions": 500 },
-  "limited_user_reset_date": "2026-07-01T00:00:00Z"
-}
+Response (paid): copilot_plan + quota_snapshots
+  { chat, completions, premium_interactions } with
+  entitlement/remaining/unlimited + quota_reset_date
+Response (free): monthly_quotas / limited_user_quotas +
+  limited_user_reset_date
 ```
 
 ### Claude (Anthropic)
 ```
-Endpoint (OAuth): GET https://api.anthropic.com/v1/usage
+Endpoint: GET https://api.anthropic.com/v1/usage
 Auth: OAuth Bearer token
 Headers: anthropic-beta: oauth-2025-04-20
 
-Response:
-{
-  "five_hour": { "utilization": 45, "resets_at": 1719500000 },
-  "seven_day": { "utilization": 23, "resets_at": 1719900000 },
-  "seven_day_sonnet": { "utilization": 30 },
-  "seven_day_opus": { "utilization": 15 }
-}
-
-utilization = % USED (e.g. 45 means 45% used, 55% remaining)
+Response: five_hour / seven_day / seven_day_sonnet /
+  seven_day_opus, each { utilization, resets_at }.
+utilization = percent USED (45 → 55% remaining).
 ```
 
 ### Codex (OpenAI)
@@ -196,193 +182,118 @@ utilization = % USED (e.g. 45 means 45% used, 55% remaining)
 Endpoint: GET https://api.openai.com/v1/usage
 Auth: OAuth Bearer token
 
-Response:
-{
-  "plan_type": "pro",
-  "rate_limit": {
-    "primary_window": { "used_percent": 35, "reset_at": "..." },
-    "secondary_window": { "used_percent": 12, "reset_at": "..." }
-  },
-  "rate_limit_reset_credits": { "available_count": 2 }
-}
+Response: plan_type + rate_limit.{primary_window,
+  secondary_window} with used_percent + reset_at.
+used_percent = percent USED.
 ```
 
 ### Kiro (AWS CodeWhisperer)
 ```
 Endpoint: GET https://codewhisperer.us-east-1.amazonaws.com/getUsageLimits
-Auth: OAuth Bearer token or API Key
+Auth: OAuth Bearer token or API key
 Headers: x-amz-user-agent: aws-sdk-js/1.0.0 KiroIDE
 
-Response:
-{
-  "subscriptionInfo": { "subscriptionTitle": "Kiro Pro" },
-  "usageBreakdownList": [
-    {
-      "resourceType": "AGENTIC_REQUEST",
-      "currentUsageWithPrecision": 150,
-      "usageLimitWithPrecision": 1000,
-      "nextDateReset": "2026-07-01T00:00:00Z",
-      "freeTrialInfo": { ... }
-    }
-  ]
-}
+Response: subscriptionInfo + usageBreakdownList[] with
+  resourceType, currentUsageWithPrecision,
+  usageLimitWithPrecision, nextDateReset.
 ```
 
-### Qoder
+### Qoder (verified 2026-08)
 ```
-Endpoint: GET https://api.qoder.dev/v1/user/usage
+Endpoint: QODER_QUOTA_USAGE_URL (providers/qoder/constants.py)
 Auth: OAuth Bearer token
 
 Response:
 {
-  "quotas": {
-    "user": { "total": 1000, "used": 350, "remaining": 650, "unit": "credits", "resetAt": "..." },
-    "organization": { "total": 5000, "used": 1200, "remaining": 3800 }
-  }
+  "userType": "personal_professional_trial",
+  "usageType": "credits",
+  "isQuotaExceeded": false,
+  "expiresAt": 1787423063188,
+  "userQuota": { "total": 300.0, "used": 43.0,
+                 "remaining": 257.0, "percentage": 85.67,
+                 "unit": "credits" }
 }
+
+limit_reached = isQuotaExceeded OR remaining <= 0
+reset_at derived from expiresAt (epoch ms)
 ```
 
 ## Standardized Quota Schema
 
-All providers return data normalized to this shape:
+Defined in `services/quota/base.py` (pydantic):
 
-```typescript
-interface QuotaItem {
-  name: string;           // "session", "weekly", "chat", "completions", etc.
-  used: number;           // Usage count or percentage
-  total: number;          // Total limit (0 = unlimited)
-  remaining?: number;     // Remaining count (absolute)
-  remainingPercentage?: number; // Remaining as 0-100%
-  resetAt: string | null; // ISO 8601 reset timestamp
-  unlimited?: boolean;    // True if no limit
-}
+```python
+class QuotaItem(BaseModel):
+    name: str
+    used: int = 0
+    total: int = 0
+    remaining: Optional[int] = None
+    remaining_percentage: float = 100.0
+    reset_at: Optional[str] = None      # ISO 8601
+    unlimited: bool = False
 
-interface UsageResponse {
-  plan?: string;          // "Pro", "Individual", etc.
-  quotas: Record<string, QuotaItem>;  // Named quota buckets
-  message?: string;       // Error/info message if quota unavailable
-  limitReached?: boolean; // Whether any limit is reached
-}
+class UsageResponse(BaseModel):
+    plan: Optional[str] = None
+    quotas: list[QuotaItem] = []
+    message: Optional[str] = None       # info/error, no quotas
+    limit_reached: bool = False
 ```
 
-## Supported Providers
+## Supported Providers (current)
 
-| Provider | Auth Type | Usage Endpoint | Quotas Returned |
-|----------|-----------|----------------|-----------------|
-| GitHub | OAuth | copilot_internal/user | chat, completions, premium |
-| Claude | OAuth | /v1/usage | session (5h), weekly (7d), per-model |
-| Codex | OAuth | /v1/usage | session, weekly, review |
-| Kiro | OAuth/API Key | CodeWhisperer GetUsageLimits | agentic_request, free_trial |
-| Qoder | OAuth | /v1/user/usage | user, organization |
-| Gemini CLI | OAuth | cloudresourcemanager | project quotas |
-| Antigravity | OAuth | Vertex AI | per-model quotas |
-| GLM/MiniMax | API Key | Provider API | model quotas |
-| Qwen | OAuth | DashScope | token quotas |
-| iFlow | OAuth | Provider API | usage data |
-| CodeBuddy CN | OAuth | Provider API | usage data |
+| Provider | Auth | Handler | Quotas |
+|----------|------|---------|--------|
+| GitHub | OAuth | providers/github/quota.py | chat, completions, premium |
+| Claude | OAuth | providers/claude/quota.py | 5h session, 7d weekly (+ per-model) |
+| Codex | OAuth | providers/codex/quota.py | session, weekly |
+| Kiro | OAuth/API key | providers/kiro/quota.py | agentic requests etc. |
+| Qoder | OAuth | providers/qoder/quota.py | credits |
 
-## Caching Strategy
-
-### Frontend Cache (localStorage)
-```
-Key: "quotaCacheData"
-TTL: 5 minutes
-Format: { data: [...], timestamp: Date.now() }
-
-Flow:
-1. Page load → check cache
-2. Cache hit (< 5 min) → show cached data immediately
-3. Fetch fresh data in background
-4. Update cache with fresh data
-5. On error → fall back to cache if available
-```
-
-### Rate Limit Protection
-```
-Claude OAuth usage endpoint has 429 rate limiting.
-Solution: 180s cooldown per token after 429.
-
-Code:
-if (Date.now() < cooldownUntil) {
-  return getClaudeUsageLegacy(accessToken);  // Fallback to legacy endpoint
-}
-```
+Any other provider returns a "Usage tracking not supported"
+message and is hidden from the quota tracker page.
 
 ## Frontend Features
 
-### Filtering & Sorting
-- **Provider filter**: Filter by provider type (GitHub, Claude, etc.)
-- **Status filter**: All / Active / Inactive connections
-- **Sort mode**: Default / % Low→High / % High→Low
-- **Expiring first**: Sort by earliest reset time
-- **Search**: Filter by connection name
+### Fetch flow
+1. Page load → localStorage cache (5 min TTL) shown instantly if
+   fresh; fresh data fetched in background regardless.
+2. `GET /quota` → render cards.
+3. `GET /usage/{id}` per ACTIVE connection, batched 5 at a time.
+4. Manual card refresh uses `force=true`.
 
-### Connection Management
-- **Toggle active/inactive**: Enable/disable connection (PATCH /providers/{id})
-- **Edit name**: Update connection display name
-- **Delete**: Remove connection with confirmation
-- **Bulk actions**: Disable depleted (≤5%), Enable all inactive
+### Filtering & sorting
+- Provider filter (dropdown shown only when >1 provider type)
+- Status filter: All / Active / Inactive
+- Sort: default / % remaining low→high / high→low
+- "Expiring first": earliest reset time
+- Search by connection name or provider
 
-### Display Features
-- **Emoji indicators**: 🟢 (>70%), 🟡 (30-70%), 🔴 (<30%)
-- **Table-based layout**: Compact per-provider quota table
-- **Reset time**: "Today, 12:00 PM" / "Tomorrow, 3:00 PM" format
-- **Provider logos**: PNG from `/providers/{id}.png`
-- **Pagination**: 10/20/50 per page
+### Connection management
+- Toggle active/inactive (optimistic update, rollback on error)
+- Edit connection name
+- Delete with confirmation
+- Bulk: disable depleted (≤5% remaining), enable all inactive
 
-## Implementation Plan (FastAPI)
+### Display
+- Emoji indicators: 🟢 (>70%), 🟡 (30–70%), 🔴 (<30%)
+- Reset time: countdown + "Today, 12:00 PM" style labels
+- Provider logos from `/providers/{id}.png` with initials
+  fallback
+- Pagination: 10/20/50 per page
 
-### Phase 1: Backend Usage Service
+## Key Files
+
 ```
-backend/app/services/quota/
-├── __init__.py           # Usage handler registry
-├── base.py              # BaseUsageHandler abstract class
-├── github.py            # GitHub Copilot usage
-├── claude.py            # Claude usage (OAuth + legacy)
-├── codex.py             # Codex usage
-├── kiro.py              # Kiro usage
-├── qoder.py             # Qoder usage
-└── shared.py            # Common helpers (parseResetTime, etc.)
-```
+backend/app/routers/quota.py          # /quota + /usage/{id}, cache policy
+backend/app/models/quota_cache.py     # QuotaCache table model
+backend/app/services/quota/base.py    # BaseUsageHandler + schemas
+backend/app/services/quota/__init__.py # discovery registry
+backend/app/providers/<name>/quota.py # per-provider usage handler (PS)
+backend/alembic/versions/9a3d69805d5d_add_quota_cache_table.py
+tests/_backfill_quota_cache.py        # one-time blob → table migration
+frontend/src/pages/QuotaTrackerPage.jsx
+frontend/src/api/quota.js
 
-### Phase 2: API Endpoint
-```python
-# backend/app/routers/quota.py
-@router.get("/usage/{connection_id}")
-async def get_usage(connection_id: str, db = Depends(get_db)):
-    conn = await get_connection(db, connection_id)
-    handler = get_usage_handler(conn.provider)
-    usage = await handler.fetch(conn.access_token, conn.provider_specific_data)
-    return usage
-```
-
-### Phase 3: Frontend Integration
-- Update `QuotaTrackerPage` to fetch per-connection usage
-- Add loading/error states per connection card
-- Implement `parseQuotaData` normalizer
-
-## Key Files Reference
-
-### Node.js (Reference)
-```
-open-sse/services/usage.js           # Handler registry
-open-sse/services/usage/github.js    # GitHub handler
-open-sse/services/usage/claude.js    # Claude handler
-open-sse/services/usage/codex.js     # Codex handler
-open-sse/services/usage/kiro.js      # Kiro handler
-open-sse/services/usage/shared.js    # Shared helpers
-
-src/app/api/usage/[connectionId]/route.js  # API endpoint
-src/app/(dashboard)/dashboard/usage/components/ProviderLimits/
-├── index.js           # Main component
-├── utils.js           # parseQuotaData, cache helpers
-├── QuotaTable.js      # Table display
-└── QuotaProgressBar.js # Progress bar
-```
-
-### FastAPI (Current)
-```
-backend/app/routers/quota.py              # Placeholder endpoint
-frontend/src/pages/QuotaTrackerPage.jsx   # UI component
-frontend/src/api/quota.js                 # API client
+# Original Next.js reference (flow inspiration only):
+# _reference/ → services/usage/*, api/usage/[connectionId]/*
 ```
