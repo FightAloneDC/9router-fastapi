@@ -8,6 +8,7 @@ export const providersApi = {
   createProvider: (data) => client.post('/providers', data),
   updateProvider: (id, data) => client.patch(`/providers/${id}`, data),
   deleteProvider: (id) => client.delete(`/providers/${id}`),
+  bulkDeleteProviders: (data) => client.post('/providers/bulk-delete', data),
 
   // Provider validation
   validateProvider: (data) => client.post('/providers/validate', data),

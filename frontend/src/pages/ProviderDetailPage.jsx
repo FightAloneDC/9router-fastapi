@@ -111,7 +111,7 @@ function ConfirmModal({ isOpen, onClose, onConfirm, title, message, variant = 'd
 /* ════════════════════════════════════════════════════════════════
    ConnectionRow — single connection row with proxy, cooldown, etc.
    ════════════════════════════════════════════════════════════════ */
-function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onEdit, onDelete, onTest, testing, testResult, isOAuth = false }) {
+function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onEdit, onDelete, onTest, testing, testResult, isOAuth = false, isSelected = false, onSelect = null }) {
   const [showProxyDropdown, setShowProxyDropdown] = useState(false)
   const [updatingProxy, setUpdatingProxy] = useState(false)
   const proxyDropdownRef = useRef(null)
@@ -182,6 +182,15 @@ function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMo
     <div className={`group flex flex-col gap-3 p-2 rounded-lg sm:flex-row sm:items-center sm:justify-between hover:bg-zinc-800/40 transition-colors ${!isActive ? 'opacity-60' : ''}`}>
       {/* Left side */}
       <div className="flex w-full min-w-0 flex-1 items-start gap-3 sm:items-center">
+        {/* Selection checkbox */}
+        {onSelect && (
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => onSelect(connection.id)}
+            className="shrink-0 mt-1 rounded border-zinc-600 bg-zinc-800 accent-red-500 cursor-pointer"
+          />
+        )}
         {/* Priority arrows */}
         <div className="flex shrink-0 flex-col">
           <button onClick={onMoveUp} disabled={isFirst} className={`p-0.5 rounded ${isFirst ? 'text-zinc-700 cursor-not-allowed' : 'text-zinc-500 hover:text-primary-400 hover:bg-zinc-800'}`}>
@@ -1203,6 +1212,7 @@ export default function ProviderDetailPage() {
   const isWebCookie = info?.authType === 'cookie'
 
   const [connections, setConnections] = useState([])
+  const [selectedConnIds, setSelectedConnIds] = useState(new Set())
   const [loading, setLoading] = useState(true)
   const [providerNode, setProviderNode] = useState(null)
   const [proxyPools, setProxyPools] = useState([])
@@ -1788,6 +1798,56 @@ export default function ProviderDetailPage() {
     })
   }
 
+  const handleDeleteSelected = () => {
+    const ids = [...selectedConnIds]
+    if (!ids.length) return
+    setConfirmState({
+      title: 'Delete Selected',
+      message: `Delete ${ids.length} selected connection(s)? This cannot be undone.`,
+      onConfirm: async () => {
+        setConfirmState(null)
+        try {
+          await providersApi.bulkDeleteProviders({ ids })
+          setConnections((prev) => prev.filter((c) => !selectedConnIds.has(c.id)))
+          setSelectedConnIds(new Set())
+        } catch (err) {
+          console.error('Failed to delete:', err)
+        }
+      }
+    })
+  }
+
+  const handleToggleSelect = (connId) => {
+    setSelectedConnIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(connId)) next.delete(connId)
+      else next.add(connId)
+      return next
+    })
+  }
+
+  const handleSelectAll = () => {
+    const pageIds = pagedConnections.map((c) => c.id)
+    const allPageSelected = pageIds.every((id) => selectedConnIds.has(id))
+    setSelectedConnIds((prev) => {
+      const next = new Set(prev)
+      if (allPageSelected) {
+        pageIds.forEach((id) => next.delete(id))
+      } else {
+        pageIds.forEach((id) => next.add(id))
+      }
+      return next
+    })
+  }
+
+  const handleSelectAllPages = () => {
+    if (selectedConnIds.size === connections.length) {
+      setSelectedConnIds(new Set())
+    } else {
+      setSelectedConnIds(new Set(connections.map((c) => c.id)))
+    }
+  }
+
   const handleTestConnectionRow = async (connectionId) => {
     setTestingConnectionId(connectionId)
     setTestResults(prev => ({ ...prev, [connectionId]: null }))
@@ -1898,6 +1958,7 @@ export default function ProviderDetailPage() {
   // Reset connection pagination when switching providers
   useEffect(() => {
     setConnectionPage(1)
+    setSelectedConnIds(new Set())
   }, [providerId])
 
   // Fetch suggested models from provider's public API (if configured)
@@ -2407,6 +2468,28 @@ export default function ProviderDetailPage() {
             </div>
           ) : (
             <>
+              {/* List header with select-all checkbox + bulk actions */}
+              <div className="flex items-center justify-between gap-2 pb-2 mb-1 border-b border-zinc-800/50">
+                <label className="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={pagedConnections.length > 0 && pagedConnections.every((c) => selectedConnIds.has(c.id))}
+                    onChange={handleSelectAll}
+                    className="rounded border-zinc-600 bg-zinc-800 accent-red-500 cursor-pointer"
+                  />
+                  This page
+                </label>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="warning" onClick={handleSelectAllPages}>
+                    Select All ({connections.length})
+                  </Button>
+                  {selectedConnIds.size > 0 && (
+                    <Button size="sm" variant="danger" onClick={handleDeleteSelected}>
+                      <Trash2 size={14} className="mr-1" /> Delete Selected ({selectedConnIds.size})
+                    </Button>
+                  )}
+                </div>
+              </div>
               <div className="flex min-w-0 flex-col divide-y divide-zinc-800/50">
                 {pagedConnections.map((conn, index) => {
                   const actualIndex = connStart + index
@@ -2419,6 +2502,8 @@ export default function ProviderDetailPage() {
                           isFirst={actualIndex === 0}
                           isLast={actualIndex === connections.length - 1}
                           isOAuth={isOAuth}
+                          isSelected={selectedConnIds.has(conn.id)}
+                          onSelect={handleToggleSelect}
                           onMoveUp={() => handleSwapPriority(actualIndex, actualIndex - 1)}
                           onMoveDown={() => handleSwapPriority(actualIndex, actualIndex + 1)}
                           onToggleActive={(isActive) => handleToggleActive(conn.id, isActive)}

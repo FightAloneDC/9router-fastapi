@@ -17,6 +17,10 @@ class MistralConfig(BaseProviderConfig):
     BASE_URL: str = "https://api.mistral.ai/v1"
     SERVICE_KINDS: list[str] = ["llm", "imageToText", "embedding"]
 
+    # ── Bulk Import ─────────────────────────────────────────────────────
+    SUPPORTS_BULK_IMPORT: bool = True
+    BULK_IMPORT_FORMAT: str = "farm-json"
+
     # ── Model type overrides ────────────────────────────────────────────
     MODEL_TYPE_OVERRIDES: dict[str, str] = {
         "mistral-embed": "embedding",

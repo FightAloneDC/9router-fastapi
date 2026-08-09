@@ -18,9 +18,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.provider import ProviderConnection
 from app.providers import (
+    PROVIDER_ALIMS_INTL,
     PROVIDER_BLACKBOX,
     PROVIDER_GROK_CLI,
+    PROVIDER_MISTRAL,
     PROVIDER_QODER,
+)
+from app.providers.alims_intl.bulk import (
+    parse_farm_entry as parse_alims_farm_entry,
+)
+from app.providers.mistral.bulk import (
+    parse_farm_entry as parse_mistral_farm_entry,
 )
 from app.providers.blackbox.bulk import (
     mask_key as blackbox_mask_key,
@@ -622,6 +630,12 @@ _BULK_PARSERS: dict[
     PROVIDER_BLACKBOX: (
         "apikeys", parse_blackbox_key_entry, "apikey",
     ),
+    PROVIDER_ALIMS_INTL: (
+        "farm", parse_alims_farm_entry, "apikey",
+    ),
+    PROVIDER_MISTRAL: (
+        "farm", parse_mistral_farm_entry, "apikey",
+    ),
 }
 
 
@@ -712,12 +726,20 @@ async def provider_bulk_import(
             continue
 
         if existing:
-            _update_bulk_connection(existing, parsed)
+            _update_bulk_connection(existing, parsed, auth_type)
             status = "updated"
         else:
+            token_data = parsed["token_data"]
+            # Wajib: name = email untuk bulk import
+            token_data["displayName"] = email
+            if auth_type == "oauth":
+                token_data["email"] = email
             conn = await _save_connection(
-                db, provider, parsed["token_data"], auth_type=auth_type,
+                db, provider, token_data, auth_type=auth_type,
             )
+            # Force name column to email
+            conn.name = email
+            conn.email = email
             _apply_absolute_expiry(conn, parsed["expires_at"])
             status = "created"
 
@@ -728,13 +750,17 @@ async def provider_bulk_import(
     return {**counts, "results": results}
 
 
-def _update_bulk_connection(conn: ProviderConnection, parsed: dict) -> None:
+def _update_bulk_connection(
+    conn: ProviderConnection, parsed: dict, auth_type: str = "oauth",
+) -> None:
     """Replace credentials on an existing connection (upsert path)."""
     token_data = parsed["token_data"]
     blob = json.loads(conn.data or "{}")
     blob["accessToken"] = token_data["accessToken"]
     if token_data.get("refreshToken"):
         blob["refreshToken"] = token_data["refreshToken"]
+    if token_data.get("apiKey"):
+        blob["apiKey"] = token_data["apiKey"]
     if token_data.get("scope"):
         blob["scope"] = token_data["scope"]
     if parsed["expires_at"]:
@@ -745,6 +771,8 @@ def _update_bulk_connection(conn: ProviderConnection, parsed: dict) -> None:
         if value is not None:
             blob[key] = value
     blob["testStatus"] = "active"
+    # Wajib: displayName = email untuk bulk import
+    blob["displayName"] = parsed["email"]
     conn.data = json.dumps(blob)
     # Bulk-imported connections are always named by email
     conn.name = parsed["email"]
@@ -783,6 +811,12 @@ async def _bulk_import_api_keys(
         if isinstance(key, str) and key:
             by_key[key] = conn
 
+    # Resolve provider-specific mask function for display names
+    _MASK_FNS: dict[str, Callable[[str], str]] = {
+        PROVIDER_BLACKBOX: blackbox_mask_key,
+    }
+    mask_fn = _MASK_FNS.get(provider, blackbox_mask_key)
+
     # Serial loop — connection creation touches shared state
     # (priority); parallel calls would race.
     for i, raw in enumerate(accounts):
@@ -818,7 +852,7 @@ async def _bulk_import_api_keys(
             display = existing.name
             status = "updated"
         else:
-            display = name or blackbox_mask_key(key)
+            display = name or mask_fn(key)
             conn = await _save_connection(
                 db, provider,
                 {

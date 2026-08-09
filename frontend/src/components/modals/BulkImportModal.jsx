@@ -15,8 +15,10 @@ const FARM_PLACEHOLDER = `[
   }
 ]`
 
-const API_KEYS_PLACEHOLDER = `bb_key_abcdef1234567890
-bb_key_0987654321zyxwvu|Work account`
+const API_KEYS_PLACEHOLDER = `sk-abcdef1234567890
+sk-0987654321zyxwvu|Work account
+sk-abcdef0987654321:Personal
+[{"api_key": "sk-xxx", "name": "acct1"}, {"api_key": "sk-yyy"}]`
 
 function normalizeToArray(parsed) {
   if (Array.isArray(parsed)) return parsed
@@ -69,10 +71,16 @@ export default function BulkImportModal({
 
     let accounts
     if (isApiKeys) {
-      accounts = trimmed
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
+      // Try JSON first (array of objects with api_key/apiKey/key),
+      // fall back to plain-text lines.
+      try {
+        accounts = normalizeToArray(JSON.parse(trimmed))
+      } catch {
+        accounts = trimmed
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+      }
     } else {
       try {
         accounts = normalizeToArray(JSON.parse(trimmed))

@@ -4,8 +4,8 @@ import json
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -360,6 +360,50 @@ async def delete_provider(
             detail="Provider connection not found",
         )
     await db.delete(conn)
+
+
+@router.post("/providers/bulk-delete")
+async def bulk_delete_providers(
+    payload: dict = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Delete multiple provider connections at once.
+
+    Body: ``{"ids": ["uuid1", "uuid2", ...]}``
+    or ``{"provider": "alims-intl"}`` to wipe all for a provider.
+    """
+    ids = payload.get("ids")
+    provider = payload.get("provider")
+
+    if not ids and not provider:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide 'ids' (list) or 'provider' (string)",
+        )
+
+    deleted = 0
+    if ids:
+        if not isinstance(ids, list):
+            raise HTTPException(
+                status_code=400, detail="'ids' must be a list",
+            )
+        result = await db.execute(
+            delete(ProviderConnection).where(
+                ProviderConnection.id.in_(ids)
+            )
+        )
+        deleted = result.rowcount
+    else:
+        result = await db.execute(
+            delete(ProviderConnection).where(
+                ProviderConnection.provider == provider
+            )
+        )
+        deleted = result.rowcount
+
+    await db.commit()
+    return {"deleted": deleted}
 
 
 @router.post("/providers/{conn_id}/test", response_model=ProviderTestResponse)
