@@ -11,6 +11,9 @@ export default defineConfig({
       '/api': {
         target: process.env.VITE_API_URL || 'http://localhost:9000',
         changeOrigin: true,
+        // Required so the console log WebSocket
+        // (/api/console/ws) is upgraded and proxied.
+        ws: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
       '/v1': {

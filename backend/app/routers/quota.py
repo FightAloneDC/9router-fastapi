@@ -2,6 +2,8 @@
 
 import json
 import logging
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,8 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.provider import ProviderConnection
+from app.models.quota_cache import QuotaCache
 from app.routers.auth import get_current_user
 from app.services.quota import (
+    QuotaItem as ServiceQuotaItem,
     UsageResponse,
     get_usage_handler,
     supported_providers,
@@ -21,6 +25,49 @@ from app.services.quota import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["quota"])
+
+# A connection counts as "in use" when it served a proxied
+# request within this window (lastUsedAt in the data blob).
+IN_USE_WINDOW_S = 60 * 60
+# Connections in use re-poll upstream at most this often;
+# idle connections are never re-polled automatically.
+CACHE_MIN_AGE_S = 15 * 60
+
+
+def _parse_iso(value: str) -> Optional[datetime]:
+    try:
+        parsed = datetime.fromisoformat(
+            value.replace("Z", "+00:00")
+        )
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _quota_cache_usable(
+    cache: QuotaCache, data: dict,
+) -> bool:
+    """Decide whether the cached balance can be served without
+    an upstream call.
+
+    Upstream quota polling is limited to reduce ban risk on
+    farmed accounts: a cached balance is reused unless it is
+    stale AND the connection is in active use.
+    """
+    fetched_at = cache.fetched_at
+    if fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    age = (now - fetched_at).total_seconds()
+    if age < CACHE_MIN_AGE_S:
+        return True
+    # Stale cache — only re-poll for connections in active use
+    used_at = _parse_iso(data.get("lastUsedAt", ""))
+    if used_at is None:
+        return True
+    return (now - used_at).total_seconds() > IN_USE_WINDOW_S
 
 
 # --- Schemas ---
@@ -55,14 +102,20 @@ async def get_quota(
     db: AsyncSession = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    """List all provider connections with their quota info.
-
-    For now, returns empty quotas as a placeholder for future
-    provider API integration that will fetch real usage data.
+    """List connections of providers that support quota
+    tracking, each with empty quotas (real usage data is
+    fetched per connection via /usage/{connection_id}).
     """
     result = await db.execute(
-        select(ProviderConnection).order_by(
-            ProviderConnection.provider, ProviderConnection.priority
+        select(ProviderConnection)
+        .where(
+            ProviderConnection.provider.in_(
+                supported_providers()
+            )
+        )
+        .order_by(
+            ProviderConnection.provider,
+            ProviderConnection.priority,
         )
     )
     connections = result.scalars().all()
@@ -86,14 +139,27 @@ async def get_quota(
 )
 async def get_connection_usage(
     connection_id: str,
+    force: bool = False,
     db: AsyncSession = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    """Fetch real-time quota/usage data for a connection.
+    """Fetch quota/usage data for a connection.
 
-    Calls the provider's usage API using the stored
-    access token. Returns standardized quota data.
+    Serves the cached balance from the quota_cache table when
+    possible; calls the provider's usage API only for connections
+    without a cache or in active use (ban-risk reduction).
+    Pass force=true to always poll upstream.
     """
+    # Reject non-UUID ids early — otherwise asyncpg raises a 500 on
+    # the bind (e.g. stray "/usage/stream" hitting this param route).
+    try:
+        uuid.UUID(connection_id)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(
+            status_code=404,
+            detail="Connection not found",
+        )
+
     result = await db.execute(
         select(ProviderConnection).where(
             ProviderConnection.id == connection_id
@@ -122,6 +188,24 @@ async def get_connection_usage(
     except (json.JSONDecodeError, TypeError):
         data = {}
 
+    # Serve cached balance unless a fresh poll is required
+    if not force:
+        cache = await db.get(QuotaCache, conn.id)
+        if cache is not None and _quota_cache_usable(cache, data):
+            try:
+                cached_quotas = json.loads(cache.quotas or "[]")
+            except (json.JSONDecodeError, TypeError):
+                cached_quotas = []
+            return UsageResponse(
+                plan=cache.plan,
+                quotas=[
+                    ServiceQuotaItem(**q)
+                    for q in cached_quotas
+                    if isinstance(q, dict)
+                ],
+                limit_reached=bool(cache.limit_reached),
+            )
+
     access_token = (
         data.get("accessToken")
         or data.get("apiKey")
@@ -138,10 +222,36 @@ async def get_connection_usage(
             conn, data, db
         )
 
-    return await handler.fetch(
+    result = await handler.fetch(
         access_token=access_token,
         provider_data=data,
     )
+    if result.quotas:
+        await _store_quota_cache(db, conn, result)
+    return result
+
+
+async def _store_quota_cache(
+    db: AsyncSession,
+    conn: ProviderConnection,
+    result: UsageResponse,
+) -> None:
+    """Persist fetched quota into the quota_cache table.
+
+    Upserts the row keyed by connection id.
+    """
+    quotas_json = json.dumps(
+        [q.model_dump() for q in result.quotas]
+    )
+    cache = await db.get(QuotaCache, conn.id)
+    if cache is None:
+        cache = QuotaCache(connection_id=conn.id)
+        db.add(cache)
+    cache.plan = result.plan
+    cache.quotas = quotas_json
+    cache.limit_reached = result.limit_reached
+    cache.fetched_at = datetime.now(timezone.utc)
+    await db.commit()
 
 
 async def _try_refresh_token(

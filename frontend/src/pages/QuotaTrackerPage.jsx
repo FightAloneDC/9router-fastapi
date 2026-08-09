@@ -668,9 +668,9 @@ export default function QuotaTrackerPage() {
   const countdownRef = useRef(null)
 
   const fetchUsageForConnection = useCallback(
-    async (connId) => {
+    async (connId, force = false) => {
       try {
-        const res = await quotaApi.getUsage(connId)
+        const res = await quotaApi.getUsage(connId, force)
         const usage = res.data
         if (!usage) return
         setProviders((prev) =>
@@ -806,7 +806,8 @@ export default function QuotaTrackerPage() {
     setRefreshingId(id)
     setLoadingUsage((prev) => new Set(prev).add(id))
     try {
-      await fetchUsageForConnection(id)
+      // Manual refresh always polls the provider upstream
+      await fetchUsageForConnection(id, true)
     } finally {
       setRefreshingId(null)
     }

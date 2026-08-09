@@ -6,6 +6,7 @@ All Qoder-specific code lives here:
 - cosy: COSY signing (RSA + AES + MD5)
 - encoding: WAF-bypass body encoding
 - models: Model catalog fetching
+- quota: Usage/quota fetching (quota tracker hook)
 - transform: Request/response transformation
 - config: Provider configuration
 - handler: Handler methods

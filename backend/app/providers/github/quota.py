@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import logging
 
-from .base import BaseUsageHandler, QuotaItem, UsageResponse
+from app.services.quota.base import (
+    BaseUsageHandler,
+    QuotaItem,
+    UsageResponse,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -12,11 +12,11 @@ from app.services.quota import (
     supported_providers,
 )
 from app.services.quota.base import QuotaItem, UsageResponse
-from app.services.quota.github import GitHubUsageHandler
-from app.services.quota.claude import ClaudeUsageHandler
-from app.services.quota.codex import CodexUsageHandler
-from app.services.quota.kiro import KiroUsageHandler
-from app.services.quota.qoder import QoderUsageHandler
+from app.providers.github.quota import GitHubUsageHandler
+from app.providers.claude.quota import ClaudeUsageHandler
+from app.providers.codex.quota import CodexUsageHandler
+from app.providers.kiro.quota import KiroUsageHandler
+from app.providers.qoder.quota import QoderUsageHandler
 
 
 # ──────────────────────────────────────────────
@@ -300,19 +300,18 @@ async def test_kiro_usage():
 @pytest.mark.asyncio
 async def test_qoder_usage():
     handler = QoderUsageHandler()
+    # Real Qoder response shape (verified 2026-08)
     mock_resp = _mock_response(200, {
-        "quotas": {
-            "user": {
-                "total": 1000,
-                "used": 350,
-                "remaining": 650,
-                "resetAt": "2026-08-01T00:00:00Z",
-            },
-            "organization": {
-                "total": 5000,
-                "used": 1200,
-                "remaining": 3800,
-            },
+        "userType": "personal_professional_trial",
+        "usageType": "credits",
+        "isQuotaExceeded": False,
+        "expiresAt": 1787423063188,
+        "userQuota": {
+            "total": 300.0,
+            "used": 43.0,
+            "remaining": 257.0,
+            "percentage": 85.67,
+            "unit": "credits",
         },
     })
 
@@ -322,15 +321,17 @@ async def test_qoder_usage():
     ):
         result = await handler.fetch("fake-token")
 
-    assert len(result.quotas) == 2
+    assert result.plan == "personal_professional_trial"
+    assert result.limit_reached is False
+    assert len(result.quotas) == 1
 
-    user = next(
-        q for q in result.quotas if q.name == "User"
-    )
-    assert user.used == 350
-    assert user.total == 1000
-    assert user.remaining == 650
-    assert user.remaining_percentage == 65.0
+    credits = result.quotas[0]
+    assert credits.name == "Credits"
+    assert credits.used == 43
+    assert credits.total == 300
+    assert credits.remaining == 257
+    assert abs(credits.remaining_percentage - 85.67) < 0.01
+    assert credits.reset_at is not None
 
 
 # ──────────────────────────────────────────────
