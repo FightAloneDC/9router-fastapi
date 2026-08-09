@@ -91,21 +91,76 @@ async def responses_endpoint(
             break
 
         target = targets[0]
-        forward_body: dict = {**chat_body, "model": target.model, "stream": stream}
+
+        # ── FORMAT=openai-responses upstream (Grok CLI): passthrough ──
+        is_responses_upstream: bool = False
+        provider_obj = None
+        try:
+            from app.providers.provider import Provider
+            provider_obj = Provider(target.provider)
+            is_responses_upstream = (
+                provider_obj.config().FORMAT == "openai-responses"
+            )
+        except (ValueError, ModuleNotFoundError):
+            pass
+
+        raw_body: bytes | None = None
+        if is_responses_upstream:
+            # Client already speaks Responses API — forward natively
+            forward_body: dict = {**body, "model": target.model}
+            if target.connection_id and provider_obj is not None:
+                conn = await db.get(
+                    ProviderConnection, uuid.UUID(target.connection_id),
+                )
+                if conn:
+                    conn_data = json.loads(conn.data) if conn.data else {}
+                    handler = provider_obj.handler()
+                    raw_body, signed_headers = (
+                        await handler.build_request_body(
+                            target.model, body, conn_data,
+                        )
+                    )
+                    if signed_headers:
+                        target.headers = signed_headers
+        else:
+            forward_body = {
+                **chat_body, "model": target.model, "stream": stream,
+            }
 
         try:
             request_start_time: float = time.time()
             active_request_id: str = track_request_start(target.provider, target.model)
             if stream:
-                resp = await _stream_responses(
-                    target, forward_body, request_id, model,
-                    db=db, provider=target.provider,
-                    connection_id=target.connection_id,
-                    request_body=body, request_start_time=request_start_time,
-                )
+                if is_responses_upstream:
+                    resp = await _stream_responses_passthrough(
+                        target, forward_body, request_id, model,
+                        db=db, provider=target.provider,
+                        connection_id=target.connection_id,
+                        request_body=body,
+                        request_start_time=request_start_time,
+                        raw_body=raw_body,
+                    )
+                else:
+                    resp = await _stream_responses(
+                        target, forward_body, request_id, model,
+                        db=db, provider=target.provider,
+                        connection_id=target.connection_id,
+                        request_body=body,
+                        request_start_time=request_start_time,
+                    )
                 resp_data: dict = {}
             else:
-                resp, resp_data = await _non_stream_responses(target, forward_body, request_id, model)
+                if is_responses_upstream:
+                    resp, resp_data = (
+                        await _non_stream_responses_passthrough(
+                            target, forward_body, request_id,
+                            raw_body=raw_body,
+                        )
+                    )
+                else:
+                    resp, resp_data = await _non_stream_responses(
+                        target, forward_body, request_id, model,
+                    )
             total_latency_ms: int = int((time.time() - request_start_time) * 1000)
 
             if target.connection_id:
@@ -284,4 +339,184 @@ async def _stream_responses(
         generate(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Request-Id": request_id},
+    )
+
+
+async def _non_stream_responses_passthrough(
+    target: object, body: dict, request_id: str,
+    raw_body: bytes | None = None,
+) -> tuple[JSONResponse, dict]:
+    """Non-streaming passthrough to a native Responses-API upstream.
+
+    The upstream forces streaming, so the SSE is consumed internally and
+    the response.completed object is returned to the client as-is.
+    """
+    send_kwargs: dict = {"headers": target.headers}
+    if raw_body is not None:
+        send_kwargs["content"] = raw_body
+    else:
+        send_kwargs["json"] = body
+
+    completed: dict = {}
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        async with client.stream(
+            "POST", target.url, **send_kwargs,
+        ) as resp:
+            resp.raise_for_status()
+            buffer = ""
+            async for chunk in resp.aiter_text():
+                buffer += chunk
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    line = line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].strip()
+                    if not data_str or data_str == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(event, dict) and (
+                        event.get("type") == "response.completed"
+                    ):
+                        completed = event.get("response") or {}
+
+    if not completed:
+        completed = {
+            "id": request_id,
+            "object": "response",
+            "status": "completed",
+            "output": [],
+        }
+
+    # Usage tracking expects Chat Completions keys
+    usage = completed.get("usage", {}) or {}
+    tracking_data = dict(completed)
+    tracking_data["usage"] = {
+        "prompt_tokens": usage.get("input_tokens", 0),
+        "completion_tokens": usage.get("output_tokens", 0),
+        "total_tokens": usage.get(
+            "total_tokens",
+            usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
+        ),
+    }
+    return JSONResponse(
+        status_code=200,
+        content=completed,
+        headers={"X-Request-Id": request_id},
+    ), tracking_data
+
+
+async def _stream_responses_passthrough(
+    target: object,
+    body: dict,
+    request_id: str,
+    model: str,
+    *,
+    db: AsyncSession | None = None,
+    provider: str | None = None,
+    connection_id: str | None = None,
+    request_body: dict | None = None,
+    request_start_time: float | None = None,
+    raw_body: bytes | None = None,
+) -> StreamingResponse:
+    """Streaming passthrough: forward Responses API SSE events as-is."""
+    send_kwargs: dict = {"headers": target.headers}
+    if raw_body is not None:
+        send_kwargs["content"] = raw_body
+    else:
+        send_kwargs["json"] = body
+
+    async def generate():  # type: ignore[no-untyped-def]
+        usage: dict = {}
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            try:
+                async with client.stream(
+                    "POST", target.url, **send_kwargs,
+                ) as resp:
+                    resp.raise_for_status()
+                    async for chunk in resp.aiter_text():
+                        yield chunk
+                        # Capture usage from response.completed event
+                        for line in chunk.split("\n"):
+                            line = line.strip()
+                            if not line.startswith("data:"):
+                                continue
+                            data_str = line[5:].strip()
+                            if not data_str or data_str == "[DONE]":
+                                continue
+                            try:
+                                event = json.loads(data_str)
+                            except json.JSONDecodeError:
+                                continue
+                            if not isinstance(event, dict):
+                                continue
+                            if event.get("type") == "response.completed":
+                                u = (
+                                    event.get("response") or {}
+                                ).get("usage") or {}
+                                if u:
+                                    usage = {
+                                        "prompt_tokens": u.get(
+                                            "input_tokens", 0,
+                                        ),
+                                        "completion_tokens": u.get(
+                                            "output_tokens", 0,
+                                        ),
+                                        "total_tokens": u.get(
+                                            "total_tokens", 0,
+                                        ),
+                                    }
+            except Exception as e:
+                yield (
+                    "event: error\n"
+                    f"data: {json.dumps({'message': str(e)})}\n\n"
+                )
+
+        # Save usage tracking after stream consumed
+        if db and provider and request_start_time:
+            try:
+                from app.database import async_session
+                async with async_session() as tracking_db:
+                    total_latency_ms = int(
+                        (time.time() - request_start_time) * 1000
+                    )
+                    await save_request_tracking(
+                        tracking_db,
+                        provider=provider,
+                        model=model,
+                        connection_id=connection_id,
+                        endpoint="/v1/responses",
+                        prompt_tokens=usage.get("prompt_tokens", 0),
+                        completion_tokens=usage.get(
+                            "completion_tokens", 0,
+                        ),
+                        tokens_json=usage,
+                        latency_ttft=total_latency_ms,
+                        latency_total=total_latency_ms,
+                        request_body=request_body,
+                        provider_request_body=body,
+                        provider_response_body={
+                            "_note": (
+                                "Streaming response — raw not captured"
+                            ),
+                        },
+                        response_body={"_note": "Streaming response"},
+                    )
+            except Exception as e:
+                print(
+                    f"[RESPONSES PASSTHROUGH TRACKING ERROR] {e}",
+                    flush=True,
+                )
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Request-Id": request_id,
+        },
     )

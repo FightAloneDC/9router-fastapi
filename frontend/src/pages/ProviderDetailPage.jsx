@@ -5,7 +5,7 @@ import {
   ChevronUp, ChevronDown, CheckCircle2, AlertCircle,
   Loader2, Wifi, Edit2, ExternalLink, X, Copy, Check,
   Beaker, Download, Network, Ban, RotateCcw, Search, Play, MessageSquare,
-  Cookie, Lock, TriangleAlert, Info, Plug,
+  Cookie, Lock, TriangleAlert, Info, Plug, Upload,
 } from 'lucide-react'
 import Card, { CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import { useNotificationStore } from '../stores/notificationStore'
@@ -26,6 +26,7 @@ import OAuthEditModal from '../components/OAuthEditModal'
 import KiroAuthModal from '../components/KiroAuthModal'
 import CursorAuthModal from '../components/CursorAuthModal'
 import GitLabAuthModal from '../components/GitLabAuthModal'
+import BulkImportModal from '../components/modals/BulkImportModal'
 import { useAuthStore } from '../stores/authStore'
 
 const COMPATIBLE_TYPES = new Set(['openai-compatible', 'anthropic-compatible'])
@@ -1206,6 +1207,7 @@ export default function ProviderDetailPage() {
   const [proxyPools, setProxyPools] = useState([])
   const [showAddModal, setShowAddModal] = useState(false)
   const [showOAuthModal, setShowOAuthModal] = useState(false)
+  const [showBulkImport, setShowBulkImport] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [showEditNodeModal, setShowEditNodeModal] = useState(false)
   const [showBulkProxyModal, setShowBulkProxyModal] = useState(false)
@@ -1625,6 +1627,7 @@ export default function ProviderDetailPage() {
     try {
       const { default: client } = await import('../api/client')
       await client.post('/models/disabled', { providerAlias: providerStorageAlias, ids: [modelId] })
+      setEnabledModelIds((prev) => { const n = new Set(prev); n.delete(modelId); return n })
       await fetchDisabledModels()
     } catch (error) {
       console.log('Error disabling model:', error)
@@ -1635,6 +1638,7 @@ export default function ProviderDetailPage() {
     try {
       const { default: client } = await import('../api/client')
       await client.delete('/models/disabled', { params: { providerAlias: providerStorageAlias, id: modelId } })
+      setEnabledModelIds((prev) => new Set([...prev, modelId]))
       await fetchDisabledModels()
     } catch (error) {
       console.log('Error enabling model:', error)
@@ -1659,6 +1663,7 @@ export default function ProviderDetailPage() {
         try {
           const { default: client } = await import('../api/client')
           await client.post('/models/disabled', { providerAlias: providerStorageAlias, ids })
+          setEnabledModelIds(new Set())
           await fetchDisabledModels()
         } catch (error) {
           console.log('Error disabling all models:', error)
@@ -1671,6 +1676,7 @@ export default function ProviderDetailPage() {
     try {
       const { default: client } = await import('../api/client')
       await client.delete('/models/disabled', { params: { providerAlias: providerStorageAlias } })
+      setEnabledModelIds(new Set(models.map(m => typeof m === 'string' ? m : m.id)))
       await fetchDisabledModels()
     } catch (error) {
       console.log('Error enabling all models:', error)
@@ -2352,15 +2358,22 @@ export default function ProviderDetailPage() {
                   )}
                 </Button>
               ) : (
-                <Button size="sm" onClick={() => {
-                  if (isOAuth) {
-                    setShowOAuthModal(true)
-                  } else {
-                    setAddConnectionError(''); setShowAddModal(true)
-                  }
-                }}>
-                  <Plus size={14} /> {isCompatible ? 'Add API Key' : 'Add Connection'}
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" onClick={() => {
+                    if (isOAuth) {
+                      setShowOAuthModal(true)
+                    } else {
+                      setAddConnectionError(''); setShowAddModal(true)
+                    }
+                  }}>
+                    <Plus size={14} /> {isCompatible ? 'Add API Key' : 'Add Connection'}
+                  </Button>
+                  {info?.supportsBulkImport && (
+                    <Button size="sm" variant="secondary" onClick={() => setShowBulkImport(true)}>
+                      <Upload size={14} className="mr-1" /> Bulk Import
+                    </Button>
+                  )}
+                </div>
               )}
             </div>
           ) : (
@@ -2398,7 +2411,7 @@ export default function ProviderDetailPage() {
                   </div>
                 ))}
               </div>
-              <div className="mt-4 flex justify-stretch sm:justify-start">
+              <div className="mt-4 flex justify-stretch sm:justify-start gap-2">
                 <Button size="sm" onClick={() => {
                   if (isOAuth) {
                     setShowOAuthModal(true)
@@ -2408,6 +2421,11 @@ export default function ProviderDetailPage() {
                 }}>
                   <Plus size={14} /> Add
                 </Button>
+                {info?.supportsBulkImport && (
+                  <Button size="sm" variant="secondary" onClick={() => setShowBulkImport(true)}>
+                    <Upload size={14} className="mr-1" /> Bulk Import
+                  </Button>
+                )}
               </div>
             </>
           )}
@@ -2587,6 +2605,17 @@ export default function ProviderDetailPage() {
         }
         return <OAuthModal isOpen={showOAuthModal} provider={providerId} providerInfo={info} onSuccess={handleSuccess} onClose={handleClose} />
       })()}
+
+      {/* ── Bulk Import Modal ── */}
+      {info?.supportsBulkImport && (
+        <BulkImportModal
+          isOpen={showBulkImport}
+          providerId={providerId}
+          providerName={info?.name || ''}
+          onClose={() => setShowBulkImport(false)}
+          onSuccess={fetchConnections}
+        />
+      )}
 
       {/* ── Confirm Modal ── */}
       <ConfirmModal

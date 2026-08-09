@@ -36,4 +36,12 @@ export const oauthApi = {
   // Codex proxy: stop the proxy server
   stopCodexProxy: () =>
     client.get('/oauth/codex/stop-proxy'),
+
+  // Bulk import account JSON (grok-farm-modular export)
+  bulkImport: (provider, accounts, replace = false) =>
+    client.post(
+      `/oauth/${provider}/bulk-import`,
+      { accounts },
+      { params: { replace } },
+    ),
 }

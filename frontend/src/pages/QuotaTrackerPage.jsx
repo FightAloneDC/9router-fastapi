@@ -435,7 +435,7 @@ function CardMenu({ provider, onToggle, onEdit, onDelete }) {
 
 // --- Provider card (compact, 2-column layout) ---
 
-function ProviderQuotaCard({ provider, onRefresh, isRefreshing, onToggle, onEdit, onDelete }) {
+function ProviderQuotaCard({ provider, onRefresh, isRefreshing, isLoadingUsage, onToggle, onEdit, onDelete }) {
   const hasQuotas = provider.quotas && provider.quotas.length > 0
   const lowCount = getLowCount(provider.quotas)
 
@@ -502,7 +502,12 @@ function ProviderQuotaCard({ provider, onRefresh, isRefreshing, onToggle, onEdit
       </CardHeader>
 
       <CardContent className="px-0 py-0">
-        {hasQuotas ? (
+        {isLoadingUsage ? (
+          <div className="flex items-center justify-center py-6 gap-2">
+            <RefreshCw size={14} className="text-zinc-500 animate-spin" />
+            <p className="text-xs text-zinc-500">Fetching usage…</p>
+          </div>
+        ) : hasQuotas ? (
           <table className="w-full table-fixed text-left">
             <thead>
               <tr className="border-b border-zinc-800/50 text-[9px] text-zinc-600 uppercase tracking-wider">
@@ -522,7 +527,9 @@ function ProviderQuotaCard({ provider, onRefresh, isRefreshing, onToggle, onEdit
         ) : (
           <div className="flex flex-col items-center justify-center py-6 text-center">
             <CloudOff size={18} className="text-zinc-600 mb-2" />
-            <p className="text-xs text-zinc-500">No quota data available</p>
+            <p className="text-xs text-zinc-500">
+              {provider.usage_message || 'No quota data available'}
+            </p>
           </div>
         )}
       </CardContent>
@@ -652,12 +659,72 @@ export default function QuotaTrackerPage() {
   const [expiringFirst, setExpiringFirst] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [refreshingId, setRefreshingId] = useState(null)
+  const [loadingUsage, setLoadingUsage] = useState(new Set())
   const [tabVisible, setTabVisible] = useState(true)
   const [editingProvider, setEditingProvider] = useState(null)
   const [confirmAction, setConfirmAction] = useState(null)
 
   const intervalRef = useRef(null)
   const countdownRef = useRef(null)
+
+  const fetchUsageForConnection = useCallback(
+    async (connId) => {
+      try {
+        const res = await quotaApi.getUsage(connId)
+        const usage = res.data
+        if (!usage) return
+        setProviders((prev) =>
+          prev.map((p) =>
+            p.id === connId
+              ? {
+                  ...p,
+                  quotas: (usage.quotas || []).map((q) => ({
+                    name: q.name,
+                    used: q.used,
+                    total: q.total,
+                    remaining_percentage:
+                      q.remaining_percentage ?? 0,
+                    reset_at: q.reset_at || null,
+                  })),
+                  plan: usage.plan || p.plan,
+                  usage_message: usage.message || null,
+                }
+              : p
+          )
+        )
+      } catch {
+        // Per-connection failure — leave quotas empty
+      } finally {
+        setLoadingUsage((prev) => {
+          const next = new Set(prev)
+          next.delete(connId)
+          return next
+        })
+      }
+    },
+    []
+  )
+
+  const fetchAllUsage = useCallback(
+    async (connections) => {
+      const ids = connections
+        .filter((c) => c.is_active)
+        .map((c) => c.id)
+      if (ids.length === 0) return
+
+      setLoadingUsage(new Set(ids))
+
+      // Fetch in batches of 5 to avoid overwhelming backend
+      const batchSize = 5
+      for (let i = 0; i < ids.length; i += batchSize) {
+        const batch = ids.slice(i, i + batchSize)
+        await Promise.all(
+          batch.map((id) => fetchUsageForConnection(id))
+        )
+      }
+    },
+    [fetchUsageForConnection]
+  )
 
   const fetchData = useCallback(async (useCache = false) => {
     try {
@@ -674,8 +741,16 @@ export default function QuotaTrackerPage() {
       const res = await quotaApi.getQuotaData()
       const data = res.data || []
       setProviders(data)
-      setQuotaCache(data)
       setError(null)
+
+      // Fetch real usage data per connection
+      await fetchAllUsage(data)
+
+      // Cache after usage is populated
+      setProviders((current) => {
+        setQuotaCache(current)
+        return current
+      })
     } catch (err) {
       // If fetch fails but we have cache, use it
       if (useCache) {
@@ -693,7 +768,7 @@ export default function QuotaTrackerPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [fetchAllUsage])
 
   useEffect(() => {
     fetchData(true)
@@ -729,8 +804,9 @@ export default function QuotaTrackerPage() {
 
   const handleRefreshProvider = async (id) => {
     setRefreshingId(id)
+    setLoadingUsage((prev) => new Set(prev).add(id))
     try {
-      await fetchData()
+      await fetchUsageForConnection(id)
     } finally {
       setRefreshingId(null)
     }
@@ -1166,6 +1242,7 @@ export default function QuotaTrackerPage() {
             provider={provider}
             onRefresh={handleRefreshProvider}
             isRefreshing={refreshingId === provider.id}
+            isLoadingUsage={loadingUsage.has(provider.id)}
             onToggle={handleToggleActive}
             onEdit={setEditingProvider}
             onDelete={(p) => setConfirmAction({ type: 'delete', provider: p })}

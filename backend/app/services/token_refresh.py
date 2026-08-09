@@ -152,6 +152,16 @@ async def check_and_refresh_tokens() -> dict:
                 if error_code:
                     data["errorCode"] = str(error_code)
 
+                # invalid_grant = refresh token permanently rejected
+                # (expired/revoked) — retrying is pointless, disable.
+                if "invalid_grant" in str(e).lower():
+                    conn.is_active = False
+                    data["errorCode"] = "invalid_grant"
+                    logger.warning(
+                        "Connection %s (%s): invalid_grant, auto-disabled",
+                        conn.id, conn.provider,
+                    )
+
                 conn.data = json.dumps(data)
                 session.add(conn)
                 failed += 1

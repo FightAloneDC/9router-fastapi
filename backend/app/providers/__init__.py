@@ -116,8 +116,10 @@ PROVIDER_KIRO = "kiro"
 PROVIDER_CURSOR = "cursor"
 PROVIDER_KIMI_CODING = "kimi-coding"
 PROVIDER_KILOCODE = "kilocode"
+PROVIDER_KEELCODE = "keelcode"
 PROVIDER_CLINE = "cline"
 PROVIDER_CODEBUDDY = "codebuddy"
+PROVIDER_GROK_CLI = "grok-cli"
 
 # ── All implemented providers ──────────────────────────────────────────────
 AVAILABLE_PROVIDERS: list[str] = [
@@ -158,6 +160,7 @@ AVAILABLE_PROVIDERS: list[str] = [
     PROVIDER_COMMANDCODE,
     PROVIDER_KILO_GATEWAY,
     PROVIDER_KILOCODE,
+    PROVIDER_KEELCODE,
     PROVIDER_OPENCODE,
     PROVIDER_OPENCODE_GO,
     PROVIDER_MIMO_FREE,
@@ -211,6 +214,7 @@ AVAILABLE_PROVIDERS: list[str] = [
     PROVIDER_CLOUDFLARE_AI,
     PROVIDER_OLLAMA_LOCAL,
     PROVIDER_QODER,
+    PROVIDER_GROK_CLI,
 ]
 
 

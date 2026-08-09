@@ -334,7 +334,6 @@ class ClaudeStreamTranslator:
         return events
 
     def _finish(self) -> list[str]:
-        """Handle [DONE] — emit closing events if not already finished."""
         if self._finished:
             return []
 
@@ -357,3 +356,197 @@ class ClaudeStreamTranslator:
         }))
         self._finished = True
         return events
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Anthropic SSE → OpenAI SSE (reverse, for chat endpoint)
+# ─────────────────────────────────────────────────────────────────────
+
+_STOP_REASON_MAP = {
+    "end_turn": "stop",
+    "max_tokens": "length",
+    "tool_use": "tool_calls",
+    "stop_sequence": "stop",
+}
+
+
+def openai_sse_event(data: dict[str, Any]) -> str:
+    return f"data: {json.dumps(data)}\n\n"
+
+
+class OpenaiStreamTranslator:
+    """Anthropic Messages SSE → OpenAI Chat Completions SSE."""
+
+    def __init__(self, model: str, request_id: str | None = None):
+        self.model = model
+        self.request_id = request_id or (
+            f"chatcmpl-{uuid.uuid4().hex[:29]}"
+        )
+        self._buffer: dict[str, Any] = {}
+        self._finished = False
+
+    def feed(self, raw_line: str) -> list[str]:
+        line = raw_line.strip()
+        if not line or line.startswith(":"):
+            return []
+        if not line.startswith("data: "):
+            return []
+        data_str = line[6:].strip()
+        try:
+            event = json.loads(data_str)
+        except json.JSONDecodeError:
+            return []
+
+        etype = event.get("type", "")
+        results: list[str] = []
+
+        if etype == "content_block_delta":
+            delta = event.get("delta", {})
+            text = delta.get("text", "")
+            if text:
+                chunk = {
+                    "id": self.request_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": self.model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": text},
+                    }],
+                }
+                results.append(openai_sse_event(chunk))
+        elif etype == "message_delta":
+            delta = event.get("delta", {})
+            usage = event.get("usage", {})
+            self._buffer["stop"] = delta.get("stop_reason")
+            self._buffer["usage"] = usage
+        elif etype == "message_stop" and not self._finished:
+            self._finished = True
+            sr = self._buffer.get("stop")
+            usage_data = self._buffer.get("usage", {})
+            pin = usage_data.get("input_tokens", 0)
+            pout = usage_data.get("output_tokens", 0)
+            finish = _STOP_REASON_MAP.get(sr, "stop")
+            chunk = {
+                "id": self.request_id,
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": self.model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": finish,
+                }],
+                "usage": {
+                    "prompt_tokens": pin,
+                    "completion_tokens": pout,
+                    "total_tokens": pin + pout,
+                },
+            }
+            results.append(openai_sse_event(chunk))
+            results.append("data: [DONE]\n\n")
+
+        return results
+
+
+# ─────────────────────────────────────────────────────────────────────
+# OpenAI → Claude request (reverse, FORMAT=claude upstream)
+# ─────────────────────────────────────────────────────────────────────
+
+
+def openai_to_claude_request(body: dict[str, Any]) -> dict[str, Any]:
+    """OpenAI Chat → Anthropic Messages request."""
+    messages: list[dict[str, Any]] = []
+    system_parts: list[str] = []
+
+    for msg in body.get("messages", []):
+        role = msg.get("role")
+        content = msg.get("content", "")
+        if role == "system":
+            system_parts.append(str(content))
+        else:
+            agent_role = (
+                role if role in ("user", "assistant")
+                else "user"
+            )
+            # Anthropic/Keelcode require content as content blocks
+            if isinstance(content, str):
+                content = [{"type": "text", "text": content}]
+            messages.append({
+                "role": agent_role,
+                "content": content,
+            })
+
+    out: dict[str, Any] = {
+        "model": body.get("model", ""),
+        "max_tokens": body.get("max_tokens", 4096),
+        "messages": messages,
+        # Keelcode + many Anthropic APIs are streaming-only.
+        # Always stream; non-stream callers get response translated back.
+        "stream": True,
+    }
+    if system_parts:
+        system_text = "\n".join(system_parts)
+        out["system"] = [
+            {"type": "text", "text": system_text}
+        ]
+    if "temperature" in body:
+        out["temperature"] = body["temperature"]
+    if "top_p" in body:
+        out["top_p"] = body["top_p"]
+    if "stop" in body:
+        out["stop_sequences"] = body["stop"]
+
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Claude → OpenAI response (reverse, FORMAT=claude upstream)
+# ─────────────────────────────────────────────────────────────────────
+
+
+def claude_to_openai_response(
+    data: dict[str, Any],
+    *,
+    model: str,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Anthropic Messages response → OpenAI Chat Completions."""
+    content_blocks = data.get("content", [])
+    text_parts: list[str] = []
+    for block in content_blocks:
+        if isinstance(block, dict) and block.get(
+            "type"
+        ) == "text":
+            text_parts.append(block.get("text", ""))
+        elif isinstance(block, str):
+            text_parts.append(block)
+
+    usage = data.get("usage", {})
+    stop_reason = data.get("stop_reason", "end_turn")
+    pin = usage.get("input_tokens", 0)
+    pout = usage.get("output_tokens", 0)
+
+    return {
+        "id": request_id or (
+            f"chatcmpl-{uuid.uuid4().hex[:29]}"
+        ),
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "".join(text_parts),
+            },
+            "finish_reason": _STOP_REASON_MAP.get(
+                stop_reason, "stop"
+            ),
+        }],
+        "usage": {
+            "prompt_tokens": pin,
+            "completion_tokens": pout,
+            "total_tokens": pin + pout,
+        },
+    }

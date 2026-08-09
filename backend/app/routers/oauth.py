@@ -9,13 +9,16 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.provider import ProviderConnection
+from app.providers import PROVIDER_GROK_CLI
 from app.providers.codex.proxy import CodexProxy
+from app.providers.grok_cli.bulk import is_expired, parse_farm_entry
 from app.providers.cursor.oauth import CursorImportRequest
 from app.providers.gitlab.oauth import GitLabPATRequest
 from app.providers.kiro.oauth import KiroImportRequest, KiroSocialExchangeRequest
@@ -169,6 +172,17 @@ async def _save_connection(
     db.add(conn)
     await db.flush()
     return conn
+
+
+def _apply_absolute_expiry(
+    conn: ProviderConnection, expires_at: Optional[str],
+) -> None:
+    """Override the expiresIn-derived expiry with an absolute one."""
+    if not expires_at:
+        return
+    blob = json.loads(conn.data or "{}")
+    blob["expiresAt"] = expires_at
+    conn.data = json.dumps(blob)
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -577,3 +591,114 @@ async def qoder_pat_import(
     except Exception as e:
         logger.exception("Qoder PAT import error")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Grok CLI Bulk Import (grok-farm-modular export) ─────────────────────
+
+
+@router.post("/grok-cli/bulk-import")
+async def grok_cli_bulk_import(
+    request: Request,
+    replace: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """Bulk import grok-farm-modular account exports.
+
+    Body accepts an array, a single object, or ``{"accounts": [...]}``.
+    Each entry needs ``email`` + ``tokens.access_token`` (farm format).
+    Entries with an expired ``tokens.expires_at`` are skipped. Existing
+    emails are upserted when ``replace=true``, otherwise skipped.
+    Tokens are never echoed back in the response.
+    """
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid JSON body: {e}",
+        )
+
+    if isinstance(body, list):
+        accounts = body
+    elif isinstance(body, dict) and isinstance(body.get("accounts"), list):
+        accounts = body["accounts"]
+    elif isinstance(body, dict):
+        accounts = [body]
+    else:
+        accounts = None
+
+    if not accounts:
+        raise HTTPException(status_code=400, detail="No accounts provided")
+
+    counts = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+    results: list[dict] = []
+
+    # Serial loop — connection creation touches shared state (priority);
+    # parallel calls would race (mirrors the Node.js reference).
+    for i, raw in enumerate(accounts):
+        try:
+            parsed = parse_farm_entry(raw)
+        except ValueError as e:
+            results.append({
+                "index": i, "status": "failed", "error": str(e),
+            })
+            counts["failed"] += 1
+            continue
+
+        email = parsed["email"]
+        if is_expired(parsed["expires_at"]):
+            results.append({
+                "index": i, "email": email, "status": "skipped_expired",
+            })
+            counts["skipped"] += 1
+            continue
+
+        existing = (await db.execute(
+            select(ProviderConnection).where(
+                ProviderConnection.provider == PROVIDER_GROK_CLI,
+                func.lower(ProviderConnection.email) == email,
+            )
+        )).scalar_one_or_none()
+
+        if existing and not replace:
+            results.append({
+                "index": i, "email": email, "status": "skipped_duplicate",
+            })
+            counts["skipped"] += 1
+            continue
+
+        if existing:
+            _update_bulk_connection(existing, parsed)
+            status = "updated"
+        else:
+            conn = await _save_connection(
+                db, PROVIDER_GROK_CLI, parsed["token_data"],
+            )
+            _apply_absolute_expiry(conn, parsed["expires_at"])
+            status = "created"
+
+        results.append({"index": i, "email": email, "status": status})
+        counts[status] += 1
+
+    await db.commit()
+    return {**counts, "results": results}
+
+
+def _update_bulk_connection(conn: ProviderConnection, parsed: dict) -> None:
+    """Replace credentials on an existing connection (upsert path)."""
+    token_data = parsed["token_data"]
+    blob = json.loads(conn.data or "{}")
+    blob["accessToken"] = token_data["accessToken"]
+    if token_data.get("refreshToken"):
+        blob["refreshToken"] = token_data["refreshToken"]
+    id_token = (token_data.get("providerSpecificData") or {}).get("idToken")
+    if id_token:
+        blob["idToken"] = id_token
+    if token_data.get("scope"):
+        blob["scope"] = token_data["scope"]
+    if parsed["expires_at"]:
+        blob["expiresAt"] = parsed["expires_at"]
+    blob["testStatus"] = "active"
+    conn.data = json.dumps(blob)
+    # Email doubles as the display name for farm accounts
+    conn.name = parsed["email"]
+    conn.email = parsed["email"]

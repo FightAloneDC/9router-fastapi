@@ -304,13 +304,47 @@ async def test_model(
     start = time.time()
 
     try:
-        # Check if provider needs custom request encoding (e.g. Qoder WAF-bypass + COSY)
+        # ── FORMAT=claude upstream: translate + handle streaming-only ──
+        is_claude_upstream: bool = False
+        is_responses_upstream: bool = False
+        try:
+            from app.providers.provider import Provider
+            pp = Provider(target.provider)
+            cc = pp.config()
+            is_claude_upstream = cc.FORMAT == "claude"
+            is_responses_upstream = cc.FORMAT == "openai-responses"
+        except (ValueError, ModuleNotFoundError):
+            pass
+
+        # Check if provider needs custom request encoding
         test_body = {
             "model": target.model,
             "max_tokens": 1,
             "stream": False,
             "messages": [{"role": "user", "content": "hi"}],
         }
+
+        if is_claude_upstream:
+            from app.services.message_translator import (
+                openai_to_claude_request,
+                OpenaiStreamTranslator,
+            )
+            # Use 16 tokens — models often 503 on max_tokens=1
+            test_body = openai_to_claude_request({
+                **test_body, "max_tokens": 16,
+            })
+            # Anthropic APIs are streaming-only
+            raw_text, ok, status_code = await _test_claude_stream(
+                target, test_body, start,
+            )
+            latency_ms = int((time.time() - start) * 1000)
+            return {
+                "ok": ok,
+                "latencyMs": latency_ms,
+                "error": None if ok else raw_text[:240],
+                "status": status_code,
+            }
+
         raw_body: bytes | None = None
         send_headers = headers
 
@@ -373,12 +407,19 @@ async def test_model(
                         line_buf += raw_chunk
                         while "\n" in line_buf:
                             line, line_buf = line_buf.split("\n", 1)
-                            unwrapped = _unwrap_qoder_sse_line(line)
-                            if not unwrapped:
-                                continue
-                            if unwrapped == "data: [DONE]":
-                                break
-                            payload = unwrapped[5:].strip()
+                            if is_responses_upstream:
+                                # Responses API SSE: plain data: events
+                                stripped = line.strip()
+                                if not stripped.startswith("data:"):
+                                    continue
+                                payload = stripped[5:].strip()
+                            else:
+                                unwrapped = _unwrap_qoder_sse_line(line)
+                                if not unwrapped:
+                                    continue
+                                if unwrapped == "data: [DONE]":
+                                    break
+                                payload = unwrapped[5:].strip()
                             if not payload:
                                 continue
                             try:
@@ -389,6 +430,21 @@ async def test_model(
                                 err = chunk_data["error"]
                                 provider_error = err.get("message", str(err)) if isinstance(err, dict) else str(err)
                                 break
+                            evt_type = chunk_data.get("type") or ""
+                            if evt_type in ("error", "response.failed"):
+                                err = chunk_data.get("error") or (
+                                    chunk_data.get("response") or {}
+                                ).get("error") or {}
+                                provider_error = (
+                                    err.get("message", str(err))
+                                    if isinstance(err, dict) else str(err)
+                                )
+                                break
+                            if evt_type in (
+                                "response.completed",
+                                "response.output_text.delta",
+                            ):
+                                provider_ok = True
                             choices = chunk_data.get("choices", [])
                             if choices:
                                 provider_ok = True
@@ -456,3 +512,62 @@ async def test_model(
         return {"ok": False, "error": f"Cannot connect to {target.provider} at {url}. Check the base URL and network connectivity.", "latencyMs": 0}
     except Exception as e:
         return {"ok": False, "error": str(e)[:240], "latencyMs": 0}
+
+
+async def _test_claude_stream(
+    target, body: dict, start: float,
+) -> tuple[str, bool, int]:
+    """Ping a FORMAT=claude upstream (streaming-only).
+
+    Reads the SSE stream. Returns (error_text, ok, status_code).
+    """
+    import httpx
+    from app.services.message_translator import OpenaiStreamTranslator
+
+    translator = OpenaiStreamTranslator(
+        model=body.get("model", ""),
+    )
+    ok = False
+    status_code = 0
+    error_text = ""
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        async with client.stream(
+            "POST",
+            target.url,
+            json=body,
+            headers=target.headers,
+        ) as resp:
+            status_code = resp.status_code
+            if resp.status_code >= 400:
+                err_body = b""
+                async for chunk in resp.aiter_bytes():
+                    err_body += chunk
+                    if len(err_body) > 2000:
+                        break
+                return err_body.decode(
+                    errors="replace"
+                )[:240], False, status_code
+
+            buf = b""
+            async for chunk in resp.aiter_bytes():
+                buf += chunk
+                while b"\n" in buf:
+                    lb, buf = buf.split(b"\n", 1)
+                    try:
+                        ln = lb.decode("utf-8", errors="ignore")
+                    except Exception:
+                        continue
+                    for ev in translator.feed(ln):
+                        if ev.startswith("data: [DONE]"):
+                            continue
+                        if ev.startswith("data: {"):
+                            try:
+                                import json as _j
+                                p = _j.loads(ev[6:].strip())
+                                if p.get("choices", []):
+                                    ok = True
+                            except Exception:
+                                pass
+
+    return error_text, ok or status_code < 400, status_code

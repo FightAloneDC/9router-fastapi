@@ -6,7 +6,7 @@ import uuid
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -24,6 +24,10 @@ from app.services.active_requests import track_request_start, track_request_end
 from app.models.provider import ProviderConnection
 from sqlalchemy import select
 
+from app.services.message_translator import (
+    openai_to_claude_request,
+    OpenaiStreamTranslator,
+)
 from .shared import _stream_response, _non_stream_response, _should_fallback_on_error, _build_provider_request
 
 router = APIRouter()
@@ -81,6 +85,21 @@ async def chat_completions(
         forward_body: dict = {**body, "model": target.model}
         raw_body: bytes | None = None
 
+        # ── FORMAT=claude / openai-responses: translated upstreams ──
+        is_claude_upstream: bool = False
+        is_responses_upstream: bool = False
+        try:
+            from app.providers.provider import Provider
+            p = Provider(target.provider)
+            c = p.config()
+            is_claude_upstream = c.FORMAT == "claude"
+            is_responses_upstream = c.FORMAT == "openai-responses"
+        except (ValueError, ModuleNotFoundError):
+            pass
+
+        if is_claude_upstream:
+            forward_body = openai_to_claude_request(forward_body)
+
         # ── Provider-specific request transform (e.g. Qoder WAF-bypass + COSY) ──
         if target.connection_id:
             conn_result = await db.execute(
@@ -108,17 +127,50 @@ async def chat_completions(
             request_start_time: float = time.time()
             active_request_id: str = track_request_start(target.provider, target.model)
             if stream:
-                resp = await _stream_response(
-                    target, forward_body, request_id,
-                    db=db, provider=target.provider, model=target.model,
-                    connection_id=target.connection_id,
-                    request_body=body, request_start_time=request_start_time,
-                    raw_body=raw_body,
-                )
+                if is_claude_upstream:
+                    resp = await _stream_claude_response(
+                        target, forward_body, request_id,
+                        db=db, provider=target.provider,
+                        model=target.model,
+                        connection_id=target.connection_id,
+                        request_body=body,
+                        request_start_time=request_start_time,
+                    )
+                elif is_responses_upstream:
+                    resp = await _stream_grok_responses(
+                        target, forward_body, request_id,
+                        db=db, provider=target.provider,
+                        model=target.model,
+                        connection_id=target.connection_id,
+                        request_body=body,
+                        request_start_time=request_start_time,
+                        raw_body=raw_body,
+                    )
+                else:
+                    resp = await _stream_response(
+                        target, forward_body, request_id,
+                        db=db, provider=target.provider,
+                        model=target.model,
+                        connection_id=target.connection_id,
+                        request_body=body,
+                        request_start_time=request_start_time,
+                        raw_body=raw_body,
+                    )
             else:
-                resp, resp_data = await _non_stream_response(
-                    target, forward_body, request_id, raw_body=raw_body,
-                )
+                if is_claude_upstream:
+                    resp, resp_data = await _non_stream_claude(
+                        target, forward_body, request_id,
+                    )
+                elif is_responses_upstream:
+                    resp, resp_data = await _non_stream_grok_responses(
+                        target, forward_body, request_id,
+                        raw_body=raw_body,
+                    )
+                else:
+                    resp, resp_data = await _non_stream_response(
+                        target, forward_body, request_id,
+                        raw_body=raw_body,
+                    )
             total_latency_ms: int = int((time.time() - request_start_time) * 1000)
 
             # Success — clear cooldown for this connection
@@ -168,6 +220,11 @@ async def chat_completions(
                     status_code=e.response.status_code,
                     content={"error": {"message": last_error_detail}},
                 )
+            # 503: transient upstream — exclude this conn, no cooldown
+            if e.response.status_code == 503:
+                if target.connection_id:
+                    exclude_ids.add(target.connection_id)
+                continue
             # Cooldown + exclude
             if target.connection_id:
                 # Read current backoff level from connection data
@@ -209,4 +266,420 @@ async def chat_completions(
     return JSONResponse(
         status_code=last_error_status,
         content={"error": {"message": error_msg}},
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Claude-format upstream helpers (Anthropic ↔ OpenAI translation)
+# ─────────────────────────────────────────────────────────────────────
+
+
+async def _non_stream_claude(
+    target,
+    body: dict,
+    request_id: str,
+) -> tuple[JSONResponse, dict]:
+    """Non-streaming call to FORMAT=claude upstream.
+
+    Many Anthropic APIs are streaming-only, so we stream internally,
+    collect text deltas, and return a single OpenAI JSON response.
+    """
+    from app.services.message_translator import (
+        OpenaiStreamTranslator,
+    )
+
+    translator = OpenaiStreamTranslator(
+        model=body.get("model", ""),
+        request_id=request_id,
+    )
+    content_parts: list[str] = []
+    usage_data: dict = {}
+    finish_reason: str = "stop"
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        async with client.stream(
+            "POST",
+            target.url,
+            json=body,
+            headers=target.headers,
+        ) as resp:
+            if resp.status_code >= 400:
+                err = (await resp.aread()).decode(
+                    "utf-8", errors="ignore"
+                )
+                raise httpx.HTTPStatusError(
+                    f"HTTP {resp.status_code}",
+                    request=resp,
+                    response=resp,
+                )
+            buf = b""
+            async for chunk in resp.aiter_bytes():
+                buf += chunk
+                while b"\n" in buf:
+                    lb, buf = buf.split(b"\n", 1)
+                    try:
+                        ln = lb.decode("utf-8", errors="ignore")
+                    except Exception:
+                        continue
+                    for ev in translator.feed(ln):
+                        if ev.startswith("data: [DONE]"):
+                            continue
+                        if ev.startswith("data: {"):
+                            try:
+                                p = json.loads(ev[6:].strip())
+                                choices = p.get("choices", [])
+                                for c in choices:
+                                    d = c.get("delta", {})
+                                    if d.get("content"):
+                                        content_parts.append(
+                                            d["content"]
+                                        )
+                                    if c.get("finish_reason"):
+                                        finish_reason = (
+                                            c["finish_reason"]
+                                        )
+                                if p.get("usage"):
+                                    usage_data = p["usage"]
+                            except Exception:
+                                pass
+    pin = usage_data.get("prompt_tokens", 0)
+    pout = usage_data.get("completion_tokens", 0)
+
+    translated = {
+        "id": request_id,
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": body.get("model", ""),
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "".join(content_parts),
+            },
+            "finish_reason": finish_reason,
+        }],
+        "usage": {
+            "prompt_tokens": pin,
+            "completion_tokens": pout,
+            "total_tokens": pin + pout,
+        },
+    }
+    return JSONResponse(
+        status_code=200,
+        content=translated,
+        headers={"X-Request-Id": request_id},
+    ), translated
+
+
+async def _stream_claude_response(
+    target,
+    body: dict,
+    request_id: str,
+    db=None,
+    provider: str = "",
+    model: str = "",
+    connection_id: str | None = None,
+    request_body: dict | None = None,
+    request_start_time: float | None = None,
+) -> StreamingResponse:
+    """Streaming call to FORMAT=claude upstream.
+
+    No pre-flight. Translates Anthropic SSE → OpenAI SSE.
+    503 errors are NOT rate-limited (transient upstream issue).
+    """
+    from fastapi.responses import StreamingResponse
+
+    translator = OpenaiStreamTranslator(
+        model=body.get("model", ""),
+        request_id=request_id,
+    )
+    send_kwargs: dict = {
+        "headers": target.headers,
+        "json": body,
+    }
+
+    async def generate():
+        usage: dict = {}
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            try:
+                async with client.stream(
+                    "POST",
+                    target.url,
+                    **send_kwargs,
+                ) as resp:
+                    if resp.status_code >= 400:
+                        err = await resp.aread()
+                        raise httpx.HTTPStatusError(
+                            f"HTTP {resp.status_code}",
+                            request=resp,
+                            response=resp,
+                        )
+                    buffer = b""
+                    async for chunk in resp.aiter_bytes():
+                        buffer += chunk
+                        while b"\n" in buffer:
+                            line_bytes, buffer = buffer.split(
+                                b"\n", 1
+                            )
+                            try:
+                                line = line_bytes.decode(
+                                    "utf-8", errors="ignore"
+                                )
+                            except Exception:
+                                continue
+                            for ev in translator.feed(line):
+                                yield ev.encode()
+                                try:
+                                    if ev.strip(
+                                    ).startswith("data:"):
+                                        d = json.loads(
+                                            ev[6:].strip()
+                                        )
+                                        if d.get("usage"):
+                                            usage = d["usage"]
+                                except Exception:
+                                    pass
+                    if buffer:
+                        try:
+                            line = buffer.decode(
+                                "utf-8", errors="ignore"
+                            )
+                        except Exception:
+                            line = ""
+                        for ev in translator.feed(line):
+                            yield ev.encode()
+            except httpx.HTTPStatusError:
+                raise
+            except Exception:
+                raise
+
+        if db and provider and model:
+            from app.services.usage_tracking import (
+                save_request_tracking,
+            )
+            await save_request_tracking(
+                db,
+                provider=provider,
+                model=model,
+                connection_id=connection_id,
+                endpoint="/v1/chat/completions",
+                prompt_tokens=usage.get(
+                    "prompt_tokens", 0
+                ),
+                completion_tokens=usage.get(
+                    "completion_tokens", 0
+                ),
+                tokens_json=usage,
+                latency_ttft=int(
+                    (time.time() - (request_start_time or 0))
+                    * 1000
+                ),
+                latency_total=int(
+                    (time.time() - (request_start_time or 0))
+                    * 1000
+                ),
+                request_body=request_body or body,
+                provider_request_body=body,
+                provider_response_body=usage,
+                response_body=usage,
+            )
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Request-Id": request_id,
+        },
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Responses-API-format upstream helpers (Grok CLI / Grok Build)
+# ─────────────────────────────────────────────────────────────────────
+
+
+async def _non_stream_grok_responses(
+    target,
+    body: dict,
+    request_id: str,
+    raw_body: bytes | None = None,
+) -> tuple[JSONResponse, dict]:
+    """Non-streaming call to FORMAT=openai-responses upstream.
+
+    The upstream forces streaming (stream=true), so the SSE is consumed
+    internally and the response.completed object is converted to a
+    single Chat Completions JSON response.
+    """
+    from app.providers.grok_cli.transform import (
+        responses_to_openai_response,
+    )
+
+    send_kwargs: dict = {"headers": target.headers}
+    if raw_body is not None:
+        send_kwargs["content"] = raw_body
+    else:
+        send_kwargs["json"] = body
+
+    completed_response: dict = {}
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        async with client.stream(
+            "POST", target.url, **send_kwargs,
+        ) as resp:
+            if resp.status_code >= 400:
+                await resp.aread()
+                raise httpx.HTTPStatusError(
+                    f"HTTP {resp.status_code}",
+                    request=resp,
+                    response=resp,
+                )
+            buffer = b""
+            async for chunk in resp.aiter_bytes():
+                buffer += chunk
+                while b"\n" in buffer:
+                    line_bytes, buffer = buffer.split(b"\n", 1)
+                    line = line_bytes.decode("utf-8", errors="ignore")
+                    data_str = line.strip()
+                    if not data_str.startswith("data:"):
+                        continue
+                    payload = data_str[5:].strip()
+                    if not payload or payload == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(event, dict) and (
+                        event.get("type") == "response.completed"
+                    ):
+                        completed_response = event.get("response") or {}
+
+    if completed_response:
+        translated = responses_to_openai_response(
+            completed_response, body.get("model", ""),
+        )
+    else:
+        translated = {
+            "id": request_id,
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": body.get("model", ""),
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": ""},
+                "finish_reason": "stop",
+            }],
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
+    return JSONResponse(
+        status_code=200,
+        content=translated,
+        headers={"X-Request-Id": request_id},
+    ), translated
+
+
+async def _stream_grok_responses(
+    target,
+    body: dict,
+    request_id: str,
+    db=None,
+    provider: str = "",
+    model: str = "",
+    connection_id: str | None = None,
+    request_body: dict | None = None,
+    request_start_time: float | None = None,
+    raw_body: bytes | None = None,
+) -> StreamingResponse:
+    """Streaming call to FORMAT=openai-responses upstream.
+
+    No pre-flight (upstream is stream-only). Translates Responses API
+    SSE -> OpenAI Chat Completions SSE via ResponsesUpstreamTranslator.
+    """
+    from app.providers.grok_cli.stream import ResponsesUpstreamTranslator
+
+    translator = ResponsesUpstreamTranslator(
+        model=body.get("model", ""),
+        request_id=f"chatcmpl-{request_id}",
+    )
+    send_kwargs: dict = {"headers": target.headers}
+    if raw_body is not None:
+        send_kwargs["content"] = raw_body
+    else:
+        send_kwargs["json"] = body
+
+    async def generate():  # type: ignore[no-untyped-def]
+        usage: dict = {}
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            async with client.stream(
+                "POST", target.url, **send_kwargs,
+            ) as resp:
+                if resp.status_code >= 400:
+                    await resp.aread()
+                    raise httpx.HTTPStatusError(
+                        f"HTTP {resp.status_code}",
+                        request=resp,
+                        response=resp,
+                    )
+                buffer = b""
+                async for chunk in resp.aiter_bytes():
+                    buffer += chunk
+                    while b"\n" in buffer:
+                        line_bytes, buffer = buffer.split(b"\n", 1)
+                        line = line_bytes.decode(
+                            "utf-8", errors="ignore",
+                        )
+                        for ev in translator.feed(line):
+                            yield ev.encode()
+                            try:
+                                if ev.startswith("data: {"):
+                                    parsed = json.loads(
+                                        ev[6:].strip(),
+                                    )
+                                    if parsed.get("usage"):
+                                        usage = parsed["usage"]
+                            except (json.JSONDecodeError, ValueError):
+                                pass
+                if buffer:
+                    line = buffer.decode("utf-8", errors="ignore")
+                    for ev in translator.feed(line):
+                        yield ev.encode()
+
+        if db and provider and model:
+            from app.services.usage_tracking import (
+                save_request_tracking,
+            )
+            await save_request_tracking(
+                db,
+                provider=provider,
+                model=model,
+                connection_id=connection_id,
+                endpoint="/v1/chat/completions",
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0),
+                tokens_json=usage,
+                latency_ttft=int(
+                    (time.time() - (request_start_time or 0)) * 1000
+                ),
+                latency_total=int(
+                    (time.time() - (request_start_time or 0)) * 1000
+                ),
+                request_body=request_body or body,
+                provider_request_body=body,
+                provider_response_body=usage,
+                response_body=usage,
+            )
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Request-Id": request_id,
+        },
     )

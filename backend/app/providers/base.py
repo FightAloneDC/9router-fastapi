@@ -52,6 +52,7 @@ class BaseProviderConfig(BaseModel):
     MEDIA_PRIORITY: int = 100
     MODELS_FETCHER: dict | None = None
     SUPPORTS_PAT: bool = False
+    SUPPORTS_BULK_IMPORT: bool = False
     REQUIRES_PROXY: bool = False
     CUSTOM_MODAL: str = ""  # frontend modal component name (e.g. "kiro", "cursor", "gitlab")
     PROVIDER_SPECIFIC_DATA: bool = False  # needs extra form fields in AddKeyModal

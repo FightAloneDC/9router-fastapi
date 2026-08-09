@@ -160,6 +160,7 @@ def _build_provider_entry(
         "mediaPriority": config.MEDIA_PRIORITY,
         "modelsFetcher": config.MODELS_FETCHER,
         "supportsPAT": config.SUPPORTS_PAT,
+        "supportsBulkImport": config.SUPPORTS_BULK_IMPORT,
         "requiresProxy": config.REQUIRES_PROXY,
         "customModal": config.CUSTOM_MODAL or None,
     }
