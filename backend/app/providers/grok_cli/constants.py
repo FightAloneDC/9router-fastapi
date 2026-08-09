@@ -22,6 +22,14 @@ GROK_CLI_OAUTH_USER_AGENT = (
 )
 GROK_CLI_TOKEN_AUTH = "xai-grok-cli"
 
+# ── Usage / billing endpoints (quota tracker) ────────────────────────────
+GROK_CLI_BILLING_URL = (
+    f"{GROK_CLI_BASE_URL}/billing?format=credits"
+)
+GROK_CLI_USER_URL = (
+    f"{GROK_CLI_BASE_URL}/user?include=subscription"
+)
+
 # ── OAuth device code (public client, auth.x.ai) ─────────────────────────
 GROK_CLI_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
 GROK_CLI_DEVICE_CODE_URL = "https://auth.x.ai/oauth2/device/code"

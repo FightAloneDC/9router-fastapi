@@ -19,6 +19,7 @@ from app.services.proxy import (
     calculate_cooldown,
     mark_connection_unavailable,
 )
+from app.services.quota import observe_upstream_response
 from app.services.usage_tracking import save_request_tracking
 from app.services.active_requests import track_request_start, track_request_end
 from app.models.provider import ProviderConnection
@@ -164,7 +165,7 @@ async def chat_completions(
                 elif is_responses_upstream:
                     resp, resp_data = await _non_stream_grok_responses(
                         target, forward_body, request_id,
-                        raw_body=raw_body,
+                        raw_body=raw_body, db=db,
                     )
                 else:
                     resp, resp_data = await _non_stream_response(
@@ -241,6 +242,8 @@ async def chat_completions(
                 )
                 await mark_connection_unavailable(
                     db, target.connection_id, cooldown_ms, model, new_level,
+                    status_code=e.response.status_code,
+                    error_detail=last_error_detail,
                 )
                 exclude_ids.add(target.connection_id)
             continue
@@ -505,6 +508,7 @@ async def _non_stream_grok_responses(
     body: dict,
     request_id: str,
     raw_body: bytes | None = None,
+    db=None,
 ) -> tuple[JSONResponse, dict]:
     """Non-streaming call to FORMAT=openai-responses upstream.
 
@@ -534,6 +538,11 @@ async def _non_stream_grok_responses(
                     request=resp,
                     response=resp,
                 )
+            # PS hook: snapshot upstream rate-limit headers
+            await observe_upstream_response(
+                db, target.provider,
+                target.connection_id, resp.headers,
+            )
             buffer = b""
             async for chunk in resp.aiter_bytes():
                 buffer += chunk
@@ -597,8 +606,11 @@ async def _stream_grok_responses(
 ) -> StreamingResponse:
     """Streaming call to FORMAT=openai-responses upstream.
 
-    No pre-flight (upstream is stream-only). Translates Responses API
-    SSE -> OpenAI Chat Completions SSE via ResponsesUpstreamTranslator.
+    The upstream request is opened before the StreamingResponse is
+    returned, so pre-stream errors (429 quota exhausted, 401, ...)
+    raise into the caller's fallback loop instead of delivering an
+    empty SSE stream to the client. Translates Responses API SSE ->
+    OpenAI Chat Completions SSE via ResponsesUpstreamTranslator.
     """
     from app.providers.grok_cli.stream import ResponsesUpstreamTranslator
 
@@ -612,42 +624,56 @@ async def _stream_grok_responses(
     else:
         send_kwargs["json"] = body
 
+    client = httpx.AsyncClient(timeout=300.0)
+    upstream_req = client.build_request(
+        "POST", target.url, **send_kwargs,
+    )
+    resp = await client.send(upstream_req, stream=True)
+    if resp.status_code >= 400:
+        err_text = (await resp.aread()).decode(
+            "utf-8", errors="ignore",
+        )
+        await resp.aclose()
+        await client.aclose()
+        raise httpx.HTTPStatusError(
+            f"HTTP {resp.status_code}: {err_text[:300]}",
+            request=upstream_req,
+            response=resp,
+        )
+    # PS hook: snapshot upstream rate-limit headers
+    await observe_upstream_response(
+        db, target.provider, target.connection_id, resp.headers,
+    )
+
     async def generate():  # type: ignore[no-untyped-def]
         usage: dict = {}
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            async with client.stream(
-                "POST", target.url, **send_kwargs,
-            ) as resp:
-                if resp.status_code >= 400:
-                    await resp.aread()
-                    raise httpx.HTTPStatusError(
-                        f"HTTP {resp.status_code}",
-                        request=resp,
-                        response=resp,
+        try:
+            buffer = b""
+            async for chunk in resp.aiter_bytes():
+                buffer += chunk
+                while b"\n" in buffer:
+                    line_bytes, buffer = buffer.split(b"\n", 1)
+                    line = line_bytes.decode(
+                        "utf-8", errors="ignore",
                     )
-                buffer = b""
-                async for chunk in resp.aiter_bytes():
-                    buffer += chunk
-                    while b"\n" in buffer:
-                        line_bytes, buffer = buffer.split(b"\n", 1)
-                        line = line_bytes.decode(
-                            "utf-8", errors="ignore",
-                        )
-                        for ev in translator.feed(line):
-                            yield ev.encode()
-                            try:
-                                if ev.startswith("data: {"):
-                                    parsed = json.loads(
-                                        ev[6:].strip(),
-                                    )
-                                    if parsed.get("usage"):
-                                        usage = parsed["usage"]
-                            except (json.JSONDecodeError, ValueError):
-                                pass
-                if buffer:
-                    line = buffer.decode("utf-8", errors="ignore")
                     for ev in translator.feed(line):
                         yield ev.encode()
+                        try:
+                            if ev.startswith("data: {"):
+                                parsed = json.loads(
+                                    ev[6:].strip(),
+                                )
+                                if parsed.get("usage"):
+                                    usage = parsed["usage"]
+                        except (json.JSONDecodeError, ValueError):
+                            pass
+            if buffer:
+                line = buffer.decode("utf-8", errors="ignore")
+                for ev in translator.feed(line):
+                    yield ev.encode()
+        finally:
+            await resp.aclose()
+            await client.aclose()
 
         if db and provider and model:
             from app.services.usage_tracking import (

@@ -73,6 +73,33 @@ def get_usage_handler(
     return _HANDLERS.get(provider_id)
 
 
+async def observe_upstream_response(
+    db,
+    provider_id: str,
+    connection_id: str | None,
+    headers,
+) -> None:
+    """Dispatch upstream response headers to the provider's
+    usage handler (PS hook). No-op without a handler or
+    connection. Fail-open: errors are logged only — quota
+    observation must never break a proxied request.
+    """
+    if not connection_id:
+        return
+    handler = _HANDLERS.get(provider_id)
+    if handler is None:
+        return
+    try:
+        await handler.observe_response(
+            db, connection_id, headers,
+        )
+    except Exception as e:
+        logger.warning(
+            "Usage observer failed for %s (%s): %s",
+            provider_id, connection_id, e,
+        )
+
+
 def supported_providers() -> list[str]:
     """Return list of provider IDs with usage handlers."""
     return list(_HANDLERS.keys())
@@ -83,5 +110,6 @@ __all__ = [
     "QuotaItem",
     "UsageResponse",
     "get_usage_handler",
+    "observe_upstream_response",
     "supported_providers",
 ]

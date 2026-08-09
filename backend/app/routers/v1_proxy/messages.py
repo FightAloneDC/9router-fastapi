@@ -236,6 +236,8 @@ async def messages_endpoint(
                 )
                 await mark_connection_unavailable(
                     db, target.connection_id, cooldown_ms, model_str, new_level,
+                    status_code=e.response.status_code,
+                    error_detail=last_error_detail,
                 )
                 exclude_ids.add(target.connection_id)
             continue

@@ -74,6 +74,15 @@ idiom as `services/catalog.py`.
 3. Done — the registry picks it up; `GET /quota` and the UI
    dropdown include it automatically. No global file edits.
 
+Optional hooks:
+
+- `USES_UPSTREAM = False` — handler derives usage from local
+  state; the router skips quota_cache for it.
+- `observe_response(db, connection_id, headers)` — called by
+  the proxy on every successful upstream response (dispatched
+  via `observe_upstream_response()`), for providers that expose
+  quota signals in response headers.
+
 ## Endpoints
 
 ### `GET /quota`
@@ -196,6 +205,61 @@ Headers: x-amz-user-agent: aws-sdk-js/1.0.0 KiroIDE
 Response: subscriptionInfo + usageBreakdownList[] with
   resourceType, currentUsageWithPrecision,
   usageLimitWithPrecision, nextDateReset.
+```
+
+### Grok CLI (Grok Build) — local-state handler
+```
+No upstream polling (USES_UPSTREAM=False). xAI exposes no
+balance API for free-tier accounts, so quota data is assembled
+from signals piggybacked on real traffic:
+
+1. Local token accumulation (the "used" counter). Sum of
+   today's (UTC) prompt+completion tokens from usage_history
+   (written by the proxy per request). This is the only usage
+   signal that moves: the upstream X-Ratelimit-Remaining-*
+   headers arrive static (always full) and are not trusted for
+   usage. The "Daily free (grok-4.5)" bar advances with every
+   proxied chat.
+
+2. Rate-limit headers (limit discovery). Every successful chat
+   response from cli-chat-proxy carries:
+       X-Ratelimit-Limit-Tokens / X-Ratelimit-Remaining-Tokens
+       X-Ratelimit-Limit-Requests / X-Ratelimit-Remaining-Requests
+   The proxy dispatches response headers through the PS hook
+   observe_upstream_response() → GrokCliUsageHandler
+   .observe_response(), which snapshots them into quota_cache
+   (one row per connection, valid for the UTC day). fetch()
+   uses the snapshot only for the account's token LIMIT and the
+   "Requests" bar.
+
+3. Recorded upstream errors. The proxy cooldown path stores
+   errorCode / lastError / testStatus in the connection data
+   blob (mark_connection_unavailable writes them,
+   clear_connection_error clears them on success). Classified
+   with the farm resort contract
+   (grok-farm-modular cli/nine_router/health.py):
+
+     401 or invalid_grant/revoked      → dead (re-authorize)
+     402/403 or spending/balance/
+       exhausted/quota keywords        → exhausted, limit_reached
+     429                               → rate-limited (cooldown)
+
+   The free-usage 429 body carries authoritative numbers —
+   "tokens (actual/limit): 539793/500000" — which calibrate
+   both used and limit for that connection.
+
+Research notes (grok-farm-modular, verified 2026-08):
+- Free tier comes from x.ai and is limited to grok-4.5.
+  Grok (grok.com) has no free plan — grok-build 402s on free
+  accounts by design (model gating, not exhaustion).
+- Daily allowance: 2M tokens/day during the first promo
+  period, later reduced to 1M/day (matches the observed
+  X-Ratelimit-Limit-Tokens: 1000000). Resets on a rolling
+  24-hour window.
+- Enforcement observed 2026-08-09: one farmed account 429'd
+  at an actual 500K limit while its headers still claimed 1M —
+  the real limit appears account-specific; the 429 body is the
+  only authoritative source (see point 3).
 ```
 
 ### Qoder (verified 2026-08)

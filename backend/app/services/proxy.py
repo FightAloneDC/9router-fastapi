@@ -370,11 +370,17 @@ async def mark_connection_unavailable(
     cooldown_ms: int,
     model: str = None,
     new_backoff_level: int | None = None,
+    status_code: int | None = None,
+    error_detail: str | None = None,
 ):
     """Mark connection as unavailable (write to DB only on error).
 
     When *new_backoff_level* is provided (from calculate_cooldown), it is used
     directly.  Otherwise we increment the current level by 1.
+
+    When *status_code* / *error_detail* are provided they are recorded as
+    errorCode / lastError in the data blob — the health contract consumed by
+    provider quota trackers and the farm CLI resort tiers.
     """
     result = await db.execute(
         select(ProviderConnection).where(ProviderConnection.id == connection_id)
@@ -392,6 +398,13 @@ async def mark_connection_unavailable(
     update = build_cooldown_update(cooldown_ms, model)
     update["backoffLevel"] = backoff_level
     update["testStatus"] = "unavailable"
+    if status_code is not None:
+        update["errorCode"] = str(status_code)
+    if error_detail:
+        update["lastError"] = error_detail[:500]
+        update["lastErrorAt"] = datetime.now(
+            timezone.utc
+        ).isoformat()
 
     data.update(update)
     conn.data = json.dumps(data)
@@ -415,6 +428,10 @@ async def clear_connection_error(db: AsyncSession, connection_id: str, model: st
 
     update = build_clear_cooldown_update()
     update["testStatus"] = "active"
+    # Recovered — clear recorded upstream error state
+    update["errorCode"] = None
+    update["lastError"] = None
+    update["lastErrorAt"] = None
 
     # Clear the model lock for the succeeded model
     if model:

@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.proxy import should_fallback_on_error
+from app.services.quota import observe_upstream_response
 from app.services.usage_tracking import save_request_tracking
 
 
@@ -241,6 +242,10 @@ async def _stream_response(
                     target.url,
                     **send_kwargs,
                 ) as resp:
+                    # PS hook: snapshot upstream rate-limit headers
+                    await observe_upstream_response(
+                        db, provider, connection_id, resp.headers,
+                    )
                     # Qoder SSE lines may be split across read boundaries;
                     # buffer bytes until a full line is available, or the
                     # fragments are dropped and deltas are lost (corrupted

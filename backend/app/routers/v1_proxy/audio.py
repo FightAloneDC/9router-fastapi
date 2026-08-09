@@ -243,7 +243,11 @@ async def audio_speech(
                 conn_obj = conn_row.scalar_one_or_none()
                 current_backoff: int = json.loads(conn_obj.data).get("backoffLevel", 0) if conn_obj and conn_obj.data else 0
                 cooldown_ms, new_level = calculate_cooldown(e.response.status_code, last_error["detail"], backoff_level=current_backoff)
-                await mark_connection_unavailable(db, conn_id, cooldown_ms, tts_model, new_level)
+                await mark_connection_unavailable(
+                    db, conn_id, cooldown_ms, tts_model, new_level,
+                    status_code=e.response.status_code,
+                    error_detail=last_error["detail"],
+                )
                 exclude_ids.add(conn_id)
             continue
         except httpx.ConnectError as e:
@@ -461,7 +465,11 @@ async def audio_transcriptions(
                 conn_obj = conn_row.scalar_one_or_none()
                 current_backoff: int = json.loads(conn_obj.data).get("backoffLevel", 0) if conn_obj and conn_obj.data else 0
                 cooldown_ms, new_level = calculate_cooldown(e.response.status_code, last_error["detail"], backoff_level=current_backoff)
-                await mark_connection_unavailable(db, conn_id, cooldown_ms, model_id, new_level)
+                await mark_connection_unavailable(
+                    db, conn_id, cooldown_ms, model_id, new_level,
+                    status_code=e.response.status_code,
+                    error_detail=last_error["detail"],
+                )
                 exclude_ids.add(conn_id)
             continue
         except httpx.ConnectError as e:

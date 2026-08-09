@@ -38,6 +38,7 @@ class QoderUsageHandler(BaseUsageHandler):
         self,
         access_token: str,
         provider_data: dict | None = None,
+        connection_id: str | None = None,
     ) -> UsageResponse:
         headers = {
             "Accept": "application/json",

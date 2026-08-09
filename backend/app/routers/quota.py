@@ -188,8 +188,10 @@ async def get_connection_usage(
     except (json.JSONDecodeError, TypeError):
         data = {}
 
-    # Serve cached balance unless a fresh poll is required
-    if not force:
+    # Serve cached balance unless a fresh poll is required.
+    # Local-state handlers (USES_UPSTREAM=False) are cheap and
+    # must reflect current connection state, so they skip cache.
+    if not force and handler.USES_UPSTREAM:
         cache = await db.get(QuotaCache, conn.id)
         if cache is not None and _quota_cache_usable(cache, data):
             try:
@@ -206,27 +208,30 @@ async def get_connection_usage(
                 limit_reached=bool(cache.limit_reached),
             )
 
-    access_token = (
-        data.get("accessToken")
-        or data.get("apiKey")
-        or ""
-    )
-    if not access_token:
-        return UsageResponse(
-            message="No access token or API key found"
+    access_token = ""
+    if handler.USES_UPSTREAM:
+        access_token = (
+            data.get("accessToken")
+            or data.get("apiKey")
+            or ""
         )
+        if not access_token:
+            return UsageResponse(
+                message="No access token or API key found"
+            )
 
-    # Try to refresh expired OAuth tokens
-    if conn.auth_type == "oauth":
-        access_token = await _try_refresh_token(
-            conn, data, db
-        )
+        # Try to refresh expired OAuth tokens
+        if conn.auth_type == "oauth":
+            access_token = await _try_refresh_token(
+                conn, data, db
+            )
 
     result = await handler.fetch(
         access_token=access_token,
         provider_data=data,
+        connection_id=str(conn.id),
     )
-    if result.quotas:
+    if result.quotas and handler.USES_UPSTREAM:
         await _store_quota_cache(db, conn, result)
     return result
 

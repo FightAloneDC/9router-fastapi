@@ -17,6 +17,17 @@ from app.providers.claude.quota import ClaudeUsageHandler
 from app.providers.codex.quota import CodexUsageHandler
 from app.providers.kiro.quota import KiroUsageHandler
 from app.providers.qoder.quota import QoderUsageHandler
+from app.providers.grok_cli.quota import (
+    DEAD,
+    EXHAUSTED,
+    GROK_CLI_FREE_DAILY_TOKENS,
+    HEALTHY,
+    RATE_LIMITED,
+    GrokCliUsageHandler,
+    _parse_exhausted_tokens,
+    _plan_from_access_token,
+    classify_health,
+)
 
 
 # ──────────────────────────────────────────────
@@ -31,6 +42,7 @@ def test_supported_providers():
     assert "codex" in providers
     assert "kiro" in providers
     assert "qoder" in providers
+    assert "grok-cli" in providers
 
 
 def test_get_handler_known():
@@ -364,3 +376,165 @@ def test_pct_calculation():
     assert GitHubUsageHandler._pct(100, 100) == 0.0
     assert GitHubUsageHandler._pct(0, 0) == 100.0
     assert GitHubUsageHandler._pct(150, 100) == 0.0
+
+
+# ──────────────────────────────────────────────
+# Grok CLI
+# ──────────────────────────────────────────────
+
+
+def _jwt_with_tier(tier: int) -> str:
+    """Header.payload.signature stub with a tier claim."""
+    import base64, json
+
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tier": tier}).encode()
+    ).decode().rstrip("=")
+    header = base64.urlsafe_b64encode(
+        b'{"alg":"ES256"}'
+    ).decode().rstrip("=")
+    return f"{header}.{payload}.sig"
+
+
+def test_grok_plan_from_jwt():
+    assert _plan_from_access_token(
+        _jwt_with_tier(1)
+    ) == "SuperGrok"
+    assert _plan_from_access_token(
+        _jwt_with_tier(0)
+    ) == "Free"
+    assert _plan_from_access_token("not-a-jwt") == ""
+
+
+def test_grok_classify_health():
+    # Farm resort-contract tiers
+    assert classify_health(
+        {"errorCode": "429"}
+    )[0] == RATE_LIMITED
+    assert classify_health(
+        {"errorCode": "402"}
+    )[0] == EXHAUSTED
+    assert classify_health(
+        {"errorCode": "403"}
+    )[0] == EXHAUSTED
+    assert classify_health({
+        "lastError": "personal-team-blocked:spending-limit"
+    })[0] == EXHAUSTED
+    assert classify_health(
+        {"errorCode": "401"}
+    )[0] == DEAD
+    assert classify_health(
+        {"lastError": "invalid_grant"}
+    )[0] == DEAD
+    assert classify_health(
+        {"errorCode": "503"}
+    )[0] != EXHAUSTED
+    assert classify_health({})[0] == HEALTHY
+
+
+@pytest.mark.asyncio
+async def test_grok_fetch_healthy():
+    handler = GrokCliUsageHandler()
+    result = await handler.fetch("", {})
+    assert result.limit_reached is False
+    assert result.message is None
+    assert len(result.quotas) == 1
+    q = result.quotas[0]
+    assert q.total == GROK_CLI_FREE_DAILY_TOKENS
+    assert q.used == 0
+    assert q.remaining_percentage == 100.0
+    assert q.reset_at is not None
+
+
+@pytest.mark.asyncio
+async def test_grok_fetch_exhausted():
+    handler = GrokCliUsageHandler()
+    result = await handler.fetch("", {
+        "errorCode": "402",
+        "lastError": "spending-limit",
+    })
+    assert result.limit_reached is True
+    assert result.message
+    q = result.quotas[0]
+    assert q.used == GROK_CLI_FREE_DAILY_TOKENS
+    assert q.remaining_percentage == 0.0
+
+
+def test_grok_parse_exhausted_tokens():
+    actual, limit = _parse_exhausted_tokens(
+        "You've used all the included free usage for model "
+        "grok-4.5 for now. Usage resets over a rolling 24-hour "
+        "window — tokens (actual/limit): 539793/500000. "
+        "Upgrade to a Grok subscription for higher limits"
+    )
+    assert (actual, limit) == (539793, 500000)
+    assert _parse_exhausted_tokens("other error") == (None, None)
+    assert _parse_exhausted_tokens("") == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_grok_fetch_429_calibration():
+    """A recorded free-usage 429 calibrates used/limit from the
+    authoritative grok error body (account-specific limits)."""
+    handler = GrokCliUsageHandler()
+    result = await handler.fetch("", {
+        "errorCode": "429",
+        "lastError": (
+            '{"code":"subscription:free-usage-exhausted",'
+            '"error":"... tokens (actual/limit): '
+            '539793/500000 ..."}'
+        ),
+    })
+    assert result.limit_reached is True
+    q = result.quotas[0]
+    assert q.total == 500000
+    assert q.used == 500000  # display clamped to total
+    assert q.remaining_percentage == 0.0
+
+
+@pytest.mark.asyncio
+async def test_grok_fetch_local_accumulation(monkeypatch):
+    """Used = local usage_history sum; limit from header
+    snapshot; the requests row passes through."""
+    handler = GrokCliUsageHandler()
+
+    async def fake_usage(self, connection_id):
+        return 123456
+
+    async def fake_snapshot(self, connection_id):
+        return ([
+            {
+                "name": "Daily free (grok-4.5)",
+                "used": 0, "total": 1000000,
+                "remaining": 1000000,
+                "remaining_percentage": 100.0,
+                "reset_at": "2026-08-10T00:00:00+00:00",
+                "unlimited": False,
+            },
+            {
+                "name": "Requests",
+                "used": 3, "total": 21, "remaining": 18,
+                "remaining_percentage": 85.7,
+                "reset_at": "2026-08-10T00:00:00+00:00",
+                "unlimited": False,
+            },
+        ], False)
+
+    monkeypatch.setattr(
+        GrokCliUsageHandler, "_today_token_usage", fake_usage,
+    )
+    monkeypatch.setattr(
+        GrokCliUsageHandler, "_today_snapshot", fake_snapshot,
+    )
+
+    result = await handler.fetch(
+        "", {},
+        connection_id="9ade4089-4a58-4bae-81de-4654f29b0c5b",
+    )
+    assert result.limit_reached is False
+    assert len(result.quotas) == 2
+    token_q = result.quotas[0]
+    assert token_q.used == 123456
+    assert token_q.total == 1000000
+    assert result.quotas[1].name == "Requests"
+    assert result.quotas[1].used == 3

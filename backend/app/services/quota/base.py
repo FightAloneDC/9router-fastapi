@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 from pydantic import BaseModel
@@ -35,12 +35,18 @@ class BaseUsageHandler(ABC):
 
     PROVIDER_ID: str = ""
     TIMEOUT: float = 15.0
+    # False for handlers that derive usage from local state
+    # (e.g. recorded upstream errors) instead of polling an
+    # upstream API — the router skips quota_cache for these so
+    # results always reflect the current connection state.
+    USES_UPSTREAM: bool = True
 
     @abstractmethod
     async def fetch(
         self,
         access_token: str,
         provider_data: dict | None = None,
+        connection_id: str | None = None,
     ) -> UsageResponse:
         """Fetch usage/quota data from the provider API.
 
@@ -48,9 +54,25 @@ class BaseUsageHandler(ABC):
             access_token: OAuth access token or API key.
             provider_data: Extra provider-specific data from
                 the connection's JSON blob.
+            connection_id: Connection UUID string, for handlers
+                that derive usage from local records.
 
         Returns:
             Standardized UsageResponse.
+        """
+
+    async def observe_response(
+        self,
+        db: Any,
+        connection_id: str,
+        headers: Any,
+    ) -> None:
+        """Optional PS hook: record observable signals from
+        upstream response headers (e.g. rate-limit counters).
+
+        Called by the proxy on every successful upstream
+        response. Default: no-op. Fail-open — the dispatcher
+        logs and swallows errors.
         """
 
     async def _get(
