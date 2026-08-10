@@ -41,8 +41,8 @@ export default function CombosPage() {
         combosApi.getCombos(),
         settingsApi.get(),
       ])
-      // Only LLM combos — media combos (kind set) have their own page
-      setCombos((combosRes.data || []).filter(c => !c.kind))
+      // Show ALL combos (including media ones) - each will display its kind badge
+      setCombos(combosRes.data || [])
       setComboStrategies(settingsRes.data?.comboStrategies || {})
     } catch (err) {
       console.error('Failed to fetch combos:', err)
@@ -194,7 +194,8 @@ export default function CombosPage() {
             No combos yet
           </h2>
           <p className="text-zinc-400 mb-6 max-w-md">
-            Create your first combo to group models together for round-robin routing.
+            Create your first combo to group models together for round-robin routing.<br />
+            <span className="text-zinc-500 text-xs">Includes all types: LLM, embeddings, reranks, TTS, etc.</span>
           </p>
           <Button onClick={handleCreate}>
             <Plus size={16} />
