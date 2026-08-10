@@ -8,7 +8,11 @@ import httpx
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.proxy import should_fallback_on_error
+from app.services.proxy import (
+    calculate_cooldown,
+    mark_connection_unavailable,
+    should_fallback_on_error,
+)
 from app.services.quota import observe_upstream_response
 from app.services.usage_tracking import save_request_tracking
 from app.services.active_requests import track_request_end
@@ -44,6 +48,39 @@ class ProxyTarget:
 def _should_fallback_on_error(status_code: int, detail: str) -> bool:
     """Check if we should fallback to next connection on error."""
     return should_fallback_on_error(status_code, detail)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Error cooldown from inside streaming generators (uses new DB session)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def _mark_upstream_stream_error(
+    provider: str | None,
+    connection_id: str | None,
+    model: str | None,
+    status_code: int,
+    error_detail: str,
+) -> None:
+    """Cooldown a connection from inside a streaming generator.
+
+    Uses a fresh DB session because the request-scoped session may already
+    be closed by the time the client consumes the stream.
+    """
+    if not connection_id:
+        return
+    try:
+        from app.database import async_session
+
+        async with async_session() as err_db:
+            cooldown_ms, new_level = calculate_cooldown(status_code, error_detail)
+            await mark_connection_unavailable(
+                err_db, connection_id, cooldown_ms, model, new_level,
+                status_code=status_code, error_detail=error_detail[:500],
+            )
+    except Exception:
+        # Silently ignore — logging happens in DB layer anyway
+        pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -272,6 +309,34 @@ async def _stream_response(
                                     usage = _capture_qoder_usage(
                                         unwrapped, usage,
                                     )
+                                    # CHECK FOR QODER STREAMING ERRORS (quota/exhaustion via envelope)
+                                    try:
+                                        json_data = json.loads(unwrapped[6:])  # strip "data: "
+                                        choices = json_data.get("choices") or []
+                                        if choices and isinstance(choices[0], dict):
+                                            delta = choices[0].get("delta", {})
+                                            content = delta.get("content", "")
+                                            if isinstance(content, str) and content.startswith("[qoder error"):
+                                                # Parse error message: "[qoder error 429: Insufficient quota]"
+                                                import re
+                                                match = re.search(r"\[qoder error (\d+): (.+)\]", content)
+                                                if match:
+                                                    status_code = int(match.group(1))
+                                                    error_detail = match.group(2)[:500]
+                                                    # Call cooldown helper with fresh session
+                                                    await _mark_upstream_stream_error(
+                                                        provider, connection_id, model,
+                                                        status_code, error_detail,
+                                                    )
+                                                    # Raise exception to stop stream and trigger fallback
+                                                    raise httpx.HTTPStatusError(
+                                                        f"HTTP {status_code}: {error_detail}",
+                                                        request=resp.request,
+                                                        response=resp,
+                                                    )
+                                    except (json.JSONDecodeError, IndexError, KeyError, ValueError, AttributeError):
+                                        # Not an error envelope — continue streaming
+                                        pass
                         else:
                             yield chunk
                             # Parse SSE to capture usage from last chunk
