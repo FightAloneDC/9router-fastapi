@@ -194,3 +194,17 @@ class ResponsesUpstreamTranslator:
             out.append(self._chunk({}, usage=self.usage))
         out.append("data: [DONE]\n\n")
         return out
+
+    def close(self) -> list[str]:
+        """Emit terminal chat SSE if upstream closed without completed.
+
+        Call after the upstream byte stream ends. Safe to call multiple
+        times — returns [] once finished.
+        """
+        if self.finished:
+            return []
+        out: list[str] = []
+        if not self.started:
+            out.extend(self._ensure_started())
+        out.extend(self._finish("incomplete"))
+        return out

@@ -274,6 +274,68 @@ async def _stream_response(
     async def generate():  # type: ignore[no-untyped-def]
         usage: dict = {}
         chunk_count: int = 0
+        # Lightweight stall sniffer (G1): summarize finish_reason / tools.
+        sniff: dict = {
+            "provider": provider,
+            "model": model,
+            "finish_reasons": [],
+            "tool_delta_count": 0,
+            "content_chars": 0,
+            "reasoning_chars": 0,
+            "max_tokens": (body or {}).get("max_tokens")
+            or (body or {}).get("max_completion_tokens"),
+            "tool_choice": (body or {}).get("tool_choice"),
+            "n_tools": len((body or {}).get("tools") or []),
+            "stream_id": None,
+        }
+
+        def _sniff_openai_sse_line(line: str) -> None:
+            if not line.startswith("data: ") or line.strip() == "data: [DONE]":
+                return
+            try:
+                data = json.loads(line[6:])
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return
+            if not isinstance(data, dict):
+                return
+            if data.get("id") and not sniff["stream_id"]:
+                sniff["stream_id"] = data.get("id")
+            for choice in data.get("choices") or []:
+                if not isinstance(choice, dict):
+                    continue
+                fr = choice.get("finish_reason")
+                if fr:
+                    sniff["finish_reasons"].append(fr)
+                delta = choice.get("delta") or {}
+                if not isinstance(delta, dict):
+                    continue
+                if delta.get("tool_calls"):
+                    sniff["tool_delta_count"] += 1
+                c = delta.get("content")
+                if isinstance(c, str):
+                    sniff["content_chars"] += len(c)
+                rc = delta.get("reasoning_content")
+                if isinstance(rc, str):
+                    sniff["reasoning_chars"] += len(rc)
+
+        def _flush_sniff(extra: dict | None = None) -> None:
+            try:
+                from pathlib import Path
+                out_dir = Path(__file__).resolve().parents[3] / (
+                    "tests/_stream_sniff"
+                )
+                out_dir.mkdir(parents=True, exist_ok=True)
+                row = {
+                    **sniff,
+                    "ts": time.time(),
+                    "chunk_count": chunk_count,
+                    **(extra or {}),
+                }
+                with (out_dir / "streams.jsonl").open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            except Exception as e:
+                print(f"[STREAM SNIFF ERROR] {e}", flush=True)
+
         async with httpx.AsyncClient(timeout=300.0) as client:
             try:
                 async with client.stream(
@@ -305,6 +367,7 @@ async def _stream_response(
                                 )
                                 unwrapped = _unwrap_qoder_sse_line(line)
                                 if unwrapped:
+                                    _sniff_openai_sse_line(unwrapped)
                                     yield f"{unwrapped}\n\n".encode()
                                     usage = _capture_qoder_usage(
                                         unwrapped, usage,
@@ -343,6 +406,7 @@ async def _stream_response(
                             try:
                                 text = chunk.decode("utf-8", errors="ignore")
                                 for line in text.split("\n"):
+                                    _sniff_openai_sse_line(line)
                                     if line.startswith("data: ") and line.strip() != "data: [DONE]":
                                         data = json.loads(line[6:])
                                         if "usage" in data and data["usage"]:
@@ -354,18 +418,22 @@ async def _stream_response(
                         line = qoder_buf.decode("utf-8", errors="ignore")
                         unwrapped = _unwrap_qoder_sse_line(line)
                         if unwrapped:
+                            _sniff_openai_sse_line(unwrapped)
                             yield f"{unwrapped}\n\n".encode()
                             usage = _capture_qoder_usage(
                                 unwrapped, usage,
                             )
             except asyncio.CancelledError:
+                _flush_sniff({"ended": "cancelled"})
                 raise
             except GeneratorExit:
                 # Client disconnected mid-stream. Do not yield [DONE] here:
                 # yielding inside finally during GeneratorExit raises
                 # "generator ignored GeneratorExit" and spams logs.
+                _flush_sniff({"ended": "client_disconnect"})
                 raise
             except Exception as e:
+                _flush_sniff({"ended": "error", "error": str(e)[:300]})
                 error_data = json.dumps({
                     "error": {
                         "message": f"Proxy error: {str(e)}",
@@ -375,6 +443,7 @@ async def _stream_response(
                 yield f"data: {error_data}\n\n".encode()
                 yield b"data: [DONE]\n\n"
             else:
+                _flush_sniff({"ended": "ok"})
                 yield b"data: [DONE]\n\n"
 
         # Save usage tracking AFTER stream is consumed (usage is now available)

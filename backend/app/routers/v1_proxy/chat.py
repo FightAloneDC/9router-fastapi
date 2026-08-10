@@ -687,6 +687,17 @@ async def _stream_grok_responses(
             await resp.aclose()
             await client.aclose()
 
+        # Always finalize: upstream may close without response.completed
+        for ev in translator.close():
+            yield ev.encode()
+            try:
+                if ev.startswith("data: {"):
+                    parsed = json.loads(ev[6:].strip())
+                    if parsed.get("usage"):
+                        usage = parsed["usage"]
+            except (json.JSONDecodeError, ValueError):
+                pass
+
         if db and provider and model:
             from app.services.usage_tracking import (
                 save_request_tracking,

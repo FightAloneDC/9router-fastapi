@@ -290,6 +290,12 @@ class ResponsesStreamTranslator:
         self.full_text = ""
         self.tool_calls: dict[int, dict] = {}  # index → {id, name, arguments}
         self._output_item_added = False
+        self._finished = False
+        self._next_output_index = 0
+        self._message_output_index: int | None = None
+        self._tool_output_index: dict[int, int] = {}
+        self._tool_item_started: set[int] = set()
+        self._output_items: list[dict] = []
 
     def next_seq(self) -> int:
         self.seq += 1
@@ -336,14 +342,22 @@ class ResponsesStreamTranslator:
         if delta.get("content"):
             if not self._output_item_added:
                 self._output_item_added = True
+                self._message_output_index = self._next_output_index
+                self._next_output_index += 1
                 events.append(self.emit("response.output_item.added", {
                     "type": "response.output_item.added",
-                    "output_index": 0,
-                    "item": {"type": "message", "role": "assistant", "content": []},
+                    "output_index": self._message_output_index,
+                    "item": {
+                        "type": "message",
+                        "id": f"msg_{self.response_id}",
+                        "role": "assistant",
+                        "content": [],
+                        "status": "in_progress",
+                    },
                 }))
                 events.append(self.emit("response.content_part.added", {
                     "type": "response.content_part.added",
-                    "output_index": 0,
+                    "output_index": self._message_output_index,
                     "content_index": 0,
                     "part": {"type": "output_text", "text": ""},
                 }))
@@ -351,23 +365,62 @@ class ResponsesStreamTranslator:
             self.full_text += delta["content"]
             events.append(self.emit("response.output_text.delta", {
                 "type": "response.output_text.delta",
-                "output_index": 0,
+                "output_index": self._message_output_index,
                 "content_index": 0,
                 "delta": delta["content"],
             }))
 
-        # Tool calls
+        # Tool calls — stream as Responses function_call items
         for tc in delta.get("tool_calls", []):
             idx = tc.get("index", 0)
-            func = tc.get("function", {})
+            func = tc.get("function", {}) or {}
 
             if idx not in self.tool_calls:
-                self.tool_calls[idx] = {"id": tc.get("id", ""), "name": "", "arguments": ""}
+                self.tool_calls[idx] = {
+                    "id": tc.get("id", "") or f"call_{idx}",
+                    "name": "",
+                    "arguments": "",
+                }
 
+            if tc.get("id"):
+                self.tool_calls[idx]["id"] = tc["id"]
             if func.get("name"):
                 self.tool_calls[idx]["name"] = func["name"]
-            if func.get("arguments"):
-                self.tool_calls[idx]["arguments"] += func["arguments"]
+
+            arg_delta = func.get("arguments") or ""
+            if arg_delta:
+                self.tool_calls[idx]["arguments"] += arg_delta
+
+            if idx not in self._tool_item_started:
+                self._tool_item_started.add(idx)
+                out_idx = self._next_output_index
+                self._next_output_index += 1
+                self._tool_output_index[idx] = out_idx
+                call_id = self.tool_calls[idx]["id"]
+                events.append(self.emit("response.output_item.added", {
+                    "type": "response.output_item.added",
+                    "output_index": out_idx,
+                    "item": {
+                        "type": "function_call",
+                        "id": call_id,
+                        "call_id": call_id,
+                        "name": self.tool_calls[idx]["name"],
+                        "arguments": "",
+                        "status": "in_progress",
+                    },
+                }))
+
+            if arg_delta:
+                out_idx = self._tool_output_index[idx]
+                events.append(self.emit(
+                    "response.function_call_arguments.delta",
+                    {
+                        "type": "response.function_call_arguments.delta",
+                        "output_index": out_idx,
+                        "item_id": self.tool_calls[idx]["id"],
+                        "delta": arg_delta,
+                    },
+                ))
 
         # Finish
         if finish_reason:
@@ -377,50 +430,92 @@ class ResponsesStreamTranslator:
 
     def _flush_finish(self, finish_reason: str, chunk: dict) -> list[dict]:
         """Emit completion events."""
+        if self._finished:
+            return []
+        self._finished = True
         events: list[dict] = []
+        output: list[dict] = []
 
         # Flush text output
         if self.full_text and self._output_item_added:
+            msg_idx = self._message_output_index or 0
             events.append(self.emit("response.output_text.done", {
                 "type": "response.output_text.done",
-                "output_index": 0,
+                "output_index": msg_idx,
                 "content_index": 0,
                 "text": self.full_text,
             }))
             events.append(self.emit("response.content_part.done", {
                 "type": "response.content_part.done",
-                "output_index": 0,
+                "output_index": msg_idx,
                 "content_index": 0,
                 "part": {"type": "output_text", "text": self.full_text},
             }))
+            message_item = {
+                "type": "message",
+                "id": f"msg_{self.response_id}",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": self.full_text,
+                }],
+                "status": "completed",
+            }
             events.append(self.emit("response.output_item.done", {
                 "type": "response.output_item.done",
-                "output_index": 0,
-                "item": {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": self.full_text}],
-                    "status": "completed",
-                },
+                "output_index": msg_idx,
+                "item": message_item,
             }))
+            output.append(message_item)
 
         # Flush tool calls
         for idx in sorted(self.tool_calls.keys()):
             tc = self.tool_calls[idx]
+            out_idx = self._tool_output_index.get(idx)
+            if out_idx is None:
+                out_idx = self._next_output_index
+                self._next_output_index += 1
+                self._tool_output_index[idx] = out_idx
+                events.append(self.emit("response.output_item.added", {
+                    "type": "response.output_item.added",
+                    "output_index": out_idx,
+                    "item": {
+                        "type": "function_call",
+                        "id": tc["id"],
+                        "call_id": tc["id"],
+                        "name": tc["name"],
+                        "arguments": "",
+                        "status": "in_progress",
+                    },
+                }))
+
+            events.append(self.emit(
+                "response.function_call_arguments.done",
+                {
+                    "type": "response.function_call_arguments.done",
+                    "output_index": out_idx,
+                    "item_id": tc["id"],
+                    "arguments": tc["arguments"],
+                },
+            ))
+            tool_item = {
+                "type": "function_call",
+                "id": tc["id"],
+                "call_id": tc["id"],
+                "name": tc["name"],
+                "arguments": tc["arguments"],
+                "status": "completed",
+            }
             events.append(self.emit("response.output_item.done", {
                 "type": "response.output_item.done",
-                "output_index": len(self.tool_calls) + (1 if self.full_text else 0),
-                "item": {
-                    "type": "function_call",
-                    "id": tc["id"],
-                    "call_id": tc["id"],
-                    "name": tc["name"],
-                    "arguments": tc["arguments"],
-                    "status": "completed",
-                },
+                "output_index": out_idx,
+                "item": tool_item,
             }))
+            output.append(tool_item)
 
-        # Final completed event
+        self._output_items = output
+
+        # Final completed event — output MUST carry items for clients
         usage = chunk.get("usage", {})
         events.append(self.emit("response.completed", {
             "type": "response.completed",
@@ -430,7 +525,7 @@ class ResponsesStreamTranslator:
                 "created_at": self.created,
                 "status": "completed",
                 "model": self.model,
-                "output": [],
+                "output": output,
                 "usage": {
                     "input_tokens": usage.get("prompt_tokens", 0),
                     "output_tokens": usage.get("completion_tokens", 0),
@@ -440,3 +535,61 @@ class ResponsesStreamTranslator:
         }))
 
         return events
+
+    def finalize(self, usage: dict | None = None) -> list[dict]:
+        """Emit response.completed if stream ended without finish_reason.
+
+        Call on ``data: [DONE]`` or when the upstream SSE closes. Idempotent.
+        """
+        if self._finished:
+            return []
+        if not self.started:
+            self.started = True
+            self.response_id = self.response_id or "resp_unknown"
+            events = [
+                self.emit("response.created", {
+                    "type": "response.created",
+                    "response": {
+                        "id": self.response_id,
+                        "object": "response",
+                        "created_at": self.created,
+                        "status": "in_progress",
+                        "output": [],
+                    },
+                }),
+            ]
+            events.extend(
+                self._flush_finish("stop", {"usage": usage or {}}),
+            )
+            return events
+        return self._flush_finish("stop", {"usage": usage or {}})
+
+
+def build_incomplete_terminal_sse(
+    *,
+    response_id: str,
+    model: str = "",
+) -> str:
+    """SSE payload for Responses clients when upstream closed early.
+
+    OpenAI SDKs require a terminal event (completed / failed / incomplete /
+    cancelled). Without one they raise:
+    \"stream closed before a terminal response event was received\".
+    """
+    data = {
+        "type": "response.incomplete",
+        "response": {
+            "id": response_id,
+            "object": "response",
+            "status": "incomplete",
+            "model": model,
+            "output": [],
+            "incomplete_details": {
+                "reason": "upstream_stream_closed",
+            },
+        },
+    }
+    return (
+        f"event: response.incomplete\n"
+        f"data: {json.dumps(data)}\n\n"
+    )

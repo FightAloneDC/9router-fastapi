@@ -312,3 +312,34 @@ def test_stream_translator_ignores_noise_and_malformed():
     assert t.feed(": keep-alive") == []
     assert t.feed("data: {not json") == []
     assert t.feed("data: [DONE]") == []
+
+
+def test_stream_translator_close_without_completed_emits_done():
+    """Upstream closed mid-stream → still emit finish_reason + [DONE]."""
+    t = ResponsesUpstreamTranslator(model="grok-build")
+    t.feed(_sse_line({
+        "type": "response.created",
+        "response": {"id": "resp_1"},
+    }))
+    t.feed(_sse_line({
+        "type": "response.output_text.delta",
+        "delta": "Hi",
+    }))
+    events = t.close()
+    assert events, "close() must emit terminal chat SSE"
+    finish = json.loads(events[0][6:])
+    assert finish["choices"][0]["finish_reason"] in (
+        "stop", "length",
+    )
+    assert events[-1] == "data: [DONE]\n\n"
+    assert t.close() == []
+
+
+def test_stream_translator_close_noop_after_completed():
+    t = ResponsesUpstreamTranslator(model="grok-build")
+    t.feed(_sse_line({"type": "response.created", "response": {}}))
+    t.feed(_sse_line({
+        "type": "response.completed",
+        "response": {"status": "completed"},
+    }))
+    assert t.close() == []

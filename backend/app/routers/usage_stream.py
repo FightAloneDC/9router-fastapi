@@ -41,9 +41,11 @@ def _build_sse_payload() -> str:
 async def _event_generator(queue: asyncio.Queue):
     """SSE generator that yields events from the queue."""
     try:
+        # Immediate snapshot so proxies/browsers don't wait on idle buffer.
+        yield f"event: update\ndata: {_build_sse_payload()}\n\n"
         while True:
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=25)
+                event = await asyncio.wait_for(queue.get(), timeout=15)
                 data = _build_sse_payload()
                 yield f"event: {event}\ndata: {data}\n\n"
             except asyncio.TimeoutError:
@@ -73,7 +75,7 @@ async def usage_stream(
         generate(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },

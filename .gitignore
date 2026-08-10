@@ -106,3 +106,6 @@ build/
 backups/
 
 docs/superpowers/
+
+# Local stream sniff captures
+backend/tests/_stream_sniff/

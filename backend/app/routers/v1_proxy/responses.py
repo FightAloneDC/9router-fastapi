@@ -23,12 +23,17 @@ from app.services.responses_translator import (
     responses_to_chat_completions,
     chat_completions_to_responses,
     ResponsesStreamTranslator,
+    build_incomplete_terminal_sse,
 )
 from app.services.usage_tracking import save_request_tracking
 from app.services.active_requests import track_request_start, track_request_end
 from app.models.provider import ProviderConnection
 
-from .shared import _should_fallback_on_error
+from .shared import (
+    _should_fallback_on_error,
+    _build_provider_request,
+    _unwrap_qoder_sse_line,
+)
 
 router = APIRouter()
 
@@ -123,9 +128,38 @@ async def responses_endpoint(
                     if signed_headers:
                         target.headers = signed_headers
         else:
+            # Translate to Chat Completions for non-Responses upstreams
             forward_body = {
                 **chat_body, "model": target.model, "stream": stream,
             }
+            # Provider-specific encoding (e.g. Qoder COSY) — same as chat
+            if target.connection_id:
+                conn = await db.get(
+                    ProviderConnection, uuid.UUID(target.connection_id),
+                )
+                if conn:
+                    conn_data = json.loads(conn.data) if conn.data else {}
+                    try:
+                        raw_body, signed_headers = (
+                            await _build_provider_request(
+                                target, forward_body, conn_data,
+                            )
+                        )
+                        if signed_headers:
+                            target.headers = signed_headers
+                    except Exception as e:
+                        if target.provider == "qoder":
+                            from app.routers.v1_proxy.shared import (
+                                _try_qoder_token_refresh,
+                            )
+                            if await _try_qoder_token_refresh(target, db):
+                                continue
+                        last_error_detail = (
+                            f"Provider request build failed: {str(e)}"
+                        )
+                        last_error_status = 500
+                        exclude_ids.add(target.connection_id)
+                        continue
 
         try:
             request_start_time: float = time.time()
@@ -148,6 +182,7 @@ async def responses_endpoint(
                         connection_id=target.connection_id,
                         request_body=body,
                         request_start_time=request_start_time,
+                        raw_body=raw_body,
                         active_request_id=active_request_id,
                     )
                 resp_data: dict = {}
@@ -162,6 +197,7 @@ async def responses_endpoint(
                 else:
                     resp, resp_data = await _non_stream_responses(
                         target, forward_body, request_id, model,
+                        raw_body=raw_body,
                     )
             total_latency_ms: int = int((time.time() - request_start_time) * 1000)
 
@@ -256,13 +292,20 @@ async def responses_endpoint(
 
 async def _non_stream_responses(
     target: object, body: dict, request_id: str, model: str,
+    *, raw_body: bytes | None = None,
 ) -> tuple[JSONResponse, dict]:
     """Non-streaming: translate response to Responses API format.
 
     Returns (JSONResponse, raw_chat_data) so callers can extract usage info.
     """
+    send_kwargs: dict = {"headers": target.headers}
+    if raw_body is not None:
+        send_kwargs["content"] = raw_body
+    else:
+        send_kwargs["json"] = body
+
     async with httpx.AsyncClient(timeout=300.0) as client:
-        resp = await client.post(target.url, json=body, headers=target.headers)
+        resp = await client.post(target.url, **send_kwargs)
         resp.raise_for_status()
         data: dict = resp.json()
 
@@ -281,40 +324,106 @@ async def _stream_responses(
     connection_id: str | None = None,
     request_body: dict | None = None,
     request_start_time: float | None = None,
+    raw_body: bytes | None = None,
     active_request_id: str | None = None,
 ) -> StreamingResponse:
     """Streaming: translate Chat Completions SSE to Responses API SSE."""
     translator = ResponsesStreamTranslator(model=model)
+    is_qoder = provider == "qoder"
+    send_kwargs: dict = {"headers": target.headers}
+    if raw_body is not None:
+        send_kwargs["content"] = raw_body
+    else:
+        send_kwargs["json"] = body
 
     async def generate():  # type: ignore[no-untyped-def]
         usage: dict = {}
+
+        def _handle_chat_sse_line(line: str) -> list[str]:
+            nonlocal usage
+            out: list[str] = []
+            line = line.strip()
+            if not line.startswith("data: "):
+                return out
+            data_str: str = line[6:]
+            if data_str == "[DONE]":
+                for event in translator.finalize(usage):
+                    out.append(
+                        f"event: {event['event']}\n"
+                        f"data: {json.dumps(event['data'])}\n\n"
+                    )
+                return out
+            try:
+                chunk_data: dict = json.loads(data_str)
+            except json.JSONDecodeError:
+                return out
+            if "usage" in chunk_data and chunk_data["usage"]:
+                usage = chunk_data["usage"]
+            events = translator.translate_chunk(chunk_data)
+            for event in events:
+                out.append(
+                    f"event: {event['event']}\n"
+                    f"data: {json.dumps(event['data'])}\n\n"
+                )
+            return out
+
         async with httpx.AsyncClient(timeout=300.0) as client:
             try:
-                async with client.stream("POST", target.url, json=body, headers=target.headers) as resp:
+                async with client.stream(
+                    "POST", target.url, **send_kwargs,
+                ) as resp:
                     resp.raise_for_status()
-                    buffer = ""
-                    async for chunk in resp.aiter_text():
-                        buffer += chunk
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
-                            line = line.strip()
-                            if not line.startswith("data: "):
-                                continue
-                            data_str: str = line[6:]
-                            if data_str == "[DONE]":
-                                continue
-                            try:
-                                chunk_data: dict = json.loads(data_str)
-                                # Capture usage from SSE chunks
-                                if "usage" in chunk_data and chunk_data["usage"]:
-                                    usage = chunk_data["usage"]
-                                events = translator.translate_chunk(chunk_data)
-                                for event in events:
-                                    yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
-                            except json.JSONDecodeError:
-                                continue
+                    if is_qoder:
+                        qoder_buf = b""
+                        async for chunk in resp.aiter_bytes():
+                            qoder_buf += chunk
+                            while b"\n" in qoder_buf:
+                                line_b, qoder_buf = qoder_buf.split(
+                                    b"\n", 1,
+                                )
+                                line = line_b.decode(
+                                    "utf-8", errors="ignore",
+                                )
+                                unwrapped = _unwrap_qoder_sse_line(line)
+                                if not unwrapped:
+                                    continue
+                                for piece in _handle_chat_sse_line(
+                                    unwrapped,
+                                ):
+                                    yield piece
+                        if qoder_buf:
+                            line = qoder_buf.decode(
+                                "utf-8", errors="ignore",
+                            )
+                            unwrapped = _unwrap_qoder_sse_line(line)
+                            if unwrapped:
+                                for piece in _handle_chat_sse_line(
+                                    unwrapped,
+                                ):
+                                    yield piece
+                    else:
+                        buffer = ""
+                        async for chunk in resp.aiter_text():
+                            buffer += chunk
+                            while "\n" in buffer:
+                                line, buffer = buffer.split("\n", 1)
+                                for piece in _handle_chat_sse_line(line):
+                                    yield piece
+                    for event in translator.finalize(usage):
+                        yield (
+                            f"event: {event['event']}\n"
+                            f"data: {json.dumps(event['data'])}\n\n"
+                        )
             except Exception as e:
-                yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+                yield (
+                    f"event: error\n"
+                    f"data: {json.dumps({'message': str(e)})}\n\n"
+                )
+                for event in translator.finalize(usage):
+                    yield (
+                        f"event: {event['event']}\n"
+                        f"data: {json.dumps(event['data'])}\n\n"
+                    )
 
         # Save usage tracking after stream consumed
         if db and provider and request_start_time:
@@ -444,6 +553,54 @@ async def _stream_responses_passthrough(
 
     async def generate():  # type: ignore[no-untyped-def]
         usage: dict = {}
+        saw_terminal = False
+        terminal_types = {
+            "response.completed",
+            "response.failed",
+            "response.incomplete",
+            "response.cancelled",
+        }
+        response_id = f"resp_{request_id}"
+        # Buffer SSE lines — terminal JSON often spans TCP chunks, so
+        # splitting only on the current chunk misses response.completed
+        # and wrongly appends response.incomplete afterward.
+        line_buf = ""
+
+        def _observe_sse_line(line: str) -> None:
+            nonlocal saw_terminal, response_id, usage
+            line = line.strip()
+            if not line.startswith("data:"):
+                return
+            data_str = line[5:].strip()
+            if not data_str or data_str == "[DONE]":
+                return
+            try:
+                event = json.loads(data_str)
+            except json.JSONDecodeError:
+                return
+            if not isinstance(event, dict):
+                return
+            event_type = event.get("type")
+            if event_type in terminal_types:
+                saw_terminal = True
+            if event_type == "response.completed":
+                resp_obj = event.get("response") or {}
+                if resp_obj.get("id"):
+                    response_id = resp_obj["id"]
+                u = resp_obj.get("usage") or {}
+                if u:
+                    usage = {
+                        "prompt_tokens": u.get("input_tokens", 0),
+                        "completion_tokens": u.get(
+                            "output_tokens", 0,
+                        ),
+                        "total_tokens": u.get("total_tokens", 0),
+                    }
+            elif event_type == "response.created":
+                resp_obj = event.get("response") or {}
+                if resp_obj.get("id"):
+                    response_id = resp_obj["id"]
+
         async with httpx.AsyncClient(timeout=300.0) as client:
             try:
                 async with client.stream(
@@ -452,41 +609,27 @@ async def _stream_responses_passthrough(
                     resp.raise_for_status()
                     async for chunk in resp.aiter_text():
                         yield chunk
-                        # Capture usage from response.completed event
-                        for line in chunk.split("\n"):
-                            line = line.strip()
-                            if not line.startswith("data:"):
-                                continue
-                            data_str = line[5:].strip()
-                            if not data_str or data_str == "[DONE]":
-                                continue
-                            try:
-                                event = json.loads(data_str)
-                            except json.JSONDecodeError:
-                                continue
-                            if not isinstance(event, dict):
-                                continue
-                            if event.get("type") == "response.completed":
-                                u = (
-                                    event.get("response") or {}
-                                ).get("usage") or {}
-                                if u:
-                                    usage = {
-                                        "prompt_tokens": u.get(
-                                            "input_tokens", 0,
-                                        ),
-                                        "completion_tokens": u.get(
-                                            "output_tokens", 0,
-                                        ),
-                                        "total_tokens": u.get(
-                                            "total_tokens", 0,
-                                        ),
-                                    }
+                        line_buf += chunk
+                        while "\n" in line_buf:
+                            line, line_buf = line_buf.split("\n", 1)
+                            _observe_sse_line(line)
+                    if line_buf.strip():
+                        _observe_sse_line(line_buf)
+                if not saw_terminal:
+                    yield build_incomplete_terminal_sse(
+                        response_id=response_id,
+                        model=model,
+                    )
             except Exception as e:
                 yield (
                     "event: error\n"
                     f"data: {json.dumps({'message': str(e)})}\n\n"
                 )
+                if not saw_terminal:
+                    yield build_incomplete_terminal_sse(
+                        response_id=response_id,
+                        model=model,
+                    )
 
         # Save usage tracking after stream consumed
         if db and provider and request_start_time:
