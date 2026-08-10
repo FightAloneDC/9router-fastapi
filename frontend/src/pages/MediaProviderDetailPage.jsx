@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import {
   ArrowLeft, Plus, Trash2, Key, Eye, EyeOff,
-  ChevronUp, ChevronDown, CheckCircle2, AlertCircle,
+  ChevronUp, ChevronDown, ChevronLeft, ChevronRight, CheckCircle2, AlertCircle,
   Loader2, Wifi, Edit2, ExternalLink, X, Copy, Check,
   Download, Network, RotateCcw, Search, Info, Plug, Play,
   Beaker, Ban, Volume2, Mic, Upload, FileAudio, ImageIcon,
@@ -27,6 +27,7 @@ import { copyToClipboard } from '../utils/clipboard'
 const TYPE_BADGE_STYLES = {
   llm: 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25',
   embedding: 'bg-blue-500/15 text-blue-400 hover:bg-blue-500/25',
+  rerank: 'bg-indigo-500/15 text-indigo-400 hover:bg-indigo-500/25',
   tts: 'bg-purple-500/15 text-purple-400 hover:bg-purple-500/25',
   stt: 'bg-orange-500/15 text-orange-400 hover:bg-orange-500/25',
   image: 'bg-pink-500/15 text-pink-400 hover:bg-pink-500/25',
@@ -40,6 +41,8 @@ const TYPE_BADGE_STYLES = {
 
 function inferModelType(modelId) {
   const mid = (modelId || '').toLowerCase()
+  // rerank must precede embedding — e.g. gte-rerank-v2 contains "gte-"
+  if (/rerank/.test(mid)) return 'rerank'
   if (/embed|e5-|bge-|gte-|nomic|cohere-embed|voyage-/.test(mid)) return 'embedding'
   if (/tts|speech|audio|voice/.test(mid)) return 'tts'
   if (/whisper|transcri|stt|asr/.test(mid)) return 'stt'
@@ -91,7 +94,7 @@ function ConfirmModal({ isOpen, onClose, onConfirm, title, message }) {
 /* ════════════════════════════════════════════════════════════════
    ConnectionRow
    ════════════════════════════════════════════════════════════════ */
-function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onEdit, onDelete, onTest, testing, testResult }) {
+function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onEdit, onDelete, onTest, testing, testResult, isSelected = false, onSelect = null }) {
   const isActive = connection.is_active ?? true
   const status = connection.test_status || 'untested'
 
@@ -121,6 +124,15 @@ function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMo
   return (
     <div className={`group flex flex-col gap-3 p-2 rounded-lg sm:flex-row sm:items-center sm:justify-between hover:bg-zinc-800/40 transition-colors ${!isActive ? 'opacity-60' : ''}`}>
       <div className="flex w-full min-w-0 flex-1 items-start gap-3 sm:items-center">
+        {/* Selection checkbox */}
+        {onSelect && (
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => onSelect(connection.id)}
+            className="shrink-0 mt-1 rounded border-zinc-600 bg-zinc-800 accent-red-500 cursor-pointer"
+          />
+        )}
         <div className="flex shrink-0 flex-col">
           <button onClick={onMoveUp} disabled={isFirst} className={`p-0.5 rounded ${isFirst ? 'text-zinc-700 cursor-not-allowed' : 'text-zinc-500 hover:text-primary-400 hover:bg-zinc-800'}`}>
             <ChevronUp size={14} />
@@ -619,7 +631,7 @@ function AddCustomModelModal({ isOpen, providerAlias, onSave, onClose }) {
 /* ════════════════════════════════════════════════════════════════
    ModelRow — single model chip with copy, test, disable, type dropdown
    ════════════════════════════════════════════════════════════════ */
-function ModelRow({ model, fullModel, copied, onCopy, testStatus, onTest, isTesting, onDisable, modelType, onTypeChange }) {
+function ModelRow({ model, fullModel, copied, onCopy, testStatus, onTest, isTesting, onDisable, modelType, onTypeChange, onDeleteAlias, isCustom = false }) {
   const [showTypeDropdown, setShowTypeDropdown] = useState(false)
   const typeDropdownRef = useRef(null)
   const borderColor = testStatus === 'ok' ? 'border-emerald-500/40' : testStatus === 'error' ? 'border-red-500/40' : 'border-zinc-700'
@@ -655,7 +667,7 @@ function ModelRow({ model, fullModel, copied, onCopy, testStatus, onTest, isTest
               </button>
               {showTypeDropdown && (
                 <div className="absolute left-0 top-full mt-1 z-50 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg py-1 min-w-[100px]">
-                  {['llm', 'embedding', 'tts', 'stt', 'image', 'webSearch', 'webFetch'].map(t => (
+                  {['llm', 'embedding', 'rerank', 'tts', 'stt', 'image', 'webSearch', 'webFetch'].map(t => (
                     <button
                       key={t}
                       onClick={(e) => { e.stopPropagation(); onTypeChange(t); setShowTypeDropdown(false) }}
@@ -685,7 +697,11 @@ function ModelRow({ model, fullModel, copied, onCopy, testStatus, onTest, isTest
           <Beaker size={12} className={isTesting ? 'animate-spin' : ''} />
         </button>
       )}
-      {onDisable && (
+      {onDeleteAlias ? (
+        <button onClick={(e) => { e.stopPropagation(); onDeleteAlias() }} className="p-1 hover:bg-red-900/20 rounded text-red-500" title="Delete custom alias">
+          <Trash2 size={12} />
+        </button>
+      ) : onDisable && (
         <button onClick={onDisable} className="p-1 hover:bg-zinc-800 rounded text-zinc-500" title="Disable model">
           <Ban size={12} />
         </button>
@@ -1668,6 +1684,11 @@ export default function MediaProviderDetailPage() {
   const [testingConnectionId, setTestingConnectionId] = useState(null)
   const [testResults, setTestResults] = useState({})
 
+  // Connection list pagination
+  const CONNECTIONS_PER_PAGE = 10
+  const [connectionPage, setConnectionPage] = useState(1)
+  const [selectedConnIds, setSelectedConnIds] = useState(new Set())
+
   // Models state
   const [models, setModels] = useState([])
   const [disabledModelIds, setDisabledModelIds] = useState([])
@@ -1678,6 +1699,9 @@ export default function MediaProviderDetailPage() {
   const [clearingModels, setClearingModels] = useState(false)
   const [modelTestResults, setModelTestResults] = useState({})
   const [testingModelId, setTestingModelId] = useState(null)
+  const [modelAliases, setModelAliases] = useState({})
+  const modelAliasesRef = useRef({})
+  useEffect(() => { modelAliasesRef.current = modelAliases }, [modelAliases])
 
   // Settings
   const [providerStrategy, setProviderStrategy] = useState(null)
@@ -1728,7 +1752,22 @@ export default function MediaProviderDetailPage() {
     }
   }, [providerId])
 
-  useEffect(() => { fetchConnections() }, [fetchConnections])
+  const fetchAliases = useCallback(async () => {
+    try {
+      const { default: client } = await import('../api/client')
+      const res = await client.get('/models/alias')
+      if (res.data?.aliases) setModelAliases(res.data.aliases)
+    } catch (error) {
+      // Alias endpoint may not exist yet
+      console.log('Aliases not available:', error.message)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchConnections()
+    setConnectionPage(1)
+    setSelectedConnIds(new Set())
+  }, [providerId, fetchConnections])
 
   // Fetch disabled models
   useEffect(() => {
@@ -1741,6 +1780,29 @@ export default function MediaProviderDetailPage() {
     }
     fetchDisabled()
   }, [providerAlias])
+
+  // Fetch model aliases
+  useEffect(() => {
+    fetchAliases()
+  }, [fetchAliases, providerId, providerAlias])
+
+  // ── Connection pagination ──
+  const connTotalPages = Math.max(1, Math.ceil(connections.length / CONNECTIONS_PER_PAGE))
+  const connCurrentPage = Math.min(connectionPage, connTotalPages)
+  const connStart = (connCurrentPage - 1) * CONNECTIONS_PER_PAGE
+  const connEnd = Math.min(connStart + CONNECTIONS_PER_PAGE, connections.length)
+  const pagedConnections = connections.slice(connStart, connEnd)
+
+  // Page number buttons (max 5 visible)
+  const connPageNumbers = (() => {
+    const pages = []
+    const maxVisible = 5
+    let s = Math.max(1, connCurrentPage - Math.floor(maxVisible / 2))
+    let e = Math.min(connTotalPages, s + maxVisible - 1)
+    if (e - s + 1 < maxVisible) s = Math.max(1, e - maxVisible + 1)
+    for (let i = s; i <= e; i++) pages.push(i)
+    return pages
+  })()
 
   const providerConns = connections.filter((c) => c.provider === providerId)
 
@@ -1774,12 +1836,19 @@ export default function MediaProviderDetailPage() {
 
   const confirmDelete = async () => {
     if (!confirmState) return
-    const { id } = confirmState
+    const { id, multiIds } = confirmState
     setConfirmState(null)
     const prev = connections
-    setConnections(p => p.filter(c => c.id !== id))
-    try { await providersApi.deleteProvider(id) }
-    catch { setConnections(prev) }
+    if (multiIds) {
+      // Multi-delete mode
+      setConnections(p => p.filter(c => !multiIds.includes(c.id)))
+      await Promise.all(multiIds.map(connId => providersApi.deleteProvider(connId).catch(() => {})))
+    } else {
+      // Single delete mode
+      setConnections(p => p.filter(c => c.id !== id))
+      try { await providersApi.deleteProvider(id) }
+      catch { setConnections(prev) }
+    }
   }
 
   const handleTestConnectionRow = async (connId) => {
@@ -1829,6 +1898,9 @@ export default function MediaProviderDetailPage() {
       if (kind === 'embedding') {
         endpoint = '/v1/embeddings'
         body = { model: fullModel, input: 'test' }
+      } else if (kind === 'rerank') {
+        endpoint = '/v1/rerank'
+        body = { model: fullModel, query: 'test', documents: ['test document'], top_n: 1 }
       } else if (kind === 'tts') {
         endpoint = '/v1/audio/speech'
         body = { model: fullModel, input: 'test', voice: 'alloy' }
@@ -1907,14 +1979,62 @@ export default function MediaProviderDetailPage() {
     } catch (e) { console.error('Enable all failed:', e) }
   }
 
+  // ── Fetch model aliases ──
+
+  // ── Add custom model handler ──
   const handleAddCustomModel = async (cleanId) => {
     try {
       const { default: client } = await import('../api/client')
       // Reuse same endpoint as LLM page — alias defaults to model id
       await client.put('/models/alias', { model: `${providerAlias}/${cleanId}`, alias: cleanId })
       setShowAddCustomModel(false)
-      await fetchModels()
+      await fetchConnections()
     } catch (e) { console.error('Add custom model failed:', e) }
+  }
+
+  // ── Connection select-all/bulk actions ──
+  const selectedConnections = connections.filter((conn) => selectedConnIds.has(conn.id))
+  const allSelected = selectedConnIds.size === connections.length
+
+  const handleToggleSelect = (connId) => {
+    setSelectedConnIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(connId)) next.delete(connId)
+      else next.add(connId)
+      return next
+    })
+  }
+
+  const handleSelectAll = () => {
+    const pageIds = pagedConnections.map((c) => c.id)
+    if (pageIds.every((id) => selectedConnIds.has(id))) {
+      setSelectedConnIds((prev) => {
+        const next = new Set(prev)
+        pageIds.forEach((id) => next.delete(id))
+        return next
+      })
+    } else {
+      setSelectedConnIds((prev) => {
+        const next = new Set(prev)
+        pageIds.forEach((id) => next.add(id))
+        return next
+      })
+    }
+  }
+
+  const handleSelectAllPages = () => {
+    if (selectedConnIds.size === connections.length) {
+      setSelectedConnIds(new Set())
+    } else {
+      setSelectedConnIds(new Set(connections.map((c) => c.id)))
+    }
+  }
+
+  const handleDeleteSelected = () => {
+    const ids = [...selectedConnIds]
+    if (!ids.length) return
+    if (!window.confirm(`Delete ${ids.length} selected connection(s)?`)) return
+    setConfirmState({ type: 'deleteConnection', id: null, multiIds: ids })
   }
 
   // ── Model type helpers ──
@@ -2095,34 +2215,101 @@ export default function MediaProviderDetailPage() {
             </div>
           ) : (
             <>
-              <div className="flex min-w-0 flex-col divide-y divide-zinc-800/50">
-                {connections.map((conn, index) => (
-                  <div key={conn.id} className="flex min-w-0 items-stretch">
-                    <div className="flex-1 min-w-0">
-                      <ConnectionRow
-                        connection={conn}
-                        proxyPools={proxyPools}
-                        isFirst={index === 0}
-                        isLast={index === connections.length - 1}
-                        onMoveUp={() => handleSwapPriority(index, index - 1)}
-                        onMoveDown={() => handleSwapPriority(index, index + 1)}
-                        onToggleActive={(isActive) => handleToggleActive(conn.id, isActive)}
-                        onUpdateProxy={async (proxyPoolId) => {
-                          try {
-                            await providersApi.updateProvider(conn.id, { proxyPoolId: proxyPoolId || null })
-                            setConnections(prev => prev.map(c => c.id === conn.id ? { ...c, proxy_pool_id: proxyPoolId || null } : c))
-                          } catch (error) { console.error('Error updating proxy:', error) }
-                        }}
-                        onEdit={() => { setSelectedConnection(conn); setShowEditModal(true) }}
-                        onDelete={() => handleDelete(conn.id)}
-                        onTest={() => handleTestConnectionRow(conn.id)}
-                        testing={testingConnectionId === conn.id}
-                        testResult={testResults[conn.id]}
-                      />
-                    </div>
-                  </div>
-                ))}
+              {/* List header with select-all checkbox + bulk actions */}
+              <div className="flex items-center justify-between gap-2 pb-2 mb-1 border-b border-zinc-800/50">
+                <label className="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={pagedConnections.length > 0 && pagedConnections.every((c) => selectedConnIds.has(c.id))}
+                    onChange={handleSelectAll}
+                    className="rounded border-zinc-600 bg-zinc-800 accent-red-500 cursor-pointer"
+                  />
+                  This page
+                </label>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="warning" onClick={handleSelectAllPages}>
+                    Select All ({connections.length})
+                  </Button>
+                  {selectedConnIds.size > 0 && (
+                    <Button size="sm" variant="danger" onClick={handleDeleteSelected}>
+                      <Trash2 size={14} className="mr-1" /> Delete Selected ({selectedConnIds.size})
+                    </Button>
+                  )}
+                </div>
               </div>
+
+              <div className="flex min-w-0 flex-col divide-y divide-zinc-800/50">
+                {pagedConnections.map((conn, index) => {
+                  const actualIndex = connStart + index
+                  return (
+                    <div key={conn.id} className="flex min-w-0 items-stretch">
+                      <div className="flex-1 min-w-0">
+                        <ConnectionRow
+                          connection={conn}
+                          proxyPools={proxyPools}
+                          isFirst={actualIndex === 0}
+                          isLast={actualIndex === connections.length - 1}
+                          onMoveUp={() => handleSwapPriority(actualIndex, actualIndex - 1)}
+                          onMoveDown={() => handleSwapPriority(actualIndex, actualIndex + 1)}
+                          onToggleActive={(isActive) => handleToggleActive(conn.id, isActive)}
+                          onUpdateProxy={async (proxyPoolId) => {
+                            try {
+                              await providersApi.updateProvider(conn.id, { proxyPoolId: proxyPoolId || null })
+                              setConnections(prev => prev.map(c => c.id === conn.id ? { ...c, proxy_pool_id: proxyPoolId || null } : c))
+                            } catch (error) { console.error('Error updating proxy:', error) }
+                          }}
+                          onEdit={() => { setSelectedConnection(conn); setShowEditModal(true) }}
+                          onDelete={() => handleDelete(conn.id)}
+                          onTest={() => handleTestConnectionRow(conn.id)}
+                          testing={testingConnectionId === conn.id}
+                          testResult={testResults[conn.id]}
+                          isSelected={selectedConnIds.has(conn.id)}
+                          onSelect={handleToggleSelect}
+                        />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Pagination */}
+              {connTotalPages > 1 && (
+                <div className="mt-3 flex items-center justify-between">
+                  <span className="text-xs text-zinc-500">
+                    {connStart + 1}–{connEnd} of {connections.length}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setConnectionPage(p => Math.max(1, p - 1))}
+                      disabled={connCurrentPage === 1}
+                      className="p-1.5 rounded hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                    >
+                      <ChevronLeft size={16} className="text-zinc-400" />
+                    </button>
+                    {connPageNumbers.map((page) => (
+                      <button
+                        key={page}
+                        onClick={() => setConnectionPage(page)}
+                        className={`min-w-[32px] h-8 rounded text-xs font-medium transition-colors cursor-pointer ${
+                          page === connCurrentPage
+                            ? 'bg-primary-600 text-white'
+                            : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setConnectionPage(p => Math.min(connTotalPages, p + 1))}
+                      disabled={connCurrentPage === connTotalPages}
+                      className="p-1.5 rounded hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                    >
+                      <ChevronRight size={16} className="text-zinc-400" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="mt-4 flex justify-stretch sm:justify-start">
                 <Button size="sm" onClick={() => setShowAddModal(true)}>
                   <Plus size={14} /> Add
@@ -2172,16 +2359,15 @@ export default function MediaProviderDetailPage() {
             )}
           </div>
 
-          {kindFilteredModels.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-10">
-              <p className="text-sm text-zinc-500 text-center">
-                {models.length > 0 && kind
-                  ? <>No {kindConfig?.label?.toLowerCase() || kind} models. Provider has {models.length} model(s) of other types — visit <Link to={`/providers/${providerId}`} className="text-primary-400 hover:underline">/providers/{providerId}</Link> to see all.</>
-                  : 'No models. Fetch from provider after adding a connection.'}
-              </p>
-            </div>
-          ) : (
-            <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap gap-3">
+              {/* Empty hint — shown inline, never hides the Add Model button */}
+              {kindFilteredModels.length === 0 && (
+                <p className="w-full text-xs text-zinc-500">
+                  {models.length > 0 && kind
+                    ? <>No {kindConfig?.label?.toLowerCase() || kind} models yet. Provider has {models.length} model(s) of other types — visit <Link to={`/providers/${providerId}`} className="text-primary-400 hover:underline">/providers/{providerId}</Link> to see all, or add one manually below.</>
+                    : 'No models yet. Fetch from provider or add one manually below.'}
+                </p>
+              )}
               {/* Active (enabled) models */}
               {(() => {
                 const disabledSet = new Set(disabledModelIds)
@@ -2209,6 +2395,62 @@ export default function MediaProviderDetailPage() {
                     />
                   )
                 })
+              })()}
+
+              {/* Custom models — custom aliases added by user */}
+              {(() => {
+                const disabledSet = new Set(disabledModelIds)
+                const searchQ = modelSearchQuery.trim().toLowerCase()
+                const addedFullModels = new Set(Object.values(modelAliases))
+                const knownModelIds = new Set(models.map((m) => typeof m === 'string' ? m : m.id))
+
+                const customModels = Object.entries(modelAliases)
+                  .filter(([alias, fullModel]) => {
+                    // Only show if not in models list and is a true alias (not just model ID == alias)
+                    if (!fullModel.startsWith(`${providerAlias}/`)) return false
+                    const modelId = fullModel.slice(providerAlias.length + 1)
+                    if (!knownModelIds.has(modelId)) return true
+                    return false
+                  })
+                  .map(([alias, fullModel]) => ({ id: fullModel.slice(providerAlias.length + 1), alias, fullModel }))
+
+                const filteredCustom = searchQ && customModels.some(m => m.id.toLowerCase().includes(searchQ))
+                  ? customModels.filter((m) => m.id.toLowerCase().includes(searchQ))
+                  : customModels
+
+                if (filteredCustom.length === 0) return null
+                return (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-xs text-zinc-500 mb-1">Custom Models ({filteredCustom.length}):</p>
+                    {filteredCustom.map((model) => {
+                      const isDisabled = disabledSet.has(model.id)
+                      const fullModelStr = `${providerAlias}/${model.id}`
+                      return (
+                        <ModelRow
+                          key={model.id}
+                          model={{ id: model.id }}
+                          fullModel={fullModelStr}
+                          alias={model.alias}
+                          copied={copied}
+                          onCopy={handleCopy}
+                          testStatus={modelTestResults[model.id]}
+                          onTest={connections.length > 0 ? () => handleTestModel(model.id) : undefined}
+                          isTesting={testingModelId === model.id}
+                          isCustom
+                          onDisable={() => handleDisableModel(model.id)}
+                          modelType={getModelType(model.id)}
+                          onTypeChange={connections.length > 0 ? (newType) => handleChangeModelType(model.id, newType) : undefined}
+                          onDeleteAlias={() => {
+                            const { default: client } = require('../api/client')
+                            client.delete('/models/alias', { params: { alias: model.alias } })
+                              .then(() => fetchAliases())
+                              .catch(() => {})
+                          }}
+                        />
+                      )
+                    })}
+                  </div>
+                )
               })()}
 
               {/* Search input — applies to all lists */}
@@ -2274,8 +2516,7 @@ export default function MediaProviderDetailPage() {
                 )
               })()}
 
-            </div>
-          )}
+          </div>
         </CardContent>
       </Card>
 
@@ -2306,7 +2547,8 @@ export default function MediaProviderDetailPage() {
         onCreated={fetchConnections} providerId={providerId} provider={provider} editConnection={selectedConnection} proxyPools={proxyPools} />
 
       <ConfirmModal isOpen={!!confirmState} onClose={() => setConfirmState(null)} onConfirm={confirmDelete}
-        title="Delete Connection" message="Are you sure you want to delete this connection? This cannot be undone." />
+        title={confirmState?.multiIds ? `Delete ${confirmState.multiIds.length} Connections` : 'Delete Connection'}
+        message={confirmState?.multiIds ? `Are you sure you want to delete ${confirmState.multiIds.length} selected connection(s)? This cannot be undone.` : 'Are you sure you want to delete this connection? This cannot be undone.'} />
 
       <AddCustomModelModal
         isOpen={showAddCustomModel}

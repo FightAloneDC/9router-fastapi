@@ -15,7 +15,7 @@ class JinaAiConfig(BaseProviderConfig):
     PROVIDER_ID: str = "jina-ai"
     ALIAS: str = "jina"
     BASE_URL: str = "https://api.jina.ai/v1"
-    SERVICE_KINDS: list[str] = ["embedding"]
+    SERVICE_KINDS: list[str] = ["embedding", "rerank"]
 
     # ── Model type overrides ────────────────────────────────────────────
     MODEL_TYPE_OVERRIDES: dict[str, str] = {

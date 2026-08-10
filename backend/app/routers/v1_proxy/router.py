@@ -9,6 +9,7 @@ from .embeddings import router as embeddings_router
 from .images import router as images_router
 from .audio import router as audio_router
 from .search import router as search_router
+from .rerank import router as rerank_router
 from .models import router as models_router
 from .web import router as web_router
 
@@ -23,5 +24,6 @@ router.include_router(embeddings_router)
 router.include_router(images_router)
 router.include_router(audio_router)
 router.include_router(search_router)
+router.include_router(rerank_router)
 router.include_router(web_router)
 router.include_router(models_router)  # last — has catch-all /models/{path}

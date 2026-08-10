@@ -15,7 +15,7 @@ class VoyageAiConfig(BaseProviderConfig):
     PROVIDER_ID: str = "voyage-ai"
     ALIAS: str = "voyage"
     BASE_URL: str = "https://api.voyageai.com/v1"
-    SERVICE_KINDS: list[str] = ["embedding"]
+    SERVICE_KINDS: list[str] = ["embedding", "rerank"]
 
     # ── Model type overrides ────────────────────────────────────────────
     MODEL_TYPE_OVERRIDES: dict[str, str] = {

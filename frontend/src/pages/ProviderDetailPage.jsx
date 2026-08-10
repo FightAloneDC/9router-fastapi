@@ -44,6 +44,7 @@ function isConnectionOAuth(conn, providerId) {
 const TYPE_BADGE_STYLES = {
   llm: 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25',
   embedding: 'bg-blue-500/15 text-blue-400 hover:bg-blue-500/25',
+  rerank: 'bg-indigo-500/15 text-indigo-400 hover:bg-indigo-500/25',
   tts: 'bg-purple-500/15 text-purple-400 hover:bg-purple-500/25',
   stt: 'bg-orange-500/15 text-orange-400 hover:bg-orange-500/25',
   image: 'bg-pink-500/15 text-pink-400 hover:bg-pink-500/25',
@@ -56,6 +57,8 @@ const TYPE_BADGE_STYLES = {
 
 function inferModelType(modelId) {
   const mid = (modelId || '').toLowerCase()
+  // rerank must precede embedding — e.g. gte-rerank-v2 contains "gte-"
+  if (/rerank/.test(mid)) return 'rerank'
   if (/embed|e5-|bge-|gte-|nomic|cohere-embed|voyage-/.test(mid)) return 'embedding'
   if (/tts|speech|audio|voice/.test(mid)) return 'tts'
   if (/whisper|transcri|stt|asr/.test(mid)) return 'stt'
@@ -948,7 +951,7 @@ function ModelRow({ model, fullModel, alias, copied, onCopy, onSetAlias, onDelet
               </button>
               {showTypeDropdown && (
                 <div className="absolute left-0 top-full mt-1 z-50 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg py-1 min-w-[100px]">
-                  {['llm', 'embedding', 'tts', 'stt', 'image', 'webSearch', 'webFetch'].map(t => (
+                  {['llm', 'embedding', 'rerank', 'tts', 'stt', 'image', 'webSearch', 'webFetch'].map(t => (
                     <button
                       key={t}
                       onClick={(e) => { e.stopPropagation(); onTypeChange(t); setShowTypeDropdown(false) }}

@@ -1,5 +1,6 @@
 import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
+import { Loader2 } from 'lucide-react'
 
 const variants = {
   primary: 'bg-primary-600 hover:bg-primary-700 text-white shadow-sm',
@@ -23,6 +24,7 @@ export default function Button({
   className = '',
   disabled = false,
   fullWidth = false,
+  loading = false,
   ...props
 }) {
   return (
@@ -36,9 +38,10 @@ export default function Button({
           className
         )
       )}
-      disabled={disabled}
+      disabled={disabled || loading}
       {...props}
     >
+      {loading && <Loader2 className="h-4 w-4 animate-spin" />}
       {children}
     </button>
   )

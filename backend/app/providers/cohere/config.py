@@ -11,7 +11,7 @@ class CohereConfig(BaseProviderConfig):
     PROVIDER_ID: str = "cohere"
     ALIAS: str = "co"
     BASE_URL: str = "https://api.cohere.com/compatibility/v1"
-    SERVICE_KINDS: list[str] = ["llm", "embedding"]
+    SERVICE_KINDS: list[str] = ["llm", "embedding", "rerank"]
 
 
 class CohereMetadata(BaseMetadata):

@@ -26,6 +26,7 @@ _COMPATIBLE_PREFIXES = {
 # ── Media kinds (static — not provider-specific) ───────────────────────────
 _MEDIA_KINDS = [
     {"id": "embedding", "label": "Embedding", "icon": "Binary", "endpoint": {"method": "POST", "path": "/v1/embeddings"}},
+    {"id": "rerank", "label": "Rerank", "icon": "ArrowUpDown", "endpoint": {"method": "POST", "path": "/v1/rerank"}},
     {"id": "tts", "label": "Text To Speech", "icon": "Volume2", "endpoint": {"method": "POST", "path": "/v1/audio/speech"}},
     {"id": "stt", "label": "Speech To Text", "icon": "Mic", "endpoint": {"method": "POST", "path": "/v1/audio/transcriptions"}},
     {"id": "webSearch", "label": "Web Search", "icon": "Search", "endpoint": {"method": "POST", "path": "/v1/search"}},

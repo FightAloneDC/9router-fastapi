@@ -65,6 +65,10 @@ def infer_model_type(model_id: str) -> str:
     if model_id in overrides:
         return overrides[model_id]
 
+    # Rerank models (must precede embedding — e.g. gte-rerank-v2 contains "gte-")
+    if re.search(r"rerank", mid):
+        return "rerank"
+
     # Embedding models
     if re.search(r"embed|e5-|bge-|gte-|nomic|cohere-embed|voyage-", mid):
         return "embedding"

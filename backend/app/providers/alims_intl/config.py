@@ -21,7 +21,7 @@ class AlimsIntlConfig(BaseProviderConfig):
     BASE_URL: str = (
         "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     )
-    SERVICE_KINDS: list[str] = ["llm"]
+    SERVICE_KINDS: list[str] = ["llm", "rerank"]
 
     # ── Bulk Import ─────────────────────────────────────────────────────
     SUPPORTS_BULK_IMPORT: bool = True

@@ -8,6 +8,7 @@ import client from '../api/client'
 const TYPE_BADGE_STYLES = {
   llm: 'bg-emerald-500/15 text-emerald-400',
   embedding: 'bg-blue-500/15 text-blue-400',
+  rerank: 'bg-indigo-500/15 text-indigo-400',
   tts: 'bg-purple-500/15 text-purple-400',
   stt: 'bg-orange-500/15 text-orange-400',
   image: 'bg-pink-500/15 text-pink-400',
