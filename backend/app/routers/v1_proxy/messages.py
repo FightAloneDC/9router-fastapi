@@ -16,8 +16,6 @@ from app.services.proxy import (
     get_combo_strategy,
     clear_connection_error,
     update_connection_usage,
-    calculate_cooldown,
-    mark_connection_unavailable,
 )
 from app.services.message_translator import (
     claude_to_openai_request,
@@ -26,9 +24,12 @@ from app.services.message_translator import (
 )
 from app.services.usage_tracking import save_request_tracking
 from app.services.active_requests import track_request_start, track_request_end
-from app.models.provider import ProviderConnection
 
-from .shared import _should_fallback_on_error
+from .shared import (
+    _should_fallback_on_error,
+    _maybe_refresh_on_auth_error,
+    _mark_conn_failed,
+)
 
 router = APIRouter()
 
@@ -91,6 +92,7 @@ async def messages_endpoint(
 
     # Fallback loop with exclude
     exclude_ids: set[str] = set()
+    refreshed_ids: set[str] = set()
     last_error_detail: str | None = None
     last_error_status: int = 503
 
@@ -204,11 +206,17 @@ async def messages_endpoint(
             last_error_detail = e.response.text[:500]
             last_error_status = e.response.status_code
 
-            # ── Qoder auto-refresh on 401/403 ──
-            if e.response.status_code in (401, 403):
-                from app.routers.v1_proxy.shared import _try_qoder_token_refresh
-                if await _try_qoder_token_refresh(target, db):
-                    continue
+            # Auth-token refresh via provider handler on 401/403
+            conn_id = target.connection_id
+            if (
+                conn_id
+                and conn_id not in refreshed_ids
+                and await _maybe_refresh_on_auth_error(
+                    target, db, e.response.status_code,
+                )
+            ):
+                refreshed_ids.add(conn_id)
+                continue
 
             if not _should_fallback_on_error(e.response.status_code, e.response.text):
                 try:
@@ -229,21 +237,10 @@ async def messages_endpoint(
                     },
                     headers={"X-Request-Id": request_id},
                 )
-            if target.connection_id:
-                current_backoff: int = 0
-                conn_obj = await db.get(ProviderConnection, uuid.UUID(target.connection_id))
-                if conn_obj and conn_obj.data:
-                    current_backoff = json.loads(conn_obj.data).get("backoffLevel", 0)
-                cooldown_ms, new_level = calculate_cooldown(
-                    e.response.status_code, last_error_detail,
-                    backoff_level=current_backoff,
-                )
-                await mark_connection_unavailable(
-                    db, target.connection_id, cooldown_ms, model_str, new_level,
-                    status_code=e.response.status_code,
-                    error_detail=last_error_detail,
-                )
-                exclude_ids.add(target.connection_id)
+            await _mark_conn_failed(
+                db, target.connection_id, e.response.status_code,
+                last_error_detail, model_str, exclude_ids,
+            )
             continue
         except httpx.ConnectError as e:
             track_request_end(active_request_id, status="error")

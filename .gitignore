@@ -11,6 +11,7 @@ __pycache__/
 venv/
 ENV/
 env/
+.venv*/
 
 #-------------------------
 # uv
@@ -58,6 +59,7 @@ Thumbs.db
 # Development Folders
 #-------------------------
 **/__dev/
+.ruff_cache/
 
 #-------------------------
 # Development Files
@@ -95,17 +97,36 @@ tmp/
 dist/
 build/
 
-# Agent folders
+#-------------------------
+# AGENT / AI TOOL FOLDERS
+#-------------------------
+_bmad-output/
+_bmad/
+.agent/
 .agents/
+.bmad/
 .claude/
+.claw/
+.clawd-agents/
+.cline/
 .codex/
+.commandcode/
 .hermes/
+.kimi-code/
 .openclaude/
+.opencode/
+.qwen/
+.reasonix/
+.superpowers/
+.zcode/
+CLAUDE.md
+reasonix.toml
+superpowers/
 
+#-------------------------
 # Database backups (contain sensitive data)
+#-------------------------
 backups/
-
-docs/superpowers/
 
 # Local stream sniff captures
 backend/tests/_stream_sniff/

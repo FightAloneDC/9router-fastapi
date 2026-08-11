@@ -68,7 +68,6 @@ export default function ChatPage() {
     setLoadingConversations(true)
     try {
       const res = await chatApi.getConversations()
-      console.log('[chat] conversations loaded:', res.data)
       setConversations(res.data || [])
     } catch (e) {
       console.error('[chat] fetchConversations error:', e)
@@ -170,9 +169,7 @@ export default function ChatPage() {
     if (!convId) {
       try {
         const title = userContent.length > 50 ? userContent.slice(0, 50) + '...' : userContent
-        console.log('[chat] creating conversation:', title, selectedModel)
         const res = await chatApi.createConversation({ title, model: selectedModel })
-        console.log('[chat] conversation created:', res.data)
         convId = res.data.id
         setCurrentConversationId(convId)
         fetchConversations()

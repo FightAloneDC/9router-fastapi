@@ -18,8 +18,6 @@ from app.services.proxy import (
     select_connection_for_provider,
     clear_connection_error,
     update_connection_usage,
-    calculate_cooldown,
-    mark_connection_unavailable,
     parse_tts_model,
     _resolve_provider_alias,
     _resolve_base_url,
@@ -29,7 +27,7 @@ from app.services.usage_tracking import save_request_tracking
 from app.models.provider import ProviderConnection
 from app.services.stt_adapters import resolve_audio_mime
 
-from .shared import _should_fallback_on_error
+from .shared import _should_fallback_on_error, _mark_conn_failed
 
 router = APIRouter()
 
@@ -238,17 +236,10 @@ async def audio_speech(
                     content={"error": {"message": e.response.text[:500]}},
                     headers={"X-Request-Id": request_id},
                 )
-            if conn_id:
-                conn_row = await db.execute(select(ProviderConnection).where(ProviderConnection.id == conn_id))
-                conn_obj = conn_row.scalar_one_or_none()
-                current_backoff: int = json.loads(conn_obj.data).get("backoffLevel", 0) if conn_obj and conn_obj.data else 0
-                cooldown_ms, new_level = calculate_cooldown(e.response.status_code, last_error["detail"], backoff_level=current_backoff)
-                await mark_connection_unavailable(
-                    db, conn_id, cooldown_ms, tts_model, new_level,
-                    status_code=e.response.status_code,
-                    error_detail=last_error["detail"],
-                )
-                exclude_ids.add(conn_id)
+            await _mark_conn_failed(
+                db, conn_id, e.response.status_code,
+                last_error["detail"], tts_model, exclude_ids,
+            )
             continue
         except httpx.ConnectError as e:
             last_error = {"status": 503, "detail": f"Upstream connect error: {e}"}
@@ -460,17 +451,10 @@ async def audio_transcriptions(
                     content={"error": {"message": e.response.text[:500]}},
                     headers={"X-Request-Id": request_id},
                 )
-            if conn_id:
-                conn_row = await db.execute(select(ProviderConnection).where(ProviderConnection.id == conn_id))
-                conn_obj = conn_row.scalar_one_or_none()
-                current_backoff: int = json.loads(conn_obj.data).get("backoffLevel", 0) if conn_obj and conn_obj.data else 0
-                cooldown_ms, new_level = calculate_cooldown(e.response.status_code, last_error["detail"], backoff_level=current_backoff)
-                await mark_connection_unavailable(
-                    db, conn_id, cooldown_ms, model_id, new_level,
-                    status_code=e.response.status_code,
-                    error_detail=last_error["detail"],
-                )
-                exclude_ids.add(conn_id)
+            await _mark_conn_failed(
+                db, conn_id, e.response.status_code,
+                last_error["detail"], model_id, exclude_ids,
+            )
             continue
         except httpx.ConnectError as e:
             last_error = {"status": 503, "detail": f"Upstream connect error: {e}"}

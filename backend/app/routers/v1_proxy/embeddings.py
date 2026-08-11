@@ -8,7 +8,6 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from app.database import get_db
 from app.services.api_key_auth import validate_api_key
@@ -17,14 +16,16 @@ from app.services.proxy import (
     get_combo_strategy,
     clear_connection_error,
     update_connection_usage,
-    calculate_cooldown,
-    mark_connection_unavailable,
 )
 from app.services.usage_tracking import save_request_tracking
 from app.services.active_requests import track_request_start, track_request_end
-from app.models.provider import ProviderConnection
 
-from .shared import _build_embeddings_url, _build_embeddings_body, _should_fallback_on_error
+from .shared import (
+    _build_embeddings_url,
+    _build_embeddings_body,
+    _should_fallback_on_error,
+    _mark_conn_failed,
+)
 
 router = APIRouter()
 
@@ -144,23 +145,10 @@ async def embeddings(
                     status_code=e.response.status_code,
                     content={"error": {"message": last_error_detail}},
                 )
-            if target.connection_id:
-                conn_row = await db.execute(
-                    select(ProviderConnection).where(ProviderConnection.id == target.connection_id)
-                )
-                conn_obj = conn_row.scalar_one_or_none()
-                current_backoff: int = 0
-                if conn_obj and conn_obj.data:
-                    current_backoff = json.loads(conn_obj.data).get("backoffLevel", 0)
-                cooldown_ms, new_level = calculate_cooldown(
-                    e.response.status_code, last_error_detail, backoff_level=current_backoff,
-                )
-                await mark_connection_unavailable(
-                    db, target.connection_id, cooldown_ms, model, new_level,
-                    status_code=e.response.status_code,
-                    error_detail=last_error_detail,
-                )
-                exclude_ids.add(target.connection_id)
+            await _mark_conn_failed(
+                db, target.connection_id, e.response.status_code,
+                last_error_detail, model, exclude_ids,
+            )
             continue
         except httpx.ConnectError as e:
             track_request_end(active_request_id, status="error")

@@ -8,7 +8,6 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from app.database import get_db
 from app.services.api_key_auth import validate_api_key
@@ -18,18 +17,15 @@ from app.services.proxy import (
     select_connection_for_provider,
     clear_connection_error,
     update_connection_usage,
-    calculate_cooldown,
-    mark_connection_unavailable,
     _resolve_provider_alias,
     _resolve_base_url,
 )
 from app.services.image_adapters import IMAGE_ADAPTERS, image_comfyui, _stub_adapter
 from app.services.usage_tracking import save_request_tracking
-from app.models.provider import ProviderConnection
 from app.providers.provider import Provider
 from app.routers.providers.helpers import _get_provider_config
 
-from .shared import _should_fallback_on_error
+from .shared import _should_fallback_on_error, _mark_conn_failed
 
 router = APIRouter()
 
@@ -248,17 +244,10 @@ async def images_generations(
                     content={"error": {"message": e.response.text[:500]}},
                     headers={"X-Request-Id": request_id},
                 )
-            if conn_id:
-                conn_row = await db.execute(select(ProviderConnection).where(ProviderConnection.id == conn_id))
-                conn_obj = conn_row.scalar_one_or_none()
-                current_backoff: int = json.loads(conn_obj.data).get("backoffLevel", 0) if conn_obj and conn_obj.data else 0
-                cooldown_ms, new_level = calculate_cooldown(e.response.status_code, last_error["detail"], backoff_level=current_backoff)
-                await mark_connection_unavailable(
-                    db, conn_id, cooldown_ms, image_model, new_level,
-                    status_code=e.response.status_code,
-                    error_detail=last_error["detail"],
-                )
-                exclude_ids.add(conn_id)
+            await _mark_conn_failed(
+                db, conn_id, e.response.status_code,
+                last_error["detail"], image_model, exclude_ids,
+            )
             continue
         except httpx.ConnectError as e:
             last_error = {"status": 503, "detail": f"Upstream connect error: {e}"}

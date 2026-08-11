@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Terminal, ArrowDownToLine, Trash2, Search, Wifi, WifiOff, RefreshCw } from 'lucide-react'
 import { consoleApi } from '../api/console'
+import { subscribeConsoleStream } from '../api/consoleStream'
 import { useAuthStore } from '../stores/authStore'
 
 const LEVEL_COLORS = {
@@ -28,7 +29,6 @@ export default function ConsoleLogPage() {
   const [usePolling, setUsePolling] = useState(false)
   const endRef = useRef(null)
   const containerRef = useRef(null)
-  const wsRef = useRef(null)
   const token = useAuthStore((s) => s.token)
 
   const addEntries = useCallback((entries) => {
@@ -38,56 +38,19 @@ export default function ConsoleLogPage() {
     })
   }, [])
 
-  // WebSocket connection
+  // Shared WebSocket (StrictMode-safe: deferred close on unmount)
   useEffect(() => {
     if (!token) return
 
-    let ws
-    let retryTimer
-
-    const connect = () => {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const host = window.location.host
-      const wsUrl = `${proto}//${host}/api/console/ws`
-
-      ws = new WebSocket(wsUrl)
-      wsRef.current = ws
-
-      ws.onopen = () => {
-        setConnected(true)
-        setUsePolling(false)
-      }
-
-      ws.onmessage = (event) => {
-        try {
-          const entry = JSON.parse(event.data)
-          addEntries([entry])
-        } catch {
-          // ignore parse errors
-        }
-      }
-
-      ws.onclose = () => {
-        setConnected(false)
-        // Fall back to polling
-        setUsePolling(true)
-        retryTimer = setTimeout(connect, 5000)
-      }
-
-      ws.onerror = () => {
-        ws.close()
-      }
+    const onEntry = (entry) => {
+      addEntries([entry])
+    }
+    const onStatus = (isConnected) => {
+      setConnected(isConnected)
+      setUsePolling(!isConnected)
     }
 
-    connect()
-
-    return () => {
-      clearTimeout(retryTimer)
-      if (ws) {
-        ws.onclose = null
-        ws.close()
-      }
-    }
+    return subscribeConsoleStream(onEntry, onStatus)
   }, [token, addEntries])
 
   // Polling fallback

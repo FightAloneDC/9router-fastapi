@@ -116,6 +116,19 @@ class BaseProviderHandler:
         """
         return headers, body
 
+    async def try_refresh_on_auth_error(
+        self,
+        db: object,
+        connection_id: str,
+    ) -> bool:
+        """Refresh credentials after an auth-related upstream failure.
+
+        Override in providers that support token refresh (e.g. OAuth).
+        Returns True if credentials were refreshed and the caller should
+        retry the request.
+        """
+        return False
+
     async def validate(self, api_key: str, data: dict | None = None) -> ValidateResult:
         """Validate provider credentials."""
         if not api_key:

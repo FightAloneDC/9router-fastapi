@@ -6,8 +6,10 @@ import time
 
 import httpx
 from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.provider import ProviderConnection
 from app.services.proxy import (
     calculate_cooldown,
     mark_connection_unavailable,
@@ -88,15 +90,63 @@ async def _mark_upstream_stream_error(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def _try_qoder_token_refresh(target: ProxyTarget, db) -> bool:
-    """Try to refresh Qoder token on 401/403. Returns True if refreshed."""
-    if target.provider != "qoder" or not target.connection_id:
+async def _maybe_refresh_on_auth_error(
+    target: ProxyTarget,
+    db: AsyncSession,
+    status_code: int | None = None,
+) -> bool:
+    """Ask the provider handler to refresh after an auth failure.
+
+    When status_code is set, only 401/403 trigger a refresh attempt.
+    When status_code is None (e.g. request-build failure), the handler
+    decides whether refresh applies.
+    """
+    if not target.connection_id:
+        return False
+    if status_code is not None and status_code not in (401, 403):
         return False
     try:
-        from app.providers.qoder.auth import try_refresh_connection
-        return await try_refresh_connection(db, target.connection_id)
-    except Exception:
+        from app.providers.provider import Provider
+
+        handler = Provider(target.provider).handler()
+        return await handler.try_refresh_on_auth_error(
+            db, target.connection_id,
+        )
+    except (ValueError, ModuleNotFoundError, Exception):
         return False
+
+
+async def _mark_conn_failed(
+    db: AsyncSession,
+    connection_id: str | None,
+    status_code: int,
+    detail: str,
+    model: str | None,
+    exclude_ids: set[str],
+) -> None:
+    """Read backoff, apply cooldown, and exclude connection from retry."""
+    if not connection_id:
+        return
+    conn_row = await db.execute(
+        select(ProviderConnection).where(
+            ProviderConnection.id == connection_id
+        )
+    )
+    conn_obj = conn_row.scalar_one_or_none()
+    current_backoff: int = 0
+    if conn_obj and conn_obj.data:
+        current_backoff = json.loads(conn_obj.data).get(
+            "backoffLevel", 0
+        )
+    cooldown_ms, new_level = calculate_cooldown(
+        status_code, detail, backoff_level=current_backoff,
+    )
+    await mark_connection_unavailable(
+        db, connection_id, cooldown_ms, model, new_level,
+        status_code=status_code,
+        error_detail=detail,
+    )
+    exclude_ids.add(connection_id)
 
 
 async def _build_provider_request(
@@ -110,16 +160,21 @@ async def _build_provider_request(
     Returns:
         (raw_body_bytes, signed_headers) for providers with custom encoding,
         (None, None) for standard providers that use JSON body.
+
+    Raises:
+        Exception from handler.build_request_body() so callers can refresh
+        tokens or exclude the connection. Only Provider lookup failures are
+        swallowed.
     """
     try:
         from app.providers.provider import Provider
-        p = Provider(target.provider)
-        handler = p.handler()
-        if hasattr(handler, "build_request_body"):
-            raw_body, headers = await handler.build_request_body(target.model, body, conn_data)
-            return raw_body, headers
+        handler = Provider(target.provider).handler()
     except (ValueError, ModuleNotFoundError):
-        pass
+        return None, None
+    if hasattr(handler, "build_request_body"):
+        return await handler.build_request_body(
+            target.model, body, conn_data,
+        )
     return None, None
 
 

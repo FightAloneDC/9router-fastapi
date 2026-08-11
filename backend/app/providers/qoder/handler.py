@@ -52,6 +52,16 @@ class QoderHandler(BaseProviderHandler):
                 latency_ms=int((time.monotonic() - start) * 1000),
             )
 
+    async def try_refresh_on_auth_error(
+        self,
+        db: object,
+        connection_id: str,
+    ) -> bool:
+        """Refresh Qoder job token after 401/403 or build failure."""
+        from app.providers.qoder.auth import try_refresh_connection
+
+        return await try_refresh_connection(db, connection_id)
+
     def build_upstream_url(self, base_url: str, stream: bool = False, data: dict | None = None, model: str = "") -> str:
         """Qoder uses COSY-signed endpoint with Encode=1."""
         from app.providers.qoder.constants import QODER_CHAT_URL_ENCODED

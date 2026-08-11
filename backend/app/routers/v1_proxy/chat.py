@@ -16,8 +16,6 @@ from app.services.proxy import (
     get_combo_strategy,
     clear_connection_error,
     update_connection_usage,
-    calculate_cooldown,
-    mark_connection_unavailable,
 )
 from app.services.quota import observe_upstream_response
 from app.services.usage_tracking import save_request_tracking
@@ -29,7 +27,14 @@ from app.services.message_translator import (
     openai_to_claude_request,
     OpenaiStreamTranslator,
 )
-from .shared import _stream_response, _non_stream_response, _should_fallback_on_error, _build_provider_request
+from .shared import (
+    _stream_response,
+    _non_stream_response,
+    _should_fallback_on_error,
+    _build_provider_request,
+    _maybe_refresh_on_auth_error,
+    _mark_conn_failed,
+)
 
 router = APIRouter()
 
@@ -69,6 +74,7 @@ async def chat_completions(
 
     # Fallback loop with exclude — retries a new connection on each failure
     exclude_ids: set[str] = set()
+    refreshed_ids: set[str] = set()
     last_error_detail: str | None = None
     last_error_status: int = 503
 
@@ -114,14 +120,18 @@ async def chat_completions(
                     if signed_headers:
                         target.headers = signed_headers
                 except Exception as e:
-                    # ── Qoder auto-refresh on build failure (expired token) ──
-                    if target.provider == "qoder" and target.connection_id:
-                        from app.routers.v1_proxy.shared import _try_qoder_token_refresh
-                        if await _try_qoder_token_refresh(target, db):
-                            continue
+                    # Auth-token refresh once per connection, then retry
+                    conn_id = target.connection_id
+                    if (
+                        conn_id
+                        and conn_id not in refreshed_ids
+                        and await _maybe_refresh_on_auth_error(target, db)
+                    ):
+                        refreshed_ids.add(conn_id)
+                        continue
                     last_error_detail = f"Provider request build failed: {str(e)}"
                     last_error_status = 500
-                    exclude_ids.add(target.connection_id)
+                    exclude_ids.add(conn_id)
                     continue
 
         try:
@@ -216,11 +226,17 @@ async def chat_completions(
             last_error_detail = e.response.text[:500]
             last_error_status = e.response.status_code
 
-            # ── Qoder auto-refresh on 401/403 ──
-            if e.response.status_code in (401, 403):
-                from app.routers.v1_proxy.shared import _try_qoder_token_refresh
-                if await _try_qoder_token_refresh(target, db):
-                    continue
+            # Auth-token refresh via provider handler on 401/403
+            conn_id = target.connection_id
+            if (
+                conn_id
+                and conn_id not in refreshed_ids
+                and await _maybe_refresh_on_auth_error(
+                    target, db, e.response.status_code,
+                )
+            ):
+                refreshed_ids.add(conn_id)
+                continue
 
             if not _should_fallback_on_error(e.response.status_code, e.response.text):
                 return JSONResponse(
@@ -233,25 +249,10 @@ async def chat_completions(
                     exclude_ids.add(target.connection_id)
                 continue
             # Cooldown + exclude
-            if target.connection_id:
-                # Read current backoff level from connection data
-                conn_row = await db.execute(
-                    select(ProviderConnection).where(ProviderConnection.id == target.connection_id)
-                )
-                conn_obj = conn_row.scalar_one_or_none()
-                current_backoff: int = 0
-                if conn_obj and conn_obj.data:
-                    current_backoff = json.loads(conn_obj.data).get("backoffLevel", 0)
-                cooldown_ms, new_level = calculate_cooldown(
-                    e.response.status_code, last_error_detail,
-                    backoff_level=current_backoff,
-                )
-                await mark_connection_unavailable(
-                    db, target.connection_id, cooldown_ms, model, new_level,
-                    status_code=e.response.status_code,
-                    error_detail=last_error_detail,
-                )
-                exclude_ids.add(target.connection_id)
+            await _mark_conn_failed(
+                db, target.connection_id, e.response.status_code,
+                last_error_detail, model, exclude_ids,
+            )
             continue
 
         except httpx.ConnectError as e:
