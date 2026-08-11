@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,7 @@ from app.database import get_db
 from app.models.provider import ProviderConnection
 from app.models.quota_cache import QuotaCache
 from app.routers.auth import get_current_user
+from app.services.proxy import invalidate_connection_cache
 from app.services.quota import (
     QuotaItem as ServiceQuotaItem,
     UsageResponse,
@@ -94,43 +95,237 @@ class ProviderQuota(BaseModel):
     plan: Optional[str] = None
 
 
+class QuotaListResponse(BaseModel):
+    """Paginated quota tracker payload."""
+
+    items: list[ProviderQuota]
+    total: int
+    page: int
+    page_size: int
+    provider_types: list[str]
+    stats: dict
+
+
+# --- Helpers ---
+
+
+def _parse_cached_quotas(raw: str | None) -> list[QuotaItem]:
+    try:
+        data = json.loads(raw) if raw else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+    items: list[QuotaItem] = []
+    for q in data:
+        if not isinstance(q, dict) or "name" not in q:
+            continue
+        try:
+            items.append(
+                QuotaItem(
+                    name=str(q.get("name") or ""),
+                    used=int(q.get("used") or 0),
+                    total=int(q.get("total") or 0),
+                    reset_at=q.get("reset_at"),
+                    remaining_percentage=float(
+                        q.get("remaining_percentage") or 0
+                    ),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+    return items
+
+
+def _min_remaining(quotas: list[QuotaItem]) -> float:
+    if not quotas:
+        return 100.0
+    return min(q.remaining_percentage for q in quotas)
+
+
+def _earliest_reset_ms(quotas: list[QuotaItem]) -> float:
+    times: list[float] = []
+    for q in quotas:
+        if not q.reset_at:
+            continue
+        dt = _parse_iso(q.reset_at)
+        if dt is not None:
+            times.append(dt.timestamp() * 1000)
+    return min(times) if times else float("inf")
+
+
 # --- Endpoints ---
 
 
-@router.get("/quota", response_model=list[ProviderQuota])
+@router.get("/quota", response_model=QuotaListResponse)
 async def get_quota(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    provider: str | None = Query(
+        None, description="Filter by provider id"
+    ),
+    status: str | None = Query(
+        None, description="active | inactive"
+    ),
+    search: str | None = Query(
+        None, description="Match connection name"
+    ),
+    sort: str | None = Query(
+        None,
+        description="remaining-asc | remaining-desc",
+    ),
+    expiring_first: bool = Query(False),
     db: AsyncSession = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    """List connections of providers that support quota
-    tracking, each with empty quotas (real usage data is
-    fetched per connection via /usage/{connection_id}).
-    """
-    result = await db.execute(
-        select(ProviderConnection)
-        .where(
-            ProviderConnection.provider.in_(
-                supported_providers()
-            )
-        )
-        .order_by(
-            ProviderConnection.provider,
-            ProviderConnection.priority,
-        )
-    )
-    connections = result.scalars().all()
+    """Paginated connections for the quota tracker.
 
-    return [
+    Quotas come from quota_cache (no upstream poll). Call
+    GET /usage/{id}?force=true to refresh one connection.
+    """
+    supported = supported_providers()
+    stmt = (
+        select(ProviderConnection, QuotaCache)
+        .outerjoin(
+            QuotaCache,
+            QuotaCache.connection_id == ProviderConnection.id,
+        )
+        .where(ProviderConnection.provider.in_(supported))
+    )
+    if provider:
+        stmt = stmt.where(ProviderConnection.provider == provider)
+    if status == "active":
+        stmt = stmt.where(ProviderConnection.is_active.is_(True))
+    elif status == "inactive":
+        stmt = stmt.where(ProviderConnection.is_active.is_(False))
+    if search and search.strip():
+        q = f"%{search.strip()}%"
+        stmt = stmt.where(ProviderConnection.name.ilike(q))
+
+    stmt = stmt.order_by(
+        ProviderConnection.provider,
+        ProviderConnection.priority,
+        ProviderConnection.id,
+    )
+    rows = (await db.execute(stmt)).all()
+
+    # Distinct providers (unfiltered by provider/status/search
+    # except supported set) for the filter dropdown.
+    types_result = await db.execute(
+        select(ProviderConnection.provider)
+        .where(ProviderConnection.provider.in_(supported))
+        .distinct()
+        .order_by(ProviderConnection.provider)
+    )
+    provider_types = [r[0] for r in types_result.all()]
+
+    enriched: list[tuple[ProviderConnection, list[QuotaItem], str | None]] = []
+    active_with_limits = 0
+    low_quotas = 0
+    for conn, cache in rows:
+        quotas = _parse_cached_quotas(
+            cache.quotas if cache else None
+        )
+        plan = cache.plan if cache else None
+        if conn.is_active and quotas:
+            active_with_limits += 1
+        low_quotas += sum(
+            1 for q in quotas if q.remaining_percentage <= 30
+        )
+        enriched.append((conn, quotas, plan))
+
+    if sort == "remaining-asc":
+        enriched.sort(key=lambda x: _min_remaining(x[1]))
+    elif sort == "remaining-desc":
+        enriched.sort(
+            key=lambda x: _min_remaining(x[1]), reverse=True
+        )
+    if expiring_first:
+        enriched.sort(key=lambda x: _earliest_reset_ms(x[1]))
+
+    total = len(enriched)
+    start = (page - 1) * page_size
+    page_rows = enriched[start:start + page_size]
+
+    items = [
         ProviderQuota(
             id=str(conn.id),
             provider=conn.provider,
             name=conn.name,
             is_active=conn.is_active,
-            quotas=[],
-            plan=None,
+            quotas=quotas,
+            plan=plan,
         )
-        for conn in connections
+        for conn, quotas, plan in page_rows
     ]
+
+    return QuotaListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        provider_types=provider_types,
+        stats={
+            "total": total,
+            "active_with_limits": active_with_limits,
+            "low_quotas": low_quotas,
+        },
+    )
+
+
+@router.post("/quota/bulk-disable-depleted")
+async def bulk_disable_depleted(
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Disable active connections whose cached quota is ≤ 5%."""
+    supported = supported_providers()
+    rows = (
+        await db.execute(
+            select(ProviderConnection, QuotaCache)
+            .outerjoin(
+                QuotaCache,
+                QuotaCache.connection_id
+                == ProviderConnection.id,
+            )
+            .where(
+                ProviderConnection.provider.in_(supported),
+                ProviderConnection.is_active.is_(True),
+            )
+        )
+    ).all()
+
+    updated = 0
+    for conn, cache in rows:
+        quotas = _parse_cached_quotas(
+            cache.quotas if cache else None
+        )
+        if any(q.remaining_percentage <= 5 for q in quotas):
+            conn.is_active = False
+            invalidate_connection_cache(str(conn.id))
+            updated += 1
+
+    await db.commit()
+    return {"updated": updated}
+
+
+@router.post("/quota/bulk-enable-inactive")
+async def bulk_enable_inactive(
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Re-enable all inactive quota-tracked connections."""
+    supported = supported_providers()
+    result = await db.execute(
+        select(ProviderConnection).where(
+            ProviderConnection.provider.in_(supported),
+            ProviderConnection.is_active.is_(False),
+        )
+    )
+    connections = result.scalars().all()
+    for conn in connections:
+        conn.is_active = True
+        invalidate_connection_cache(str(conn.id))
+    await db.commit()
+    return {"updated": len(connections)}
 
 
 @router.get(

@@ -24,6 +24,7 @@ import Card, { CardContent, CardHeader } from '../components/ui/Card'
 import { usageApi } from '../api/usage'
 import ProviderTopology from '../components/ProviderTopology'
 import useCatalogStore from '../stores/catalogStore'
+import { subscribeUsageStream } from '../api/usageStream'
 
 // --- Number formatting helpers ---
 
@@ -1210,16 +1211,13 @@ export default function UsagePage() {
     }
   }, [period, fetchData, activeTab])
 
-  // SSE for real-time updates — lightweight fields only (no full REST re-fetch)
+  // SSE for real-time updates — shared socket (StrictMode-safe)
   useEffect(() => {
     if (activeTab !== 'overview') return
     const token = localStorage.getItem('token')
     if (!token) return
 
-    let eventSource
-    let reconnectTimer
-
-    const handleSSEData = (data) => {
+    return subscribeUsageStream(token, (data) => {
       if (data.activeRequests) {
         setActiveRequests(data.activeRequests)
       }
@@ -1234,35 +1232,7 @@ export default function UsagePage() {
       if (data.errorProvider !== undefined) {
         setErrorProvider(data.errorProvider)
       }
-    }
-
-    const connect = () => {
-      eventSource = new EventSource(`/api/usage/stream?token=${token}`)
-
-      eventSource.addEventListener('update', (e) => {
-        try {
-          handleSSEData(JSON.parse(e.data || '{}'))
-        } catch { /* ignore parse errors */ }
-      })
-
-      eventSource.addEventListener('keepalive', (e) => {
-        try {
-          handleSSEData(JSON.parse(e.data || '{}'))
-        } catch { /* ignore parse errors */ }
-      })
-
-      eventSource.onerror = () => {
-        eventSource.close()
-        reconnectTimer = setTimeout(connect, 5000)
-      }
-    }
-
-    connect()
-
-    return () => {
-      if (eventSource) eventSource.close()
-      if (reconnectTimer) clearTimeout(reconnectTimer)
-    }
+    })
   }, [activeTab])
 
   return (

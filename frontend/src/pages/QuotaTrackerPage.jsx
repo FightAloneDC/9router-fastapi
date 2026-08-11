@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   CloudOff,
   RefreshCw,
@@ -606,46 +606,17 @@ const REFRESH_INTERVALS = [
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50]
 
-// --- localStorage cache helpers ---
-
-const QUOTA_CACHE_KEY = 'quotaCacheData'
-
-function getQuotaCache() {
-  try {
-    const cached = localStorage.getItem(QUOTA_CACHE_KEY)
-    return cached ? JSON.parse(cached) : {}
-  } catch {
-    return {}
-  }
-}
-
-function setQuotaCache(data) {
-  try {
-    localStorage.setItem(QUOTA_CACHE_KEY, JSON.stringify({
-      data,
-      timestamp: Date.now(),
-    }))
-  } catch {
-    // ignore
-  }
-}
-
-function getCachedQuotaData() {
-  try {
-    const cached = getQuotaCache()
-    if (!cached.data || !cached.timestamp) return null
-    // Cache valid for 5 minutes
-    if (Date.now() - cached.timestamp > 5 * 60 * 1000) return null
-    return cached.data
-  } catch {
-    return null
-  }
-}
-
 // --- Main Page ---
 
 export default function QuotaTrackerPage() {
   const [providers, setProviders] = useState([])
+  const [totalCount, setTotalCount] = useState(0)
+  const [providerTypes, setProviderTypes] = useState([])
+  const [stats, setStats] = useState({
+    total: 0,
+    active_with_limits: 0,
+    low_quotas: 0,
+  })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
@@ -658,6 +629,7 @@ export default function QuotaTrackerPage() {
   const [sortMode, setSortMode] = useState('default')
   const [expiringFirst, setExpiringFirst] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [searchInput, setSearchInput] = useState('')
   const [refreshingId, setRefreshingId] = useState(null)
   const [loadingUsage, setLoadingUsage] = useState(new Set())
   const [tabVisible, setTabVisible] = useState(true)
@@ -705,16 +677,14 @@ export default function QuotaTrackerPage() {
     []
   )
 
-  const fetchAllUsage = useCallback(
+  // Fill missing cached quotas for the visible page only
+  const fillMissingUsage = useCallback(
     async (connections) => {
       const ids = connections
-        .filter((c) => c.is_active)
+        .filter((c) => c.is_active && !(c.quotas && c.quotas.length))
         .map((c) => c.id)
       if (ids.length === 0) return
-
       setLoadingUsage(new Set(ids))
-
-      // Fetch in batches of 5 to avoid overwhelming backend
       const batchSize = 5
       for (let i = 0; i < ids.length; i += batchSize) {
         const batch = ids.slice(i, i + batchSize)
@@ -726,53 +696,82 @@ export default function QuotaTrackerPage() {
     [fetchUsageForConnection]
   )
 
-  const fetchData = useCallback(async (useCache = false) => {
+  const fetchData = useCallback(async (pageOverride) => {
+    const page = pageOverride ?? currentPage
     try {
-      // Try cache first on initial load
-      if (useCache) {
-        const cached = getCachedQuotaData()
-        if (cached) {
-          setProviders(cached)
-          setLoading(false)
-          // Still fetch fresh data in background
-        }
+      const params = {
+        page,
+        page_size: pageSize,
       }
+      if (providerFilter !== 'all') params.provider = providerFilter
+      if (statusFilter !== 'all') params.status = statusFilter
+      if (searchQuery.trim()) params.search = searchQuery.trim()
+      if (sortMode !== 'default') params.sort = sortMode
+      if (expiringFirst) params.expiring_first = true
 
-      const res = await quotaApi.getQuotaData()
-      const data = res.data || []
-      setProviders(data)
+      const res = await quotaApi.getQuotaData(params)
+      const payload = res.data || {}
+      const items = payload.items || []
+      setProviders(items)
+      setTotalCount(payload.total || 0)
+      setProviderTypes(payload.provider_types || [])
+      setStats(
+        payload.stats || {
+          total: payload.total || 0,
+          active_with_limits: 0,
+          low_quotas: 0,
+        }
+      )
       setError(null)
 
-      // Fetch real usage data per connection
-      await fetchAllUsage(data)
-
-      // Cache after usage is populated
-      setProviders((current) => {
-        setQuotaCache(current)
-        return current
-      })
+      // Only poll upstream for rows that have no cache yet
+      await fillMissingUsage(items)
     } catch (err) {
-      // If fetch fails but we have cache, use it
-      if (useCache) {
-        const cached = getCachedQuotaData()
-        if (cached) {
-          setProviders(cached)
-          setError(null)
-          setLoading(false)
-          return
-        }
-      }
       setError(
         err.response?.data?.detail || err.message || 'Unknown error'
       )
     } finally {
       setLoading(false)
     }
-  }, [fetchAllUsage])
+  }, [
+    currentPage,
+    pageSize,
+    providerFilter,
+    statusFilter,
+    searchQuery,
+    sortMode,
+    expiringFirst,
+    fillMissingUsage,
+  ])
+
+  // Reset to page 1 when filters change (before fetch)
+  const filtersKey = [
+    providerFilter,
+    statusFilter,
+    searchQuery,
+    sortMode,
+    expiringFirst,
+    pageSize,
+  ].join('|')
+  const prevFiltersKey = useRef(filtersKey)
 
   useEffect(() => {
-    fetchData(true)
-  }, [fetchData])
+    if (prevFiltersKey.current !== filtersKey) {
+      prevFiltersKey.current = filtersKey
+      if (currentPage !== 1) {
+        setCurrentPage(1)
+        return
+      }
+    }
+    setLoading(true)
+    fetchData(currentPage)
+  }, [filtersKey, currentPage, fetchData])
+
+  // Debounce search input → query
+  useEffect(() => {
+    const t = setTimeout(() => setSearchQuery(searchInput), 300)
+    return () => clearTimeout(t)
+  }, [searchInput])
 
   useEffect(() => {
     const handleVisibility = () => setTabVisible(!document.hidden)
@@ -806,7 +805,6 @@ export default function QuotaTrackerPage() {
     setRefreshingId(id)
     setLoadingUsage((prev) => new Set(prev).add(id))
     try {
-      // Manual refresh always polls the provider upstream
       await fetchUsageForConnection(id, true)
     } finally {
       setRefreshingId(null)
@@ -814,14 +812,12 @@ export default function QuotaTrackerPage() {
   }
 
   const handleToggleActive = async (id, newActive) => {
-    // Optimistic update
     setProviders((prev) =>
       prev.map((p) => (p.id === id ? { ...p, is_active: newActive } : p))
     )
     try {
       await providersApi.updateProvider(id, { is_active: newActive })
     } catch {
-      // Rollback
       setProviders((prev) =>
         prev.map((p) => (p.id === id ? { ...p, is_active: !newActive } : p))
       )
@@ -832,7 +828,6 @@ export default function QuotaTrackerPage() {
     if (!editingProvider) return
     const id = editingProvider.id
     const oldName = editingProvider.name
-    // Optimistic update
     setProviders((prev) =>
       prev.map((p) => (p.id === id ? { ...p, name: newName } : p))
     )
@@ -840,7 +835,6 @@ export default function QuotaTrackerPage() {
     try {
       await providersApi.updateProvider(id, { name: newName })
     } catch {
-      // Rollback
       setProviders((prev) =>
         prev.map((p) => (p.id === id ? { ...p, name: oldName } : p))
       )
@@ -850,183 +844,59 @@ export default function QuotaTrackerPage() {
   const handleDelete = async () => {
     if (!confirmAction || confirmAction.type !== 'delete') return
     const id = confirmAction.provider.id
-    const name = confirmAction.provider.name || confirmAction.provider.provider
     setConfirmAction(null)
-    // Optimistic remove
     setProviders((prev) => prev.filter((p) => p.id !== id))
     try {
       await providersApi.deleteProvider(id)
+      fetchData()
     } catch {
-      // Rollback - re-fetch
       fetchData()
     }
   }
 
   const handleBulkDisableDepleted = () => {
-    const depleted = providers.filter(
-      (p) =>
-        p.is_active &&
-        p.quotas?.some((q) => (q.remaining_percentage ?? 100) <= 5)
-    )
-    if (depleted.length === 0) return
-    setConfirmAction({
-      type: 'bulk-disable',
-      count: depleted.length,
-      ids: depleted.map((p) => p.id),
-    })
+    setConfirmAction({ type: 'bulk-disable' })
   }
 
   const handleBulkDisableConfirm = async () => {
     if (!confirmAction || confirmAction.type !== 'bulk-disable') return
-    const ids = confirmAction.ids
     setConfirmAction(null)
-    // Optimistic update
-    setProviders((prev) =>
-      prev.map((p) => (ids.includes(p.id) ? { ...p, is_active: false } : p))
-    )
     try {
-      await Promise.all(
-        ids.map((id) => providersApi.updateProvider(id, { is_active: false }))
-      )
+      await quotaApi.bulkDisableDepleted()
+      await fetchData()
     } catch {
       fetchData()
     }
   }
 
   const handleBulkEnableAll = async () => {
-    const inactive = providers.filter((p) => !p.is_active)
-    if (inactive.length === 0) return
-    const ids = inactive.map((p) => p.id)
-    // Optimistic update
-    setProviders((prev) =>
-      prev.map((p) => (ids.includes(p.id) ? { ...p, is_active: true } : p))
-    )
     try {
-      await Promise.all(
-        ids.map((id) => providersApi.updateProvider(id, { is_active: true }))
-      )
+      await quotaApi.bulkEnableInactive()
+      await fetchData()
     } catch {
       fetchData()
     }
   }
 
-  // --- Derived data ---
+  // --- Summary stats (from server) ---
+  const totalProviders = stats.total ?? totalCount
+  const activeWithLimits = stats.active_with_limits ?? 0
+  const lowQuotas = stats.low_quotas ?? 0
 
-  const providerTypes = useMemo(
-    () => [...new Set(providers.map((p) => p.provider))].sort(),
-    [providers]
-  )
-
-  const filteredProviders = useMemo(() => {
-    let result = [...providers]
-
-    // Filter by provider type
-    if (providerFilter !== 'all') {
-      result = result.filter((p) => p.provider === providerFilter)
-    }
-
-    // Filter by status
-    if (statusFilter === 'active') {
-      result = result.filter((p) => p.is_active)
-    } else if (statusFilter === 'inactive') {
-      result = result.filter((p) => !p.is_active)
-    }
-
-    // Filter by search query
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase()
-      result = result.filter(
-        (p) =>
-          (p.name || '').toLowerCase().includes(q) ||
-          p.provider.toLowerCase().includes(q)
-      )
-    }
-
-    // Sort
-    if (sortMode === 'remaining-asc') {
-      result.sort((a, b) => {
-        const aMin = Math.min(
-          ...(a.quotas || []).map((q) => q.remaining_percentage ?? 100),
-          100
-        )
-        const bMin = Math.min(
-          ...(b.quotas || []).map((q) => q.remaining_percentage ?? 100),
-          100
-        )
-        return aMin - bMin
-      })
-    } else if (sortMode === 'remaining-desc') {
-      result.sort((a, b) => {
-        const aMin = Math.min(
-          ...(a.quotas || []).map((q) => q.remaining_percentage ?? 100),
-          0
-        )
-        const bMin = Math.min(
-          ...(b.quotas || []).map((q) => q.remaining_percentage ?? 100),
-          0
-        )
-        return bMin - aMin
-      })
-    }
-
-    // Expiring first
-    if (expiringFirst) {
-      const getEarliestReset = (p) => {
-        const times = (p.quotas || [])
-          .map((q) =>
-            q.reset_at ? new Date(q.reset_at).getTime() : Infinity
-          )
-          .filter((t) => Number.isFinite(t))
-        return times.length > 0 ? Math.min(...times) : Infinity
-      }
-      result.sort((a, b) => getEarliestReset(a) - getEarliestReset(b))
-    }
-
-    return result
-  }, [
-    providers,
-    providerFilter,
-    statusFilter,
-    searchQuery,
-    sortMode,
-    expiringFirst,
-  ])
-
-  // Reset page when filters change
-  useEffect(() => {
-    setCurrentPage(1)
-  }, [providerFilter, statusFilter, searchQuery, sortMode, expiringFirst, pageSize])
-
-  // --- Summary stats ---
-
-  const totalProviders = providers.length
-  const activeWithLimits = providers.filter(
-    (p) => p.is_active && p.quotas?.length > 0
-  ).length
-  const lowQuotas = providers.reduce((acc, p) => {
-    if (!p.quotas) return acc
-    return (
-      acc +
-      p.quotas.filter((q) => (q.remaining_percentage ?? 100) <= 30).length
-    )
-  }, 0)
-
-  // Pagination
-  const totalPages = Math.max(1, Math.ceil(filteredProviders.length / pageSize))
+  // Server-side pagination
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
   const safePage = Math.min(currentPage, totalPages)
-  const paginatedProviders = filteredProviders.slice(
-    (safePage - 1) * pageSize,
-    safePage * pageSize
-  )
-  const pageStart = filteredProviders.length === 0 ? 0 : (safePage - 1) * pageSize + 1
-  const pageEnd = Math.min(safePage * pageSize, filteredProviders.length)
+  const paginatedProviders = providers
+  const pageStart = totalCount === 0 ? 0 : (safePage - 1) * pageSize + 1
+  const pageEnd = Math.min(safePage * pageSize, totalCount)
 
   // --- Loading / Error / Empty ---
 
   if (loading) return <LoadingSkeleton />
-  if (error && providers.length === 0)
+  if (error && providers.length === 0 && totalCount === 0)
     return <ErrorState message={error} onRetry={fetchData} />
-  if (providers.length === 0) return <EmptyConnectionsState />
+  if (!loading && totalCount === 0 && !searchQuery && providerFilter === 'all' && statusFilter === 'all')
+    return <EmptyConnectionsState />
 
   const hasActiveFilters =
     providerFilter !== 'all' ||
@@ -1137,13 +1007,13 @@ export default function QuotaTrackerPage() {
           <input
             type="text"
             placeholder="Search connections..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             className="w-full bg-zinc-800/80 border border-zinc-700/50 rounded-md pl-7 pr-7 py-1 text-[11px] text-zinc-300 placeholder-zinc-600 focus:outline-none focus:border-zinc-600"
           />
-          {searchQuery && (
+          {searchInput && (
             <button
-              onClick={() => setSearchQuery('')}
+              onClick={() => { setSearchInput(''); setSearchQuery('') }}
               className="absolute right-1.5 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 cursor-pointer"
             >
               <X size={12} />
@@ -1203,6 +1073,7 @@ export default function QuotaTrackerPage() {
             onClick={() => {
               setProviderFilter('all')
               setStatusFilter('all')
+              setSearchInput('')
               setSearchQuery('')
               setSortMode('default')
               setExpiringFirst(false)
@@ -1251,7 +1122,7 @@ export default function QuotaTrackerPage() {
         ))}
       </div>
 
-      {filteredProviders.length === 0 && (
+      {totalCount === 0 && (
         <div className="text-center py-8">
           <p className="text-xs text-zinc-500">
             No providers match the selected filters.
@@ -1261,6 +1132,7 @@ export default function QuotaTrackerPage() {
               onClick={() => {
                 setProviderFilter('all')
                 setStatusFilter('all')
+                setSearchInput('')
                 setSearchQuery('')
                 setSortMode('default')
                 setExpiringFirst(false)
@@ -1274,11 +1146,11 @@ export default function QuotaTrackerPage() {
       )}
 
       {/* Pagination */}
-      {filteredProviders.length > 0 && (
+      {totalCount > 0 && (
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-zinc-600">
-              {pageStart}-{pageEnd} of {filteredProviders.length}
+              {pageStart}-{pageEnd} of {totalCount}
             </span>
             <div className="relative">
               <select
@@ -1342,8 +1214,8 @@ export default function QuotaTrackerPage() {
       {confirmAction?.type === 'bulk-disable' && (
         <ConfirmModal
           title="Disable Depleted Connections"
-          message={`This will disable ${confirmAction.count} connection(s) with quota ≤ 5%. They can be re-enabled later.`}
-          confirmLabel={`Disable ${confirmAction.count}`}
+          message="This will disable all connections with cached quota ≤ 5%. They can be re-enabled later."
+          confirmLabel="Disable Depleted"
           confirmClass="bg-amber-600 text-white hover:bg-amber-700"
           onConfirm={handleBulkDisableConfirm}
           onCancel={() => setConfirmAction(null)}
