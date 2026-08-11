@@ -638,6 +638,10 @@ export default function QuotaTrackerPage() {
 
   const intervalRef = useRef(null)
   const countdownRef = useRef(null)
+  // Per-page results valid until auto-refresh / manual refresh / filter change
+  const pageCacheRef = useRef(new Map())
+  const filtersKeyRef = useRef('')
+  const currentPageRef = useRef(1)
 
   const fetchUsageForConnection = useCallback(
     async (connId, force = false) => {
@@ -645,8 +649,8 @@ export default function QuotaTrackerPage() {
         const res = await quotaApi.getUsage(connId, force)
         const usage = res.data
         if (!usage) return
-        setProviders((prev) =>
-          prev.map((p) =>
+        setProviders((prev) => {
+          const next = prev.map((p) =>
             p.id === connId
               ? {
                   ...p,
@@ -663,7 +667,16 @@ export default function QuotaTrackerPage() {
                 }
               : p
           )
-        )
+          const cacheKey = `${filtersKeyRef.current}|${currentPageRef.current}`
+          const hit = pageCacheRef.current.get(cacheKey)
+          if (hit) {
+            pageCacheRef.current.set(cacheKey, {
+              ...hit,
+              items: next,
+            })
+          }
+          return next
+        })
       } catch {
         // Per-connection failure — leave quotas empty
       } finally {
@@ -696,8 +709,38 @@ export default function QuotaTrackerPage() {
     [fetchUsageForConnection]
   )
 
-  const fetchData = useCallback(async (pageOverride) => {
+  const applyQuotaPayload = useCallback((payload) => {
+    const items = payload.items || []
+    setProviders(items)
+    setTotalCount(payload.total || 0)
+    setProviderTypes(payload.provider_types || [])
+    setStats(
+      payload.stats || {
+        total: payload.total || 0,
+        active_with_limits: 0,
+        low_quotas: 0,
+      }
+    )
+    setError(null)
+    return items
+  }, [])
+
+  const fetchData = useCallback(async (pageOverride, options = {}) => {
+    const force = options.force === true
     const page = pageOverride ?? currentPage
+    const cacheKey = `${filtersKeyRef.current}|${page}`
+
+    if (!force) {
+      const hit = pageCacheRef.current.get(cacheKey)
+      if (hit) {
+        const items = applyQuotaPayload(hit)
+        setLoading(false)
+        // Still fill any rows that never got usage data
+        await fillMissingUsage(items)
+        return
+      }
+    }
+
     try {
       const params = {
         page,
@@ -711,18 +754,17 @@ export default function QuotaTrackerPage() {
 
       const res = await quotaApi.getQuotaData(params)
       const payload = res.data || {}
-      const items = payload.items || []
-      setProviders(items)
-      setTotalCount(payload.total || 0)
-      setProviderTypes(payload.provider_types || [])
-      setStats(
-        payload.stats || {
+      const items = applyQuotaPayload(payload)
+      pageCacheRef.current.set(cacheKey, {
+        items,
+        total: payload.total || 0,
+        provider_types: payload.provider_types || [],
+        stats: payload.stats || {
           total: payload.total || 0,
           active_with_limits: 0,
           low_quotas: 0,
-        }
-      )
-      setError(null)
+        },
+      })
 
       // Only poll upstream for rows that have no cache yet
       await fillMissingUsage(items)
@@ -742,6 +784,7 @@ export default function QuotaTrackerPage() {
     sortMode,
     expiringFirst,
     fillMissingUsage,
+    applyQuotaPayload,
   ])
 
   // Reset to page 1 when filters change (before fetch)
@@ -753,17 +796,22 @@ export default function QuotaTrackerPage() {
     expiringFirst,
     pageSize,
   ].join('|')
+  filtersKeyRef.current = filtersKey
+  currentPageRef.current = currentPage
   const prevFiltersKey = useRef(filtersKey)
 
   useEffect(() => {
     if (prevFiltersKey.current !== filtersKey) {
       prevFiltersKey.current = filtersKey
+      pageCacheRef.current.clear()
       if (currentPage !== 1) {
         setCurrentPage(1)
         return
       }
     }
-    setLoading(true)
+    const cacheKey = `${filtersKey}|${currentPage}`
+    const hit = pageCacheRef.current.get(cacheKey)
+    if (!hit) setLoading(true)
     fetchData(currentPage)
   }, [filtersKey, currentPage, fetchData])
 
@@ -790,7 +838,8 @@ export default function QuotaTrackerPage() {
         setCountdown((prev) => (prev <= 1 ? refreshInterval : prev - 1))
       }, 1000)
       intervalRef.current = setInterval(() => {
-        fetchData()
+        pageCacheRef.current.clear()
+        fetchData(currentPageRef.current, { force: true })
         setCountdown(refreshInterval)
       }, refreshInterval * 1000)
     }
@@ -800,6 +849,17 @@ export default function QuotaTrackerPage() {
       if (countdownRef.current) clearInterval(countdownRef.current)
     }
   }, [autoRefresh, tabVisible, fetchData, refreshInterval])
+
+  const invalidateQuotaCache = useCallback(() => {
+    pageCacheRef.current.clear()
+  }, [])
+
+  const syncCurrentPageCache = useCallback((items) => {
+    const cacheKey = `${filtersKeyRef.current}|${currentPageRef.current}`
+    const hit = pageCacheRef.current.get(cacheKey)
+    if (!hit) return
+    pageCacheRef.current.set(cacheKey, { ...hit, items })
+  }, [])
 
   const handleRefreshProvider = async (id) => {
     setRefreshingId(id)
@@ -812,15 +872,23 @@ export default function QuotaTrackerPage() {
   }
 
   const handleToggleActive = async (id, newActive) => {
-    setProviders((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, is_active: newActive } : p))
-    )
+    setProviders((prev) => {
+      const next = prev.map((p) =>
+        p.id === id ? { ...p, is_active: newActive } : p
+      )
+      syncCurrentPageCache(next)
+      return next
+    })
     try {
       await providersApi.updateProvider(id, { is_active: newActive })
     } catch {
-      setProviders((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, is_active: !newActive } : p))
-      )
+      setProviders((prev) => {
+        const next = prev.map((p) =>
+          p.id === id ? { ...p, is_active: !newActive } : p
+        )
+        syncCurrentPageCache(next)
+        return next
+      })
     }
   }
 
@@ -828,16 +896,24 @@ export default function QuotaTrackerPage() {
     if (!editingProvider) return
     const id = editingProvider.id
     const oldName = editingProvider.name
-    setProviders((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, name: newName } : p))
-    )
+    setProviders((prev) => {
+      const next = prev.map((p) =>
+        p.id === id ? { ...p, name: newName } : p
+      )
+      syncCurrentPageCache(next)
+      return next
+    })
     setEditingProvider(null)
     try {
       await providersApi.updateProvider(id, { name: newName })
     } catch {
-      setProviders((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, name: oldName } : p))
-      )
+      setProviders((prev) => {
+        const next = prev.map((p) =>
+          p.id === id ? { ...p, name: oldName } : p
+        )
+        syncCurrentPageCache(next)
+        return next
+      })
     }
   }
 
@@ -848,9 +924,11 @@ export default function QuotaTrackerPage() {
     setProviders((prev) => prev.filter((p) => p.id !== id))
     try {
       await providersApi.deleteProvider(id)
-      fetchData()
+      invalidateQuotaCache()
+      fetchData(currentPageRef.current, { force: true })
     } catch {
-      fetchData()
+      invalidateQuotaCache()
+      fetchData(currentPageRef.current, { force: true })
     }
   }
 
@@ -863,18 +941,22 @@ export default function QuotaTrackerPage() {
     setConfirmAction(null)
     try {
       await quotaApi.bulkDisableDepleted()
-      await fetchData()
+      invalidateQuotaCache()
+      await fetchData(currentPageRef.current, { force: true })
     } catch {
-      fetchData()
+      invalidateQuotaCache()
+      fetchData(currentPageRef.current, { force: true })
     }
   }
 
   const handleBulkEnableAll = async () => {
     try {
       await quotaApi.bulkEnableInactive()
-      await fetchData()
+      invalidateQuotaCache()
+      await fetchData(currentPageRef.current, { force: true })
     } catch {
-      fetchData()
+      invalidateQuotaCache()
+      fetchData(currentPageRef.current, { force: true })
     }
   }
 
@@ -960,7 +1042,8 @@ export default function QuotaTrackerPage() {
 
           <button
             onClick={() => {
-              fetchData()
+              pageCacheRef.current.clear()
+              fetchData(currentPageRef.current, { force: true })
               setCountdown(refreshInterval)
             }}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-zinc-800 text-zinc-400 border border-zinc-700 hover:bg-zinc-700 hover:text-zinc-200 transition-colors cursor-pointer"
