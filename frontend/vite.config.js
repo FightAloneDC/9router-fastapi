@@ -11,11 +11,11 @@ export default defineConfig({
       '/api': {
         target: process.env.VITE_API_URL || 'http://localhost:9000',
         changeOrigin: true,
-        // Required so the console log WebSocket
-        // (/api/console/ws) is upgraded and proxied.
+        // Required so console + usage WebSockets
+        // (/api/console/ws, /api/usage/ws) are upgraded and proxied.
         ws: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
-        // Long-lived SSE (/usage/stream) must not be buffered/timed out.
+        // Long-lived streams must not be buffered/timed out.
         timeout: 0,
         proxyTimeout: 0,
         configure: (proxy) => {

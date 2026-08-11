@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { useAuthStore } from '../stores/authStore'
 import { chatApi } from '../api/chat'
+import client from '../api/client'
 import { copyToClipboard } from '../utils/clipboard'
 
 
@@ -40,19 +41,24 @@ export default function ChatPage() {
   const abortControllerRef = useRef(null)
   const textareaRef = useRef(null)
 
-  // Fetch models
+  // Fetch models (axios GET dedupe absorbs StrictMode double-mount)
   useEffect(() => {
+    let cancelled = false
     setLoadingModels(true)
-    fetch('/v1/models', {
-      headers: { 'Authorization': `Bearer ${token || ''}` },
-    })
-      .then(r => r.json())
-      .then(data => {
+    client
+      .get('/v1/models')
+      .then((res) => {
+        if (cancelled) return
         const excludePattern = /embed|rerank|tts|stt|robot|voice|deepgram/i
-        const models = (data.data || []).filter(m => {
+        const models = (res.data?.data || []).filter((m) => {
           if (excludePattern.test(m.id)) return false
           const type = m.type || ''
-          return type === 'llm' || type === 'chat' || type === 'combo' || !type
+          return (
+            type === 'llm' ||
+            type === 'chat' ||
+            type === 'combo' ||
+            !type
+          )
         })
         setAvailableModels(models)
         if (models.length > 0 && !selectedModel) {
@@ -60,7 +66,12 @@ export default function ChatPage() {
         }
       })
       .catch(() => {})
-      .finally(() => setLoadingModels(false))
+      .finally(() => {
+        if (!cancelled) setLoadingModels(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [token])
 
   // Fetch conversations list

@@ -1,16 +1,16 @@
 /**
- * Shared EventSource for /api/usage/stream.
+ * Shared WebSocket for /api/usage/ws.
  *
- * React StrictMode (dev) mounts → unmounts → remounts effects in one
- * turn. Closing the socket in cleanup then reopening causes a cancelled
- * ("Blocked") request in DevTools. Delay teardown so a remount reuses
- * the same connection.
+ * Replaces EventSource SSE (/usage/stream), which Firefox aborted under
+ * StrictMode remounts. Same pattern as consoleStream.js: one shared socket,
+ * deferred close so remount reuses the connection. No polling.
  */
 
-let sharedSource = null
+let sharedSocket = null
 let sharedToken = null
 let refCount = 0
 let closeTimer = null
+let reconnectTimer = null
 const listeners = new Set()
 
 function dispatch(data) {
@@ -23,57 +23,78 @@ function dispatch(data) {
   }
 }
 
+function wsUrl(token) {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const q = encodeURIComponent(token)
+  return `${proto}//${window.location.host}/api/usage/ws?token=${q}`
+}
+
+function clearReconnectTimer() {
+  if (!reconnectTimer) return
+  clearTimeout(reconnectTimer)
+  reconnectTimer = null
+}
+
+function clearCloseTimer() {
+  if (!closeTimer) return
+  clearTimeout(closeTimer)
+  closeTimer = null
+}
+
 function ensureConnected(token) {
+  if (!token) return
+
   if (
-    sharedSource &&
+    sharedSocket &&
     sharedToken === token &&
-    sharedSource.readyState !== EventSource.CLOSED
+    (sharedSocket.readyState === WebSocket.OPEN ||
+      sharedSocket.readyState === WebSocket.CONNECTING)
   ) {
     return
   }
 
-  if (sharedSource) {
-    sharedSource.close()
-    sharedSource = null
+  if (sharedSocket) {
+    sharedSocket.onclose = null
+    sharedSocket.onerror = null
+    sharedSocket.onmessage = null
+    sharedSocket.close()
+    sharedSocket = null
   }
 
   sharedToken = token
-  const source = new EventSource(
-    `/api/usage/stream?token=${encodeURIComponent(token)}`
-  )
-  sharedSource = source
+  const socket = new WebSocket(wsUrl(token))
+  sharedSocket = socket
 
-  const onPayload = (e) => {
+  socket.onmessage = (event) => {
     try {
-      dispatch(JSON.parse(e.data || '{}'))
+      dispatch(JSON.parse(event.data))
     } catch {
       // ignore parse errors
     }
   }
 
-  source.addEventListener('update', onPayload)
-  source.addEventListener('keepalive', onPayload)
+  socket.onerror = () => {
+    // onclose handles reconnect
+  }
 
-  source.onerror = () => {
-    source.close()
-    if (sharedSource === source) {
-      sharedSource = null
+  socket.onclose = () => {
+    if (sharedSocket === socket) {
+      sharedSocket = null
     }
-    // Auto-reconnect while subscribers remain
-    if (refCount > 0 && sharedToken) {
-      if (closeTimer) clearTimeout(closeTimer)
-      closeTimer = setTimeout(() => {
-        closeTimer = null
-        if (refCount > 0 && sharedToken) {
-          ensureConnected(sharedToken)
-        }
-      }, 5000)
-    }
+    if (refCount <= 0) return
+
+    clearReconnectTimer()
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      if (refCount > 0 && sharedToken) {
+        ensureConnected(sharedToken)
+      }
+    }, 5000)
   }
 }
 
 /**
- * Subscribe to usage SSE updates.
+ * Subscribe to usage WebSocket updates.
  * @param {string} token JWT
  * @param {(data: object) => void} onData
  * @returns {() => void} unsubscribe
@@ -86,11 +107,8 @@ export function subscribeUsageStream(token, onData) {
   listeners.add(onData)
   refCount += 1
 
-  if (closeTimer) {
-    clearTimeout(closeTimer)
-    closeTimer = null
-  }
-
+  clearCloseTimer()
+  clearReconnectTimer()
   ensureConnected(token)
 
   return () => {
@@ -99,14 +117,19 @@ export function subscribeUsageStream(token, onData) {
 
     if (refCount > 0) return
 
+    clearReconnectTimer()
+
     // Defer close so StrictMode remount can reuse the socket.
-    if (closeTimer) clearTimeout(closeTimer)
+    clearCloseTimer()
     closeTimer = setTimeout(() => {
       closeTimer = null
       if (refCount > 0) return
-      if (sharedSource) {
-        sharedSource.close()
-        sharedSource = null
+      if (sharedSocket) {
+        sharedSocket.onclose = null
+        sharedSocket.onerror = null
+        sharedSocket.onmessage = null
+        sharedSocket.close()
+        sharedSocket = null
       }
       sharedToken = null
     }, 50)

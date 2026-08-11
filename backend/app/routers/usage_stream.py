@@ -1,26 +1,24 @@
-"""SSE endpoint for real-time usage stats updates."""
+"""WebSocket endpoint for real-time usage stats updates."""
 
 import asyncio
-import json
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.routers.auth import get_current_user
 from app.services.active_requests import (
     get_active_requests,
     get_error_provider,
     get_recent_requests,
 )
+from app.services.auth import decode_access_token
 
 router = APIRouter(tags=["usage-stream"])
 
-# Simple in-memory event bus for usage updates
+# In-memory fan-out for connected usage WS clients
 _subscribers: list[asyncio.Queue] = []
 
 
-def notify_usage_update():
-    """Called after each usage save to notify SSE clients."""
+def notify_usage_update() -> None:
+    """Wake all usage WS clients after a usage save / active-request change."""
     for q in _subscribers:
         try:
             q.put_nowait("update")
@@ -28,55 +26,37 @@ def notify_usage_update():
             pass
 
 
-def _build_sse_payload() -> str:
-    """Build SSE data payload with real-time fields only."""
-    payload = {
+def _build_payload() -> dict:
+    """Real-time usage fields for the overview page."""
+    return {
         "activeRequests": get_active_requests(),
         "recentRequests": get_recent_requests(),
         "errorProvider": get_error_provider(),
     }
-    return json.dumps(payload)
 
 
-async def _event_generator(queue: asyncio.Queue):
-    """SSE generator that yields events from the queue."""
-    try:
-        # Immediate snapshot so proxies/browsers don't wait on idle buffer.
-        yield f"event: update\ndata: {_build_sse_payload()}\n\n"
-        while True:
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=15)
-                data = _build_sse_payload()
-                yield f"event: {event}\ndata: {data}\n\n"
-            except asyncio.TimeoutError:
-                data = _build_sse_payload()
-                yield f"event: keepalive\ndata: {data}\n\n"
-    except asyncio.CancelledError:
-        pass
+@router.websocket("/usage/ws")
+async def usage_ws(websocket: WebSocket) -> None:
+    """Live usage updates over WebSocket (replaces SSE /usage/stream)."""
+    token = websocket.query_params.get("token")
+    if not token or decode_access_token(token) is None:
+        await websocket.close(code=1008)
+        return
 
-
-@router.get("/usage/stream")
-async def usage_stream(
-    _user=Depends(get_current_user),
-):
-    """SSE endpoint for real-time usage updates."""
+    await websocket.accept()
     queue: asyncio.Queue = asyncio.Queue(maxsize=10)
     _subscribers.append(queue)
 
-    async def generate():
-        try:
-            async for event in _event_generator(queue):
-                yield event
-        finally:
-            if queue in _subscribers:
-                _subscribers.remove(queue)
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    try:
+        await websocket.send_json(_build_payload())
+        while True:
+            try:
+                await asyncio.wait_for(queue.get(), timeout=15.0)
+            except asyncio.TimeoutError:
+                pass
+            await websocket.send_json(_build_payload())
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        if queue in _subscribers:
+            _subscribers.remove(queue)

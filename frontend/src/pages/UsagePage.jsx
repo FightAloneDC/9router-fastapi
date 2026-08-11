@@ -1211,7 +1211,7 @@ export default function UsagePage() {
     }
   }, [period, fetchData, activeTab])
 
-  // SSE for real-time updates — shared socket (StrictMode-safe)
+  // WebSocket for real-time updates — shared socket (StrictMode-safe)
   useEffect(() => {
     if (activeTab !== 'overview') return
     const token = localStorage.getItem('token')
@@ -1221,7 +1221,7 @@ export default function UsagePage() {
       if (data.activeRequests) {
         setActiveRequests(data.activeRequests)
       }
-      // Only merge recentRequests if SSE has entries — don't let empty
+      // Only merge recentRequests if WS has entries — don't let empty
       // ring buffer (e.g. after server restart) overwrite REST-fetched data
       if (data.recentRequests && data.recentRequests.length > 0) {
         setStats((prev) => {
