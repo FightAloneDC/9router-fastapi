@@ -1005,6 +1005,10 @@ function ModelRow({ model, fullModel, alias, copied, onCopy, onSetAlias, onDelet
 /* ════════════════════════════════════════════════════════════════
    ChatTestPlayground — real API test for chat completions
    ════════════════════════════════════════════════════════════════ */
+
+// Dedupe StrictMode double-fetch of models/list
+const _inflightModelLists = new Map()
+
 function ChatTestPlayground({ providerId, providerAlias, connections }) {
   const token = useAuthStore(s => s.token)
   const [selectedModel, setSelectedModel] = useState('')
@@ -1019,18 +1023,38 @@ function ChatTestPlayground({ providerId, providerAlias, connections }) {
   const [copiedCurl, setCopiedCurl] = useState(false)
   const [availableModels, setAvailableModels] = useState([])
   const resultRef = useRef(null)
+  const providerAliasRef = useRef(providerAlias)
+  providerAliasRef.current = providerAlias
+  const selectedModelRef = useRef(selectedModel)
+  selectedModelRef.current = selectedModel
 
   useEffect(() => {
-    import('../api/client').then(({ default: client }) => {
-      client.get(`/providers/${providerId}/models/list`)
-        .then(res => {
-          const models = (res.data?.models || []).map(m => ({ id: `${providerAlias}/${m.id}`, type: m.type }))
-          setAvailableModels(models)
-          if (models.length > 0 && !selectedModel) setSelectedModel(models[0].id)
-        })
-        .catch(() => {})
-    })
-  }, [providerId, providerAlias])
+    if (!providerId) return
+    let cancelled = false
+    const key = `models-list:${providerId}`
+    let pending = _inflightModelLists.get(key)
+    if (!pending) {
+      pending = import('../api/client')
+        .then(({ default: client }) => client.get(`/providers/${providerId}/models/list`))
+        .finally(() => { _inflightModelLists.delete(key) })
+      _inflightModelLists.set(key, pending)
+    }
+    pending
+      .then((res) => {
+        if (cancelled) return
+        const alias = providerAliasRef.current || providerId
+        const models = (res.data?.models || []).map((m) => ({
+          id: `${alias}/${m.id}`,
+          type: m.type,
+        }))
+        setAvailableModels(models)
+        if (models.length > 0 && !selectedModelRef.current) {
+          setSelectedModel(models[0].id)
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [providerId])
 
   const buildBody = () => ({
     model: selectedModel || `${providerId}/default`,
@@ -1202,9 +1226,15 @@ function ChatTestPlayground({ providerId, providerAlias, connections }) {
 /* ════════════════════════════════════════════════════════════════
    Main ProviderDetailPage
    ════════════════════════════════════════════════════════════════ */
+
+// Dedupe identical in-flight loads (React StrictMode double-mount in dev).
+const _inflightLoads = new Map()
+
 export default function ProviderDetailPage() {
   const { providerId: rawProviderId } = useParams()
   const catalogStore = useCatalogStore()
+  const [catalogReady, setCatalogReady] = useState(false)
+
   const providerId = catalogStore.resolveProviderId(rawProviderId)
   const navigate = useNavigate()
   const info = catalogStore.providers[providerId]
@@ -1232,9 +1262,10 @@ export default function ProviderDetailPage() {
   const [testResults, setTestResults] = useState({})
   const [connectingNoAuth, setConnectingNoAuth] = useState(false)
 
-  // Connection list pagination
+  // Connection list pagination (server-side)
   const CONNECTIONS_PER_PAGE = 10
   const [connectionPage, setConnectionPage] = useState(1)
+  const [connectionTotal, setConnectionTotal] = useState(0)
 
   // Models state
   const [models, setModels] = useState([])
@@ -1278,6 +1309,12 @@ export default function ProviderDetailPage() {
   const providerAlias = catalogStore.getProviderAlias(providerId)
   const providerStorageAlias = isCompatible ? providerId : providerAlias
   const providerDisplayAlias = isCompatible ? (providerNode?.prefix || providerId) : providerAlias
+  // Keep alias in a ref so connection reloads are not triggered when
+  // catalog resolves alias (mistral → mi) after the first paint.
+  const providerStorageAliasRef = useRef(providerStorageAlias)
+  providerStorageAliasRef.current = providerStorageAlias
+  const connectionPageRef = useRef(connectionPage)
+  connectionPageRef.current = connectionPage
 
   // Thinking config — safe fallback
   const THINKING_EXTENDED_DEFAULT = { options: ["auto", "on", "off"], defaultMode: "auto", defaultBudgetTokens: 10000 }
@@ -1342,86 +1379,87 @@ export default function ProviderDetailPage() {
   const fetchDisabledModels = useCallback(async () => {
     try {
       const { default: client } = await import('../api/client')
-      const res = await client.get(`/models/disabled`, { params: { providerAlias: providerStorageAlias } })
+      const res = await client.get(`/models/disabled`, {
+        params: { providerAlias: providerStorageAliasRef.current },
+      })
       if (res.data?.ids) setDisabledModelIds(res.data.ids)
     } catch (error) {
       // Disabled models endpoint may not exist yet
       console.log('Disabled models not available:', error.message)
     }
-  }, [providerStorageAlias])
+  }, [])
 
   // ── Fetch connections + nodes + pools + settings ──
-  const fetchConnections = useCallback(async () => {
+  const fetchConnections = useCallback(async (pageOverride) => {
+    const page = pageOverride ?? connectionPageRef.current
+    const storageAlias = providerStorageAliasRef.current
+    const pid = useCatalogStore.getState().resolveProviderId(rawProviderId)
     try {
       const [connRes, proxyRes] = await Promise.all([
-        providersApi.getProviders(),
+        providersApi.getProviderConnections(pid, {
+          page,
+          page_size: CONNECTIONS_PER_PAGE,
+          include_models: true,
+        }),
         proxyPoolsApi.getAll(),
       ])
-      const allConns = connRes.data || []
-      const filtered = allConns.filter((c) => c.provider === providerId)
-      filtered.sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))
+      const payload = connRes.data || {}
+      const filtered = payload.items || []
       setConnections(filtered)
+      setConnectionTotal(payload.total || 0)
       setProxyPools((proxyRes.data || []).filter((p) => p.is_active !== false))
 
-      // Derive models from ALL connections (union) + aliases
-      if (filtered.length > 0) {
-        const allModels = new Set()
-        filtered.forEach(c => (c.models || []).forEach(m => allModels.add(typeof m === 'string' ? m : m.id)))
+      // Models returned once (union), not duplicated per connection
+      const mergedModels = (payload.models || []).map((m) =>
+        typeof m === 'string' ? m : m.id
+      )
+      const allModels = new Set(mergedModels)
+      Object.entries(modelAliasesRef.current).forEach(([, fullModel]) => {
+        const prefix = `${storageAlias}/`
+        if (fullModel.startsWith(prefix)) {
+          allModels.add(fullModel.slice(prefix.length))
+        }
+      })
+      const modelsList = [...allModels]
+      setModels(modelsList)
 
-        // Also include models from aliases (for compatible providers)
-        Object.entries(modelAliasesRef.current).forEach(([, fullModel]) => {
-          const prefix = `${providerStorageAlias}/`
-          if (fullModel.startsWith(prefix)) {
-            allModels.add(fullModel.slice(prefix.length))
-          }
-        })
-
-        const mergedModels = [...allModels]
-        setModels(mergedModels)
-
-        // Fetch disabled models to respect user's enable/disable history
+      if (filtered.length > 0 || modelsList.length > 0) {
         let disabledIds = []
         try {
           const { default: client } = await import('../api/client')
-          const disabledRes = await client.get('/models/disabled', { params: { providerAlias: providerStorageAlias } })
+          const disabledRes = await client.get('/models/disabled', {
+            params: { providerAlias: storageAlias },
+          })
           disabledIds = disabledRes.data?.ids || []
           setDisabledModelIds(disabledIds)
         } catch {
           // Disabled models endpoint may not exist yet
         }
-
-        // Only enable models that are NOT in the disabled list
         const disabledSet = new Set(disabledIds)
-
-        // On page load, just trust the backend state as-is.
-        // Auto-disable-all-on-first-fetch is handled in handleFetchModels only.
-        const enabledIds = mergedModels.filter(m => !disabledSet.has(m))
+        const enabledIds = modelsList.filter((m) => !disabledSet.has(m))
         setEnabledModelIds(new Set(enabledIds))
       } else {
         setModels([])
         setEnabledModelIds(new Set())
       }
 
-      // Fetch provider nodes
       try {
         const nodesRes = await providersApi.getProviderNodes()
-        const node = (nodesRes.data || []).find((n) => n.id === providerId) || null
+        const node = (nodesRes.data || []).find((n) => n.id === pid) || null
         setProviderNode(node)
       } catch {
         // Provider nodes may not be available
       }
 
-      // Fetch settings for strategy
       try {
         const settingsRes = await settingsApi.get()
         const settingsData = settingsRes.data || {}
         const strategies = settingsData.provider_strategies || settingsData.providerStrategies || {}
-        const override = strategies[providerId] || {}
+        const override = strategies[pid] || {}
         setProviderStrategy(override.fallback_strategy || override.fallbackStrategy || null)
         const sticky = override.sticky_round_robin_limit ?? override.stickyRoundRobinLimit
         setProviderStickyLimit(sticky != null ? String(sticky) : '1')
-        // Load per-provider thinking config
-        const thinkingCfg = (settingsData.provider_thinking || settingsData.providerThinking || {})[providerId] || {}
+        const thinkingCfg = (settingsData.provider_thinking || settingsData.providerThinking || {})[pid] || {}
         setThinkingMode(thinkingCfg.mode || 'auto')
       } catch {
         // Settings may not be available
@@ -1431,7 +1469,40 @@ export default function ProviderDetailPage() {
     } finally {
       setLoading(false)
     }
-  }, [providerId, providerStorageAlias])
+  }, [rawProviderId])
+
+  // Single initial/page load: wait for catalog entry, then fetch once.
+  // Dedupe covers React StrictMode double-invoke in development.
+  useEffect(() => {
+    let cancelled = false
+    const key = `${rawProviderId}:${connectionPage}`
+    setLoading(true)
+    setCatalogReady(false)
+
+    let pending = _inflightLoads.get(key)
+    if (!pending) {
+      // Do not gate on `cancelled` inside shared work — StrictMode
+      // unmounts the first invoke while the second still needs results.
+      pending = (async () => {
+        await useCatalogStore.getState().ensureProvider(rawProviderId)
+        await fetchConnections(connectionPage)
+        await fetchAliases()
+      })().finally(() => {
+        _inflightLoads.delete(key)
+      })
+      _inflightLoads.set(key, pending)
+    }
+
+    pending
+      .then(() => {
+        if (!cancelled) setCatalogReady(true)
+      })
+      .catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [rawProviderId, connectionPage, fetchConnections, fetchAliases])
 
   const handleChangeModelType = useCallback(async (modelId, newType) => {
     const connId = connections[0]?.id
@@ -1505,11 +1576,7 @@ export default function ProviderDetailPage() {
     const previousModels = models
     setModels(newModels)
     try {
-      await Promise.all(
-        connections.map((c) =>
-          providersApi.updateProvider(c.id, { models: newModels })
-        )
-      )
+      await providersApi.setProviderModels(providerId, newModels)
     } catch (err) {
       console.error('Failed to save models:', err)
       setModels(previousModels)
@@ -1535,23 +1602,27 @@ export default function ProviderDetailPage() {
 
   // ── Fetch models from provider API (go to suggestions, persist to backend) ──
   const handleFetchModels = async () => {
-    if (!connections.length || fetchingModels) return
+    if (connectionTotal === 0 || fetchingModels) return
     setFetchingModels(true)
     try {
-      // Use only the first active connection to avoid rate limiting / IP ban
-      const activeConn = connections.find(c => c.is_active !== false) || connections[0]
+      // Prefer an active connection on the current page; else page 1
+      let activeConn = connections.find(c => c.is_active !== false) || connections[0]
+      if (!activeConn) {
+        const pageRes = await providersApi.getProviderConnections(providerId, {
+          page: 1,
+          page_size: 1,
+          include_models: false,
+        })
+        activeConn = (pageRes.data?.items || [])[0]
+      }
+      if (!activeConn) return
+
       const res = await providersApi.fetchProviderModels(activeConn.id)
       const fetchedList = res.data?.models || res.data || []
       const fetchedArray = fetchedList.map(m => typeof m === 'string' ? m : m.id)
 
-      // fetchProviderModels already saves to DB for the fetched connection.
-      // Only patch OTHER connections to sync models (skip the one already updated).
-      const otherConns = connections.filter(c => c.id !== activeConn.id)
-      if (otherConns.length > 0) {
-        await Promise.all(
-          otherConns.map(c => providersApi.updateProvider(c.id, { models: fetchedArray }))
-        )
-      }
+      // Sync models to every connection in one request
+      await providersApi.setProviderModels(providerId, fetchedArray)
 
       // First fetch: disable all models by default (user requested behavior)
       try {
@@ -1589,11 +1660,7 @@ export default function ProviderDetailPage() {
     if (clearingModels) return
     setClearingModels(true)
     try {
-      await Promise.all(
-        connections.map((c) =>
-          providersApi.clearProviderModels(c.id)
-        )
-      )
+      await providersApi.clearProviderModelsByProvider(providerId)
 
       // For compatible providers, also clear aliases
       if (isCompatible) {
@@ -1769,16 +1836,12 @@ export default function ProviderDetailPage() {
     }
   }
 
-  const handleSwapPriority = async (index1, index2) => {
-    if (index1 < 0 || index2 >= connections.length) return
-    const newConns = [...connections]
-    ;[newConns[index1], newConns[index2]] = [newConns[index2], newConns[index1]]
-    setConnections(newConns)
+  const handleSwapPriority = async (connId, direction) => {
     try {
-      await Promise.all([
-        providersApi.updateProvider(newConns[index1].id, { priority: index1 }),
-        providersApi.updateProvider(newConns[index2].id, { priority: index2 }),
-      ])
+      const res = await providersApi.reorderProviderConnection(connId, direction)
+      if (res.data?.moved) {
+        await fetchConnections()
+      }
     } catch (err) {
       console.error('Failed to swap priority:', err)
       await fetchConnections()
@@ -1793,7 +1856,7 @@ export default function ProviderDetailPage() {
         setConfirmState(null)
         try {
           await providersApi.deleteProvider(id)
-          setConnections((prev) => prev.filter((c) => c.id !== id))
+          await fetchConnections()
         } catch (err) {
           console.error('Failed to delete:', err)
         }
@@ -1811,8 +1874,8 @@ export default function ProviderDetailPage() {
         setConfirmState(null)
         try {
           await providersApi.bulkDeleteProviders({ ids })
-          setConnections((prev) => prev.filter((c) => !selectedConnIds.has(c.id)))
           setSelectedConnIds(new Set())
+          await fetchConnections()
         } catch (err) {
           console.error('Failed to delete:', err)
         }
@@ -1843,11 +1906,21 @@ export default function ProviderDetailPage() {
     })
   }
 
-  const handleSelectAllPages = () => {
-    if (selectedConnIds.size === connections.length) {
+  const handleSelectAllPages = async () => {
+    if (connectionTotal > 0 && selectedConnIds.size === connectionTotal) {
       setSelectedConnIds(new Set())
-    } else {
-      setSelectedConnIds(new Set(connections.map((c) => c.id)))
+      return
+    }
+    try {
+      const res = await providersApi.getProviderConnections(providerId, {
+        page: 1,
+        page_size: 1,
+        include_ids: true,
+        include_models: false,
+      })
+      setSelectedConnIds(new Set(res.data?.connectionIds || []))
+    } catch (err) {
+      console.error('Failed to load connection ids:', err)
     }
   }
 
@@ -1936,43 +2009,59 @@ export default function ProviderDetailPage() {
     }
   }
 
-  const handleApplySinglePool = (proxyPoolId) => {
-    const targets = connections.map((c) => ({ connectionId: c.id, proxyPoolId }))
+  const handleApplySinglePool = async (proxyPoolId) => {
+    const res = await providersApi.getProviderConnections(providerId, {
+      page: 1,
+      page_size: 1,
+      include_ids: true,
+      include_models: false,
+    })
+    const ids = res.data?.connectionIds || connections.map((c) => c.id)
+    const targets = ids.map((connectionId) => ({ connectionId, proxyPoolId }))
     return applyProxyAssignments(targets)
   }
 
-  const handleApplyOneToOne = () => {
+  const handleApplyOneToOne = async () => {
     const activePools = proxyPools.filter((p) => p.is_active === true)
     if (activePools.length === 0) { alert('No active proxy pools available.'); return }
-    const targets = connections.map((c, i) => ({
-      connectionId: c.id,
+    const res = await providersApi.getProviderConnections(providerId, {
+      page: 1,
+      page_size: 1,
+      include_ids: true,
+      include_models: false,
+    })
+    const ids = res.data?.connectionIds || connections.map((c) => c.id)
+    const targets = ids.map((connectionId, i) => ({
+      connectionId,
       proxyPoolId: activePools[i % activePools.length].id,
     }))
     return applyProxyAssignments(targets)
   }
 
   // ── Effects ──
-  useEffect(() => {
-    fetchConnections()
-    fetchAliases()
-    fetchDisabledModels()
-  }, [fetchConnections, fetchAliases, fetchDisabledModels])
+  // (initial load is handled above with in-flight dedupe)
 
   // Reset connection pagination when switching providers
   useEffect(() => {
     setConnectionPage(1)
     setSelectedConnIds(new Set())
-  }, [providerId])
+    setConnectionTotal(0)
+  }, [rawProviderId])
+
+  // Clamp page if total shrinks (e.g. after bulk delete)
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(connectionTotal / CONNECTIONS_PER_PAGE) || 1)
+    if (connectionPage > maxPage) setConnectionPage(maxPage)
+  }, [connectionTotal, connectionPage])
 
   // Fetch suggested models from provider's public API (if configured)
   // Only auto-fetch if connections already have models (user hasn't cleared them)
   useEffect(() => {
     const fetcher = info?.modelsFetcher
     if (!fetcher) return
-    const hasModels = connections.some(c => (c.models || []).length > 0)
-    if (!hasModels) return
+    if (!models.length) return
     fetchSuggestedModels(fetcher).then(setSuggestedModels)
-  }, [providerId, info, connections])
+  }, [providerId, info, models])
 
   useEffect(() => {
     setSelectedConnectionIds((prev) => prev.filter((id) => connections.some((conn) => conn.id === id)))
@@ -2189,7 +2278,7 @@ export default function ProviderDetailPage() {
   }
 
   // ── Loading state ──
-  if (loading) {
+  if (loading || !catalogReady) {
     return (
       <div className="flex items-center justify-center min-h-[40vh]">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500" />
@@ -2211,12 +2300,12 @@ export default function ProviderDetailPage() {
 
   const activePools = proxyPools.filter((p) => p.is_active === true)
 
-  // Connection pagination computed values
-  const connTotalPages = Math.max(1, Math.ceil(connections.length / CONNECTIONS_PER_PAGE))
+  // Connection pagination computed values (server-side pages)
+  const connTotalPages = Math.max(1, Math.ceil(connectionTotal / CONNECTIONS_PER_PAGE))
   const connCurrentPage = Math.min(connectionPage, connTotalPages)
   const connStart = (connCurrentPage - 1) * CONNECTIONS_PER_PAGE
-  const connEnd = Math.min(connStart + CONNECTIONS_PER_PAGE, connections.length)
-  const pagedConnections = connections.slice(connStart, connEnd)
+  const connEnd = Math.min(connStart + connections.length, connectionTotal)
+  const pagedConnections = connections
 
   // Page number buttons (max 5 visible)
   const connPageNumbers = (() => {
@@ -2284,7 +2373,7 @@ export default function ProviderDetailPage() {
             <p className="text-zinc-500">
               {isFreeNoAuth
                 ? 'No authentication required'
-                : `${connections.length} connection${connections.length === 1 ? '' : 's'} configured`}
+                : `${connectionTotal} connection${connectionTotal === 1 ? '' : 's'} configured`}
             </p>
           </div>
         </div>
@@ -2326,7 +2415,7 @@ export default function ProviderDetailPage() {
             {!isFreeNoAuth && (
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
               {/* Bulk proxy button */}
-              {connections.length > 0 && proxyPools.length > 0 && (
+              {connectionTotal > 0 && proxyPools.length > 0 && (
                 <Button size="sm" variant="secondary" onClick={() => setShowBulkProxyModal(true)}>
                   <Network size={14} /> Apply Proxy
                 </Button>
@@ -2380,7 +2469,7 @@ export default function ProviderDetailPage() {
 
           {/* ── noAuth provider: simplified status ── */}
           {isFreeNoAuth ? (
-            connections.length === 0 ? (
+            connectionTotal === 0 ? (
               <div className="flex flex-col items-center justify-center py-10">
                 <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-500/10 text-emerald-400 mb-4">
                   <Plug size={20} />
@@ -2436,7 +2525,7 @@ export default function ProviderDetailPage() {
                 )}
               </div>
             )
-          ) : connections.length === 0 ? (
+          ) : connectionTotal === 0 ? (
             <div className="flex flex-col items-center justify-center py-10">
               <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary-600/10 text-primary-400 mb-4">
                 {isOAuth ? <Lock size={20} /> : <Key size={20} />}
@@ -2484,7 +2573,7 @@ export default function ProviderDetailPage() {
                 </label>
                 <div className="flex items-center gap-2">
                   <Button size="sm" variant="warning" onClick={handleSelectAllPages}>
-                    Select All ({connections.length})
+                    Select All ({connectionTotal})
                   </Button>
                   {selectedConnIds.size > 0 && (
                     <Button size="sm" variant="danger" onClick={handleDeleteSelected}>
@@ -2503,12 +2592,12 @@ export default function ProviderDetailPage() {
                           connection={conn}
                           proxyPools={proxyPools}
                           isFirst={actualIndex === 0}
-                          isLast={actualIndex === connections.length - 1}
+                          isLast={actualIndex === connectionTotal - 1}
                           isOAuth={isOAuth}
                           isSelected={selectedConnIds.has(conn.id)}
                           onSelect={handleToggleSelect}
-                          onMoveUp={() => handleSwapPriority(actualIndex, actualIndex - 1)}
-                          onMoveDown={() => handleSwapPriority(actualIndex, actualIndex + 1)}
+                          onMoveUp={() => handleSwapPriority(conn.id, 'up')}
+                          onMoveDown={() => handleSwapPriority(conn.id, 'down')}
                           onToggleActive={(isActive) => handleToggleActive(conn.id, isActive)}
                           onUpdateProxy={async (proxyPoolId) => {
                             try {
@@ -2534,7 +2623,7 @@ export default function ProviderDetailPage() {
               {connTotalPages > 1 && (
                 <div className="mt-3 flex items-center justify-between">
                   <span className="text-xs text-zinc-500">
-                    {connStart + 1}–{connEnd} of {connections.length}
+                    {connStart + 1}–{connEnd} of {connectionTotal}
                   </span>
                   <div className="flex items-center gap-1">
                     <button
@@ -2598,7 +2687,7 @@ export default function ProviderDetailPage() {
               const activeIds = models.filter((m) => !disabledSet.has(typeof m === 'string' ? m : m.id))
               return (
                 <div className="flex gap-2">
-                  <Button size="sm" variant="secondary" onClick={handleFetchModels} disabled={fetchingModels || !connections.length}>
+                  <Button size="sm" variant="secondary" onClick={handleFetchModels} disabled={fetchingModels || connectionTotal === 0}>
                     {fetchingModels ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                     {fetchingModels ? 'Fetching...' : 'Fetch Models'}
                   </Button>
@@ -2619,7 +2708,7 @@ export default function ProviderDetailPage() {
                 </div>
               )
             })()}
-            {models.length === 0 && connections.length > 0 && (
+            {models.length === 0 && connectionTotal > 0 && (
               <Button size="sm" variant="secondary" onClick={handleFetchModels} disabled={fetchingModels}>
                 {fetchingModels ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                 {fetchingModels ? 'Fetching...' : 'Fetch Models'}
@@ -2640,7 +2729,7 @@ export default function ProviderDetailPage() {
       <Modal
         isOpen={showBulkProxyModal}
         onClose={() => { if (!bulkUpdatingProxy) setShowBulkProxyModal(false) }}
-        title={`Apply Proxy (${connections.length} connections)`}
+        title={`Apply Proxy (${connectionTotal} connections)`}
       >
         <div className="flex flex-col gap-3">
           <div className="flex flex-col">

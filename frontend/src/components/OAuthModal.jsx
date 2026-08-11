@@ -59,6 +59,12 @@ export default function OAuthModal({
     }
   }, [])
 
+  useEffect(() => {
+    if (provider) {
+      useCatalogStore.getState().ensureProvider(provider)
+    }
+  }, [provider])
+
   const exchangeTokens = useCallback(
     async (code, state) => {
       if (!authData) return

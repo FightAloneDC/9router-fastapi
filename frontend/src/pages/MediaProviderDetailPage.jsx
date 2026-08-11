@@ -1668,6 +1668,17 @@ export default function MediaProviderDetailPage() {
   const { kind, providerId } = useParams()
   const navigate = useNavigate()
   const catalogStore = useCatalogStore()
+
+  useEffect(() => {
+    // Detail needs this provider + mediaKinds (via full catalog if kinds empty)
+    const store = useCatalogStore.getState()
+    if (!store.mediaKinds?.length) {
+      store.fetchCatalog()
+    } else {
+      store.ensureProvider(providerId)
+    }
+  }, [providerId])
+
   const provider = catalogStore.providers[providerId]
   const kindConfig = catalogStore.getKindConfig(kind)
   const providerAlias = provider ? catalogStore.getProviderAlias(providerId) : providerId

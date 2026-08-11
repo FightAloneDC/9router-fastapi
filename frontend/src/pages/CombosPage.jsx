@@ -53,6 +53,7 @@ export default function CombosPage() {
 
   useEffect(() => {
     fetchCombos()
+    useCatalogStore.getState().fetchCatalog()
   }, [fetchCombos])
 
   const handleCreate = () => {

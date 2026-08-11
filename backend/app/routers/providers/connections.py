@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
-from sqlalchemy import select, delete
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -31,17 +31,291 @@ from app.schemas.provider import (
 )
 
 
+def _models_union_from_data_blobs(data_blobs: list[str | None]) -> list:
+    """Build unique model list from connection data JSON blobs."""
+    seen: set[str] = set()
+    models: list = []
+    for raw in data_blobs:
+        try:
+            data = json.loads(raw) if raw else {}
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for m in data.get("models") or []:
+            mid = m if isinstance(m, str) else (m or {}).get("id", "")
+            if not mid or mid in seen:
+                continue
+            seen.add(mid)
+            models.append(m)
+    return normalize_models_list(models)
+
+
 @router.get("/providers", response_model=list[ProviderConnectionOut])
 async def list_providers(
-    kind: str | None = Query(None, description="Filter by service kind (e.g. llm, embedding, tts)"),
+    kind: str | None = Query(
+        None, description="Filter by service kind (e.g. llm, embedding, tts)"
+    ),
+    provider: str | None = Query(
+        None, description="Filter by provider id (e.g. mistral)"
+    ),
     db: AsyncSession = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    """List all provider connections (sensitive data hidden).
+    """List provider connections (sensitive data hidden).
 
     When `kind` is provided, only return connections for providers that support
     that service kind (based on provider config SERVICE_KINDS). Providers
     without explicit serviceKinds default to ["llm"].
+    Prefer `/providers/by-provider/{id}/connections` for detail pages.
+    """
+    stmt = select(ProviderConnection).order_by(
+        ProviderConnection.provider, ProviderConnection.priority
+    )
+    if provider is not None:
+        stmt = stmt.where(ProviderConnection.provider == provider)
+    result = await db.execute(stmt)
+    connections = result.scalars().all()
+
+    if kind is not None:
+        kind_cache: dict[str, bool] = {}
+
+        def _matches_kind(conn: ProviderConnection) -> bool:
+            cached = kind_cache.get(conn.provider)
+            if cached is not None:
+                return cached
+            defaults = _get_provider_config(conn.provider)
+            kinds = defaults.get("serviceKinds", ["llm"])
+            ok = kind in kinds
+            kind_cache[conn.provider] = ok
+            return ok
+
+        connections = [c for c in connections if _matches_kind(c)]
+
+    return [_connection_to_out(c) for c in connections]
+
+
+@router.get("/providers/by-provider/{provider_id}/connections")
+async def list_provider_connections(
+    provider_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    include_ids: bool = Query(
+        False,
+        description="Include all connectionIds (select-all / bulk ops)",
+    ),
+    include_models: bool = Query(
+        True,
+        description="Include models union once (not per connection)",
+    ),
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Paginated connections for one provider (detail page).
+
+    Avoids downloading every connection for every provider. Models are
+    returned once at the top level; each item.models is omitted/empty.
+    """
+    where = ProviderConnection.provider == provider_id
+    total = await db.scalar(
+        select(func.count()).select_from(ProviderConnection).where(where)
+    )
+    total_i = int(total or 0)
+
+    offset = (page - 1) * page_size
+    page_result = await db.execute(
+        select(ProviderConnection)
+        .where(where)
+        .order_by(ProviderConnection.priority, ProviderConnection.id)
+        .offset(offset)
+        .limit(page_size)
+    )
+    page_conns = page_result.scalars().all()
+
+    items: list[dict] = []
+    for conn in page_conns:
+        out = _connection_to_out(conn)
+        out["models"] = []
+        items.append(out)
+
+    models: list = []
+    if include_models and total_i > 0:
+        blobs = await db.execute(
+            select(ProviderConnection.data).where(where)
+        )
+        models = _models_union_from_data_blobs(
+            list(blobs.scalars().all())
+        )
+
+    payload: dict = {
+        "provider": provider_id,
+        "total": total_i,
+        "page": page,
+        "page_size": page_size,
+        "items": items,
+    }
+    if include_models:
+        payload["models"] = models
+    if include_ids:
+        id_rows = await db.execute(
+            select(ProviderConnection.id)
+            .where(where)
+            .order_by(ProviderConnection.priority, ProviderConnection.id)
+        )
+        payload["connectionIds"] = [
+            str(i) for i in id_rows.scalars().all()
+        ]
+    return payload
+
+
+@router.patch("/providers/by-provider/{provider_id}/models")
+async def set_provider_models(
+    provider_id: str,
+    body: dict = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Set models JSON on all connections of a provider (one round-trip)."""
+    if "models" not in body:
+        raise HTTPException(status_code=400, detail="models is required")
+    models = normalize_models_list(body.get("models") or [])
+
+    result = await db.execute(
+        select(ProviderConnection).where(
+            ProviderConnection.provider == provider_id
+        )
+    )
+    connections = result.scalars().all()
+    if not connections:
+        raise HTTPException(status_code=404, detail="No connections for provider")
+
+    for conn in connections:
+        try:
+            data = json.loads(conn.data) if conn.data else {}
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        data["models"] = models
+        conn.data = json.dumps(data)
+        invalidate_connection_cache(str(conn.id))
+
+    await db.commit()
+    return {
+        "provider": provider_id,
+        "updated": len(connections),
+        "models": models,
+    }
+
+
+@router.delete("/providers/by-provider/{provider_id}/models")
+async def clear_provider_models_bulk(
+    provider_id: str,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Clear models on all connections of a provider."""
+    result = await db.execute(
+        select(ProviderConnection).where(
+            ProviderConnection.provider == provider_id
+        )
+    )
+    connections = result.scalars().all()
+    if not connections:
+        raise HTTPException(status_code=404, detail="No connections for provider")
+
+    for conn in connections:
+        try:
+            data = json.loads(conn.data) if conn.data else {}
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+        data["models"] = []
+        conn.data = json.dumps(data)
+        invalidate_connection_cache(str(conn.id))
+
+    await db.commit()
+    return {"provider": provider_id, "updated": len(connections), "models": []}
+
+
+@router.post("/providers/{conn_id}/reorder")
+async def reorder_connection(
+    conn_id: str,
+    body: dict = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Swap priority with neighbor (up/down) for same provider."""
+    direction = body.get("direction")
+    if direction not in ("up", "down"):
+        raise HTTPException(
+            status_code=400, detail="direction must be 'up' or 'down'"
+        )
+
+    result = await db.execute(
+        select(ProviderConnection).where(ProviderConnection.id == conn_id)
+    )
+    conn = result.scalar_one_or_none()
+    if not conn:
+        raise HTTPException(status_code=404, detail="Connection not found")
+
+    siblings = (
+        await db.execute(
+            select(ProviderConnection)
+            .where(ProviderConnection.provider == conn.provider)
+            .order_by(ProviderConnection.priority, ProviderConnection.id)
+        )
+    ).scalars().all()
+
+    idx = next((i for i, c in enumerate(siblings) if c.id == conn.id), -1)
+    if idx < 0:
+        raise HTTPException(status_code=404, detail="Connection not found")
+
+    swap_idx = idx - 1 if direction == "up" else idx + 1
+    if swap_idx < 0 or swap_idx >= len(siblings):
+        return {"moved": False, "reason": "already_at_edge"}
+
+    mover = siblings[idx]
+    neighbor = siblings[swap_idx]
+    # Many imports share priority=0; swapping equal values is a no-op
+    # under ORDER BY (priority, id). Nudge the mover across the neighbor.
+    if mover.priority != neighbor.priority:
+        mover.priority, neighbor.priority = (
+            neighbor.priority,
+            mover.priority,
+        )
+    elif direction == "up":
+        mover.priority = int(neighbor.priority) - 1
+    else:
+        mover.priority = int(neighbor.priority) + 1
+
+    invalidate_connection_cache(str(mover.id))
+    invalidate_connection_cache(str(neighbor.id))
+    await db.commit()
+    return {
+        "moved": True,
+        "a": str(mover.id),
+        "b": str(neighbor.id),
+        "priorities": {
+            str(mover.id): mover.priority,
+            str(neighbor.id): neighbor.priority,
+        },
+    }
+
+
+@router.get("/providers/overview")
+async def providers_overview(
+    kind: str | None = Query(
+        "llm",
+        description="Filter by service kind (default llm)",
+    ),
+    include_ids: bool = Query(
+        False,
+        description="Include connectionIds (for batch test); omit on list load",
+    ),
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Lightweight per-provider stats for /providers list page.
+
+    Avoids returning thousands of full connection payloads (models,
+    providerSpecificData, etc.). Pass include_ids=true when the client
+    needs connection UUIDs for batch actions.
     """
     result = await db.execute(
         select(ProviderConnection).order_by(
@@ -50,14 +324,104 @@ async def list_providers(
     )
     connections = result.scalars().all()
 
-    if kind is not None:
-        def _matches_kind(conn):
-            defaults = _get_provider_config(conn.provider)
-            kinds = defaults.get("serviceKinds", ["llm"])
-            return kind in kinds
-        connections = [c for c in connections if _matches_kind(c)]
+    kind_cache: dict[str, bool] = {}
 
-    return [_connection_to_out(c) for c in connections]
+    def _matches_kind(provider: str) -> bool:
+        cached = kind_cache.get(provider)
+        if cached is not None:
+            return cached
+        defaults = _get_provider_config(provider)
+        kinds = defaults.get("serviceKinds", ["llm"])
+        ok = kind is None or kind in kinds
+        kind_cache[provider] = ok
+        return ok
+
+    stats: dict[str, dict] = {}
+    for conn in connections:
+        if not _matches_kind(conn.provider):
+            continue
+
+        data: dict = {}
+        try:
+            data = json.loads(conn.data) if conn.data else {}
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+
+        entry = stats.get(conn.provider)
+        if entry is None:
+            entry = {
+                "total": 0,
+                "connected": 0,
+                "error": 0,
+                "allDisabled": True,
+                "errorCode": None,
+                "errorAt": None,
+            }
+            if include_ids:
+                entry["connectionIds"] = []
+            stats[conn.provider] = entry
+
+        entry["total"] += 1
+        if include_ids:
+            entry["connectionIds"].append(str(conn.id))
+        if conn.is_active:
+            entry["allDisabled"] = False
+
+        status = data.get("testStatus")
+        if status in ("active", "success", "connected"):
+            entry["connected"] += 1
+        elif status in ("error", "expired", "unavailable"):
+            entry["error"] += 1
+            err_at = data.get("lastErrorAt")
+            prev_at = entry.get("errorAt")
+            if err_at and (not prev_at or str(err_at) > str(prev_at)):
+                entry["errorAt"] = err_at
+                entry["errorCode"] = (
+                    data.get("lastErrorType")
+                    or data.get("errorCode")
+                    or data.get("lastError")
+                )
+
+    for entry in stats.values():
+        if entry["total"] == 0:
+            entry["allDisabled"] = False
+
+    return {"stats": stats}
+
+
+@router.patch("/providers/by-provider/{provider_id}/active")
+async def set_provider_connections_active(
+    provider_id: str,
+    body: dict = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Set is_active for all connections of a provider (list-page toggle)."""
+    if "is_active" not in body and "isActive" not in body:
+        raise HTTPException(status_code=400, detail="is_active is required")
+    is_active = body.get("is_active", body.get("isActive"))
+    if not isinstance(is_active, bool):
+        raise HTTPException(status_code=400, detail="is_active must be boolean")
+
+    result = await db.execute(
+        select(ProviderConnection).where(
+            ProviderConnection.provider == provider_id
+        )
+    )
+    connections = result.scalars().all()
+    if not connections:
+        raise HTTPException(status_code=404, detail="No connections for provider")
+
+    for conn in connections:
+        conn.is_active = is_active
+        invalidate_connection_cache(str(conn.id))
+
+    await db.commit()
+    return {
+        "provider": provider_id,
+        "is_active": is_active,
+        "updated": len(connections),
+    }
 
 
 @router.get("/providers/client")

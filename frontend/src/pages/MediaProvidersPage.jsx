@@ -148,6 +148,7 @@ export default function MediaProvidersPage() {
 
   // Fetch connections (for status display) — once on mount
   useEffect(() => {
+    useCatalogStore.getState().fetchCatalog()
     providersApi.getProviders()
       .then((res) => setConnections(res.data || []))
       .catch(() => {})

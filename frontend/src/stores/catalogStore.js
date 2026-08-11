@@ -9,6 +9,7 @@ const useCatalogStore = create((set, get) => ({
   authMethods: {},
   loaded: false,
   loading: false,
+  _ensuring: {},
 
   fetchCatalog: async () => {
     if (get().loaded || get().loading) return
@@ -29,6 +30,54 @@ const useCatalogStore = create((set, get) => ({
       console.error('[catalog] Failed to fetch provider catalog:', err)
       set({ loading: false })
     }
+  },
+
+  /**
+   * Load a single provider's catalog entry (for detail pages).
+   * No-ops if full catalog is already loaded or the provider is present.
+   */
+  ensureProvider: async (idOrAlias) => {
+    if (!idOrAlias) return null
+    const state = get()
+    if (state.loaded) {
+      return state.getProviderByAlias(idOrAlias) || state.providers[idOrAlias] || null
+    }
+    const existing =
+      state.providers[idOrAlias] || state.getProviderByAlias(idOrAlias)
+    if (existing) return existing
+
+    if (state._ensuring[idOrAlias]) {
+      return state._ensuring[idOrAlias]
+    }
+
+    const pending = (async () => {
+      try {
+        const res = await client.get(`/providers/catalog/${encodeURIComponent(idOrAlias)}`)
+        const data = res.data || {}
+        const provider = data.provider
+        if (!provider?.id) return null
+        set((s) => ({
+          providers: { ...s.providers, [provider.id]: provider },
+          compatiblePrefixes: data.compatiblePrefixes || s.compatiblePrefixes,
+          authMethods: data.authMethods || s.authMethods,
+        }))
+        return provider
+      } catch (err) {
+        console.error('[catalog] Failed to fetch provider entry:', err)
+        return null
+      } finally {
+        set((s) => {
+          const next = { ...s._ensuring }
+          delete next[idOrAlias]
+          return { _ensuring: next }
+        })
+      }
+    })()
+
+    set((s) => ({
+      _ensuring: { ...s._ensuring, [idOrAlias]: pending },
+    }))
+    return pending
   },
 
   // ── Accessors ────────────────────────────────────────────────────────

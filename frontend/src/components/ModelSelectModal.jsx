@@ -30,6 +30,7 @@ export default function ModelSelectModal({ isOpen, onClose, onAdd, existingModel
   // Fetch all models when modal opens
   useEffect(() => {
     if (!isOpen) return
+    useCatalogStore.getState().fetchCatalog()
     setLoading(true)
     setSelected(new Set())
     setSearch('')

@@ -23,6 +23,7 @@ import {
 import Card, { CardContent, CardHeader } from '../components/ui/Card'
 import { usageApi } from '../api/usage'
 import ProviderTopology from '../components/ProviderTopology'
+import useCatalogStore from '../stores/catalogStore'
 
 // --- Number formatting helpers ---
 
@@ -911,6 +912,7 @@ function RequestDetailsTab() {
   }, [pagination.page, pagination.pageSize, filters])
 
   useEffect(() => {
+    useCatalogStore.getState().fetchCatalog()
     fetchProviders() // eslint-disable-line react-hooks/set-state-in-effect
   }, [fetchProviders])
 

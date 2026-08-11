@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Plus, Search, Server, Plug, AlertCircle, ChevronRight, Key, Play,
   CheckCircle, XCircle, Loader2, Expand, Settings2, ToggleLeft, ToggleRight,
@@ -119,6 +119,7 @@ function ProviderLogo({ providerId, provider, size = 32 }) {
       height={size}
       className="shrink-0 rounded-lg object-contain"
       style={{ width: size, height: size }}
+      loading="lazy"
       onError={() => setImgError(true)}
     />
   )
@@ -126,7 +127,7 @@ function ProviderLogo({ providerId, provider, size = 32 }) {
 
 // ── Main page component ─────────────────────────────────────────────────────
 export default function ProvidersPage() {
-  const [connections, setConnections] = useState([])
+  const [providerStats, setProviderStats] = useState({})
   const [providerNodes, setProviderNodes] = useState([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
@@ -141,16 +142,20 @@ export default function ProvidersPage() {
   const [autoConnectingProvider, setAutoConnectingProvider] = useState(null)
 
   const addNotification = useNotificationStore(s => s.addNotification)
-  const location = useLocation()
 
-  // ── Data fetching ──────────────────────────────────────────────────────────
+  // Full catalog needed for categories / provider metadata on list page
+  useEffect(() => {
+    useCatalogStore.getState().fetchCatalog()
+  }, [])
+
+  // ── Data fetching (overview only — not full 5MB connection list) ───────────
   const fetchData = useCallback(async () => {
     try {
-      const [connRes, nodesRes] = await Promise.all([
-        providersApi.getProviders({ kind: 'llm' }),
+      const [overviewRes, nodesRes] = await Promise.all([
+        providersApi.getProvidersOverview({ kind: 'llm' }),
         providersApi.getProviderNodes(),
       ])
-      setConnections(connRes.data?.connections || connRes.data || [])
+      setProviderStats(overviewRes.data?.stats || {})
       setProviderNodes(nodesRes.data?.nodes || nodesRes.data || [])
     } catch (err) {
       console.error('Failed to fetch providers:', err)
@@ -160,63 +165,61 @@ export default function ProvidersPage() {
   }, [])
 
   useEffect(() => { fetchData() }, [fetchData])
-  useEffect(() => { fetchData() }, [location.pathname])
 
   // ── Provider stats computation ─────────────────────────────────────────────
   const getProviderStats = useCallback((providerId) => {
-    const conns = connections.filter(c => c.provider === providerId)
-
-    const connected = conns.filter(c => {
-      const status = c.test_status || c.testStatus
-      return status === 'active' || status === 'success' || status === 'connected'
-    }).length
-
-    const errorConns = conns.filter(c => {
-      const status = c.test_status || c.testStatus
-      return status === 'error' || status === 'expired' || status === 'unavailable'
-    })
-
-    const error = errorConns.length
-    const total = conns.length
-    const allDisabled = total > 0 && conns.every(c => c.is_active === false || c.isActive === false)
-
-    const latestError = errorConns.sort((a, b) =>
-      new Date(b.last_error_at || b.lastErrorAt || 0) - new Date(a.last_error_at || a.lastErrorAt || 0)
-    )[0]
-    const errorCode = latestError ? getConnectionErrorTag(latestError) : null
-    const errorTime = latestError?.last_error_at || latestError?.lastErrorAt
-      ? getRelativeTime(latestError.last_error_at || latestError.lastErrorAt)
+    const entry = providerStats[providerId]
+    if (!entry) {
+      return {
+        connected: 0, error: 0, total: 0,
+        errorCode: null, errorTime: null, allDisabled: false,
+      }
+    }
+    const latestError = {
+      lastErrorType: entry.errorCode,
+      lastError: entry.errorCode,
+      errorCode: entry.errorCode,
+      lastErrorAt: entry.errorAt,
+    }
+    const errorCode = entry.errorAt
+      ? getConnectionErrorTag(latestError)
       : null
-
-    return { connected, error, total, errorCode, errorTime, allDisabled }
-  }, [connections])
+    const errorTime = entry.errorAt
+      ? getRelativeTime(entry.errorAt)
+      : null
+    return {
+      connected: entry.connected || 0,
+      error: entry.error || 0,
+      total: entry.total || 0,
+      errorCode,
+      errorTime,
+      allDisabled: !!entry.allDisabled,
+    }
+  }, [providerStats])
 
   // ── Toggle handler ─────────────────────────────────────────────────────────
   const handleToggleProvider = useCallback(async (providerId, newActive) => {
-    const providerConns = connections.filter(c => c.provider === providerId)
+    const prev = providerStats[providerId]
     // optimistic update
-    setConnections(prev => prev.map(c =>
-      c.provider === providerId ? { ...c, is_active: newActive, isActive: newActive } : c
-    ))
+    setProviderStats((s) => ({
+      ...s,
+      [providerId]: prev
+        ? { ...prev, allDisabled: !newActive }
+        : {
+          total: 0, connected: 0, error: 0,
+          allDisabled: !newActive, connectionIds: [],
+        },
+    }))
     try {
-      const results = await Promise.allSettled(
-        providerConns.map(c => providersApi.updateProvider(c.id, { is_active: newActive }))
-      )
-      const anyFailed = results.some(r => r.status === 'rejected')
-      if (anyFailed) {
-        // revert optimistic update
-        setConnections(prev => prev.map(c =>
-          c.provider === providerId ? { ...c, is_active: !newActive, isActive: !newActive } : c
-        ))
-        addNotification({ type: 'error', message: 'Failed to update provider status' })
-      }
+      await providersApi.setProviderActive(providerId, newActive)
     } catch {
-      setConnections(prev => prev.map(c =>
-        c.provider === providerId ? { ...c, is_active: !newActive, isActive: !newActive } : c
-      ))
+      setProviderStats((s) => ({
+        ...s,
+        [providerId]: prev,
+      }))
       addNotification({ type: 'error', message: 'Failed to update provider status' })
     }
-  }, [connections, addNotification])
+  }, [providerStats, addNotification])
 
   // ── Batch test handler ─────────────────────────────────────────────────────
   const handleBatchTest = useCallback(async (mode, providerId = null) => {
@@ -224,28 +227,41 @@ export default function ProvidersPage() {
     setTestingMode(providerId || mode)
     setTestResults(null)
     try {
-      const allConns = providerId
-        ? connections.filter(c => c.provider === providerId)
-        : connections.filter(c => {
-            const key = c.provider
-            if (mode === 'oauth') return isOAuthProvider(key)
-            if (mode === 'free') return isFreeProvider(key) || isFreeTierProvider(key)
-            if (mode === 'cookie') return isWebCookieProvider(key)
-            if (mode === 'apikey') return isApiKeyProvider(key)
-            return true
+      // Load IDs only when testing (not on page load)
+      const overviewRes = await providersApi.getProvidersOverview({
+        kind: 'llm',
+        include_ids: true,
+      })
+      const statsWithIds = overviewRes.data?.stats || {}
+
+      const targets = []
+      if (providerId) {
+        const ids = statsWithIds[providerId]?.connectionIds || []
+        ids.forEach((id) => targets.push({ id, provider: providerId }))
+      } else {
+        Object.entries(statsWithIds).forEach(([key, entry]) => {
+          if (mode === 'oauth' && !isOAuthProvider(key)) return
+          if (mode === 'free' && !(isFreeProvider(key) || isFreeTierProvider(key))) return
+          if (mode === 'cookie' && !isWebCookieProvider(key)) return
+          if (mode === 'apikey' && !isApiKeyProvider(key)) return
+          ;(entry.connectionIds || []).forEach((id) => {
+            targets.push({ id, provider: key })
           })
+        })
+      }
+
+      // Cap burst size — testing thousands of keys blocks the UI
+      const MAX_BATCH = 50
+      const batch = targets.slice(0, MAX_BATCH)
 
       const results = await Promise.allSettled(
-        allConns.map(async (conn) => {
+        batch.map(async (conn) => {
           const start = Date.now()
           try {
-            await providersApi.validateProvider({
-              provider: conn.provider,
-              apiKey: conn.api_key_masked || '',
-            })
+            await providersApi.testProvider(conn.id)
             return {
               connectionId: conn.id,
-              connectionName: conn.name || conn.provider,
+              connectionName: conn.provider,
               provider: conn.provider,
               valid: true,
               latencyMs: Date.now() - start,
@@ -253,7 +269,7 @@ export default function ProvidersPage() {
           } catch (err) {
             return {
               connectionId: conn.id,
-              connectionName: conn.name || conn.provider,
+              connectionName: conn.provider,
               provider: conn.provider,
               valid: false,
               latencyMs: Date.now() - start,
@@ -267,13 +283,32 @@ export default function ProvidersPage() {
       const passed = items.filter(r => r.valid).length
       const failed = items.filter(r => !r.valid).length
 
-      const data = { mode, results: items, summary: { passed, failed, total: items.length } }
+      const data = {
+        mode,
+        results: items,
+        summary: {
+          passed,
+          failed,
+          total: items.length,
+          capped: targets.length > MAX_BATCH,
+          available: targets.length,
+        },
+      }
       setTestResults(data)
 
+      const capNote = targets.length > MAX_BATCH
+        ? ` (first ${MAX_BATCH} of ${targets.length})`
+        : ''
       if (failed === 0) {
-        addNotification({ type: 'success', message: `All ${items.length} tests passed` })
+        addNotification({
+          type: 'success',
+          message: `All ${items.length} tests passed${capNote}`,
+        })
       } else {
-        addNotification({ type: 'warning', message: `${passed}/${items.length} passed, ${failed} failed` })
+        addNotification({
+          type: 'warning',
+          message: `${passed}/${items.length} passed, ${failed} failed${capNote}`,
+        })
       }
     } catch {
       setTestResults({ error: 'Test request failed' })
@@ -281,7 +316,7 @@ export default function ProvidersPage() {
     } finally {
       setTestingMode(null)
     }
-  }, [testingMode, connections, addNotification])
+  }, [testingMode, addNotification])
 
   // ── Match search ───────────────────────────────────────────────────────────
   const matchSearch = useCallback((name) => {
@@ -443,7 +478,8 @@ export default function ProvidersPage() {
         <div>
           <h1 className="text-2xl font-bold text-zinc-100">Providers</h1>
           <p className="text-sm text-zinc-500 mt-1">
-            {connections.length} connection{connections.length !== 1 ? 's' : ''} configured
+            {Object.values(providerStats).reduce((n, s) => n + (s.total || 0), 0)}{' '}
+            connection{Object.values(providerStats).reduce((n, s) => n + (s.total || 0), 0) !== 1 ? 's' : ''} configured
           </p>
         </div>
         <div className="flex items-center gap-3">

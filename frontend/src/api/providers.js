@@ -3,10 +3,23 @@ import client from './client'
 export const providersApi = {
   // Provider Connections
   getProviders: (params) => client.get('/providers', { params }),
+  getProvidersOverview: (params) => client.get('/providers/overview', { params }),
+  getProviderConnections: (providerId, params) =>
+    client.get(`/providers/by-provider/${providerId}/connections`, { params }),
   getProvidersClient: () => client.get('/providers/client'),
   getProvider: (id) => client.get(`/providers/${id}`),
   createProvider: (data) => client.post('/providers', data),
   updateProvider: (id, data) => client.patch(`/providers/${id}`, data),
+  setProviderActive: (providerId, isActive) =>
+    client.patch(`/providers/by-provider/${providerId}/active`, {
+      is_active: isActive,
+    }),
+  setProviderModels: (providerId, models) =>
+    client.patch(`/providers/by-provider/${providerId}/models`, { models }),
+  clearProviderModelsByProvider: (providerId) =>
+    client.delete(`/providers/by-provider/${providerId}/models`),
+  reorderProviderConnection: (connId, direction) =>
+    client.post(`/providers/${connId}/reorder`, { direction }),
   deleteProvider: (id) => client.delete(`/providers/${id}`),
   bulkDeleteProviders: (data) => client.post('/providers/bulk-delete', data),
 
