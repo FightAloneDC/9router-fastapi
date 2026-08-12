@@ -219,7 +219,9 @@ function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMo
             {hasRefreshError && <Badge variant="warning" size="sm">Refresh Error</Badge>}
             {isCooldown && isActive && <CooldownTimer until={modelLockUntil} />}
             {connection.priority != null && (
-              <span className="text-xs text-zinc-500">#{connection.priority}</span>
+              <span className="text-xs text-zinc-500">
+                #{Number(connection.priority) + 1}
+              </span>
             )}
           </div>
           {hasAnyProxy && (
@@ -634,7 +636,10 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
               onChange={(e) => setPriority(parseInt(e.target.value, 10) || 0)}
               className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-3.5 py-2.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
             />
-            <p className="text-xs text-zinc-500 mt-1">Lower = higher priority</p>
+            <p className="text-xs text-zinc-500 mt-1">
+              Lower = earlier in request order. Saved values are
+              normalized to 0..n-1 (UI shows #1..n).
+            </p>
           </div>
           <div>
             <label className="block text-sm font-medium text-zinc-300 mb-1.5">Proxy Pool</label>

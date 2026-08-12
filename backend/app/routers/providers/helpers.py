@@ -4,12 +4,73 @@ import json
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.models.provider import ProviderConnection, ProviderNode
 from app.models.proxy_pool import ProxyPool
 from app.providers.provider import Provider
 from app.routers.providers.constants import _DATA_INTERNAL_KEYS, normalize_models_list
+
+
+async def _next_provider_priority(
+    db: AsyncSession,
+    provider: str,
+) -> int:
+    """Next priority slot for a new connection (append at end)."""
+    max_pri = await db.scalar(
+        select(func.max(ProviderConnection.priority)).where(
+            ProviderConnection.provider == provider
+        )
+    )
+    if max_pri is None:
+        return 0
+    return int(max_pri) + 1
+
+
+async def _renumber_provider_priorities(
+    db: AsyncSession,
+    provider: str,
+) -> dict[str, int]:
+    """Normalize priorities to unique 0..n-1 in current sort order.
+
+    Order: priority ascending, then id. Used so request/round-robin
+    order matches the connection list (#1..n in the UI).
+    """
+    rows = (
+        await db.execute(
+            select(ProviderConnection)
+            .where(ProviderConnection.provider == provider)
+            .order_by(
+                ProviderConnection.priority,
+                ProviderConnection.id,
+            )
+        )
+    ).scalars().all()
+
+    mapping: dict[str, int] = {}
+    for i, conn in enumerate(rows):
+        if conn.priority != i:
+            conn.priority = i
+        mapping[str(conn.id)] = i
+    return mapping
+
+
+async def _priorities_need_renumber(
+    db: AsyncSession,
+    provider: str,
+) -> bool:
+    """True if priorities are not exactly 0..n-1 in sort order."""
+    rows = (
+        await db.execute(
+            select(ProviderConnection.priority)
+            .where(ProviderConnection.provider == provider)
+            .order_by(
+                ProviderConnection.priority,
+                ProviderConnection.id,
+            )
+        )
+    ).scalars().all()
+    return list(rows) != list(range(len(rows)))
 
 
 def _get_provider_config(provider: str) -> dict:

@@ -47,6 +47,10 @@ from app.providers.gitlab.oauth import GitLabPATRequest
 from app.providers.kiro.oauth import KiroImportRequest, KiroSocialExchangeRequest
 from app.providers.qoder.auth import import_pat
 from app.providers.qoder.oauth import QoderPATRequest
+from app.routers.providers.helpers import (
+    _next_provider_priority,
+    _renumber_provider_priorities,
+)
 from app.services.oauth import (
     generate_auth_data,
     exchange_tokens,
@@ -146,6 +150,8 @@ async def _save_connection(
     provider: str,
     token_data: dict,
     auth_type: str = "oauth",
+    *,
+    renumber: bool = True,
 ) -> ProviderConnection:
     """Create or update a ProviderConnection from OAuth token data."""
     now = datetime.now(timezone.utc)
@@ -188,12 +194,18 @@ async def _save_connection(
     conn = ProviderConnection(
         provider=provider,
         auth_type=auth_type,
-        name=display_name or email or f"{provider} {'PAT' if auth_type == 'apikey' else 'OAuth'}",
+        name=display_name or email or (
+            f"{provider} "
+            f"{'PAT' if auth_type == 'apikey' else 'OAuth'}"
+        ),
         email=email,
+        priority=await _next_provider_priority(db, provider),
         data=json.dumps(data),
     )
     db.add(conn)
     await db.flush()
+    if renumber:
+        await _renumber_provider_priorities(db, provider)
     return conn
 
 
@@ -736,6 +748,7 @@ async def provider_bulk_import(
                 token_data["email"] = email
             conn = await _save_connection(
                 db, provider, token_data, auth_type=auth_type,
+                renumber=False,
             )
             # Force name column to email
             conn.name = email
@@ -746,6 +759,7 @@ async def provider_bulk_import(
         results.append({"index": i, "email": email, "status": status})
         counts[status] += 1
 
+    await _renumber_provider_priorities(db, provider)
     await db.commit()
     return {**counts, "results": results}
 
@@ -863,6 +877,7 @@ async def _bulk_import_api_keys(
                     },
                 },
                 auth_type="apikey",
+                renumber=False,
             )
             by_key[key] = conn
             status = "created"
@@ -872,5 +887,6 @@ async def _bulk_import_api_keys(
         })
         counts[status] += 1
 
+    await _renumber_provider_priorities(db, provider)
     await db.commit()
     return {**counts, "results": results}

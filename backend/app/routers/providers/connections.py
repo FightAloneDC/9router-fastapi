@@ -16,8 +16,11 @@ from app.routers.providers.constants import SUGGESTED_MODELS_FILTERS, normalize_
 from app.routers.providers.helpers import _get_provider_config
 from app.routers.providers.helpers import (
     _connection_to_out,
+    _next_provider_priority,
     _normalize_proxy_config,
     _normalize_proxy_pool_id,
+    _priorities_need_renumber,
+    _renumber_provider_priorities,
     _sanitize_connection,
 )
 from app.routers.providers.validation import _validate_provider
@@ -115,6 +118,12 @@ async def list_provider_connections(
     returned once at the top level; each item.models is omitted/empty.
     """
     where = ProviderConnection.provider == provider_id
+
+    # Heal legacy duplicate/gapped priorities once (page 1 only)
+    if page == 1 and await _priorities_need_renumber(db, provider_id):
+        await _renumber_provider_priorities(db, provider_id)
+        await db.flush()
+
     total = await db.scalar(
         select(func.count()).select_from(ProviderConnection).where(where)
     )
@@ -270,30 +279,22 @@ async def reorder_connection(
     if swap_idx < 0 or swap_idx >= len(siblings):
         return {"moved": False, "reason": "already_at_edge"}
 
-    mover = siblings[idx]
+    ordered = list(siblings)
+    mover = ordered.pop(idx)
     neighbor = siblings[swap_idx]
-    # Many imports share priority=0; swapping equal values is a no-op
-    # under ORDER BY (priority, id). Nudge the mover across the neighbor.
-    if mover.priority != neighbor.priority:
-        mover.priority, neighbor.priority = (
-            neighbor.priority,
-            mover.priority,
-        )
-    elif direction == "up":
-        mover.priority = int(neighbor.priority) - 1
-    else:
-        mover.priority = int(neighbor.priority) + 1
+    ordered.insert(swap_idx, mover)
+    for i, row in enumerate(ordered):
+        if row.priority != i:
+            row.priority = i
+            invalidate_connection_cache(str(row.id))
 
-    invalidate_connection_cache(str(mover.id))
-    invalidate_connection_cache(str(neighbor.id))
     await db.commit()
     return {
         "moved": True,
         "a": str(mover.id),
         "b": str(neighbor.id),
         "priorities": {
-            str(mover.id): mover.priority,
-            str(neighbor.id): neighbor.priority,
+            str(row.id): row.priority for row in ordered
         },
     }
 
@@ -550,12 +551,13 @@ async def create_provider(
         provider=body.provider,
         auth_type=body.auth_type,
         name=body.name,
-        priority=body.priority,
+        priority=await _next_provider_priority(db, body.provider),
         proxy_pool_id=proxy_pool_id,
         data=json.dumps(data),
     )
     db.add(conn)
     await db.flush()
+    await _renumber_provider_priorities(db, body.provider)
     await db.refresh(conn)
     return _connection_to_out(conn)
 
@@ -699,6 +701,7 @@ async def update_provider(
     conn.data = json.dumps(data)
 
     await db.flush()
+    await _renumber_provider_priorities(db, conn.provider)
     await db.refresh(conn)
 
     # Invalidate proxy cache so next request sees updated is_active state
@@ -723,7 +726,10 @@ async def delete_provider(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Provider connection not found",
         )
+    provider = conn.provider
     await db.delete(conn)
+    await db.flush()
+    await _renumber_provider_priorities(db, provider)
 
 
 @router.post("/providers/bulk-delete")
@@ -747,11 +753,20 @@ async def bulk_delete_providers(
         )
 
     deleted = 0
+    providers_to_fix: set[str] = set()
     if ids:
         if not isinstance(ids, list):
             raise HTTPException(
                 status_code=400, detail="'ids' must be a list",
             )
+        existing = (
+            await db.execute(
+                select(ProviderConnection).where(
+                    ProviderConnection.id.in_(ids)
+                )
+            )
+        ).scalars().all()
+        providers_to_fix = {c.provider for c in existing}
         result = await db.execute(
             delete(ProviderConnection).where(
                 ProviderConnection.id.in_(ids)
@@ -766,6 +781,9 @@ async def bulk_delete_providers(
         )
         deleted = result.rowcount
 
+    await db.flush()
+    for pid in providers_to_fix:
+        await _renumber_provider_priorities(db, pid)
     await db.commit()
     return {"deleted": deleted}
 
