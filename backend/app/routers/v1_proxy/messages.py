@@ -7,9 +7,11 @@ import uuid
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.provider import ProviderConnection
 from app.services.api_key_auth import validate_api_key
 from app.services.proxy import (
     resolve_model_to_targets,
@@ -24,6 +26,12 @@ from app.services.message_translator import (
 )
 from app.services.usage_tracking import save_request_tracking
 from app.services.active_requests import track_request_start, track_request_end
+from app.services.outbound_proxy import (
+    ProxyRequiredError,
+    create_upstream_client,
+    proxy_for_connection,
+    purpose_from_header,
+)
 
 from .shared import (
     _should_fallback_on_error,
@@ -86,6 +94,7 @@ async def messages_endpoint(
 
     request_id: str = str(uuid.uuid4())
     is_stream: bool = body.get("stream", False)
+    purpose = purpose_from_header(request.headers.get("x-9router-purpose"))
 
     # Apply combo rotation strategy (per-combo override > global)
     strategy, sticky_limit = await get_combo_strategy(db, combo_name=model_str)
@@ -105,6 +114,26 @@ async def messages_endpoint(
             break
 
         target = targets[0]
+        conn = None
+        if target.connection_id:
+            conn_result = await db.execute(
+                select(ProviderConnection).where(
+                    ProviderConnection.id == target.connection_id
+                )
+            )
+            conn = conn_result.scalar_one_or_none()
+
+        try:
+            proxy = await proxy_for_connection(db, conn, purpose)
+        except ProxyRequiredError as exc:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={
+                    "type": "error",
+                    "error": {"type": "api_error", "message": str(exc)},
+                },
+                headers={"X-Request-Id": request_id},
+            )
 
         # Determine if the upstream is Claude-format or OpenAI-format
         is_claude_upstream: bool = False
@@ -136,10 +165,14 @@ async def messages_endpoint(
                     connection_id=target.connection_id,
                     request_body=body, request_start_time=request_start_time,
                     active_request_id=active_request_id,
+                    proxy=proxy,
                 )
                 resp_data: dict = {}
             else:
-                async with httpx.AsyncClient(timeout=300.0) as client:
+                async with create_upstream_client(
+                    proxy=proxy,
+                    timeout=300.0,
+                ) as client:
                     http_resp = await client.post(
                         target.url,
                         json=forward_body,
@@ -282,6 +315,7 @@ async def _messages_stream_response(
     request_body: dict | None = None,
     request_start_time: float | None = None,
     active_request_id: str | None = None,
+    proxy: str | None = None,
 ) -> StreamingResponse:
     """Stream response for /v1/messages endpoint.
 
@@ -294,7 +328,10 @@ async def _messages_stream_response(
 
     async def generate_claude_passthrough():  # type: ignore[no-untyped-def]
         """Forward Claude SSE bytes directly."""
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with create_upstream_client(
+            proxy=proxy,
+            timeout=300.0,
+        ) as client:
             try:
                 async with client.stream(
                     "POST", target.url, json=body, headers=target.headers,
@@ -328,7 +365,10 @@ async def _messages_stream_response(
     async def generate_openai_to_claude():  # type: ignore[no-untyped-def]
         """Translate OpenAI SSE → Claude SSE."""
         translator = ClaudeStreamTranslator(model=model_str, request_id=request_id)
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with create_upstream_client(
+            proxy=proxy,
+            timeout=300.0,
+        ) as client:
             try:
                 async with client.stream(
                     "POST", target.url, json=body, headers=target.headers,

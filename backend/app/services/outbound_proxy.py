@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import contextvars
+import json
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Literal
 
 import httpx
+from sqlalchemy import select
 
 from app.models.proxy_pool import ProxyPool
 
@@ -100,6 +102,34 @@ def resolve_proxy_url(
         return None
 
     return pool.proxy_url
+
+
+async def proxy_for_connection(
+    db: Any,
+    conn: Any | None,
+    purpose: ProxyPurpose,
+) -> str | None:
+    """Resolve the proxy URL for one provider connection and purpose."""
+    if conn is None:
+        return None
+
+    try:
+        data = json.loads(conn.data) if conn.data else {}
+    except (json.JSONDecodeError, TypeError):
+        data = {}
+
+    pool = None
+    if conn.proxy_pool_id:
+        result = await db.execute(
+            select(ProxyPool).where(ProxyPool.id == conn.proxy_pool_id)
+        )
+        pool = result.scalar_one_or_none()
+
+    return resolve_proxy_url(
+        usage=parse_proxy_usage(data.get("proxyUsage")),
+        purpose=purpose,
+        pool=pool,
+    )
 
 
 def create_upstream_client(

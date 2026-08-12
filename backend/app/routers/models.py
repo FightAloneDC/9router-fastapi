@@ -14,6 +14,11 @@ from app.database import get_db
 from app.models.provider import ProviderConnection
 from app.models.settings import SettingsModel
 from app.routers.auth import get_current_user
+from app.services.outbound_proxy import (
+    ProxyRequiredError,
+    create_upstream_client,
+    proxy_for_connection,
+)
 
 router = APIRouter(prefix="/models", tags=["models"])
 
@@ -306,6 +311,20 @@ async def test_model(
     url = target.url
     headers = target.headers
 
+    conn = None
+    if target.connection_id:
+        conn_result = await db.execute(
+            select(ProviderConnection).where(
+                ProviderConnection.id == target.connection_id
+            )
+        )
+        conn = conn_result.scalar_one_or_none()
+
+    try:
+        proxy = await proxy_for_connection(db, conn, "testModel")
+    except ProxyRequiredError as exc:
+        return {"ok": False, "error": str(exc), "latencyMs": 0}
+
     start = time.time()
 
     try:
@@ -340,7 +359,7 @@ async def test_model(
             })
             # Anthropic APIs are streaming-only
             raw_text, ok, status_code = await _test_claude_stream(
-                target, test_body, start,
+                target, test_body, start, proxy,
             )
             latency_ms = int((time.time() - start) * 1000)
             return {
@@ -353,14 +372,7 @@ async def test_model(
         raw_body: bytes | None = None
         send_headers = headers
 
-        conn_data: dict = {}
-        if target.connection_id:
-            conn_result = await db.execute(
-                select(ProviderConnection).where(ProviderConnection.id == target.connection_id)
-            )
-            conn = conn_result.scalar_one_or_none()
-            if conn and conn.data:
-                conn_data = json.loads(conn.data)
+        conn_data = json.loads(conn.data) if conn and conn.data else {}
 
         from app.routers.v1_proxy.shared import _build_provider_request
         raw_body, signed_headers = await _build_provider_request(target, test_body, conn_data)
@@ -378,7 +390,10 @@ async def test_model(
         except (ValueError, ModuleNotFoundError):
             pass
 
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with create_upstream_client(
+            proxy=proxy,
+            timeout=20.0,
+        ) as client:
             if body.kind == "embedding":
                 # For embeddings, use the embeddings endpoint
                 cfg_url = url.replace("/chat/completions", "/embeddings")
@@ -520,7 +535,7 @@ async def test_model(
 
 
 async def _test_claude_stream(
-    target, body: dict, start: float,
+    target, body: dict, start: float, proxy: str | None,
 ) -> tuple[str, bool, int]:
     """Ping a FORMAT=claude upstream (streaming-only).
 
@@ -536,7 +551,7 @@ async def _test_claude_stream(
     status_code = 0
     error_text = ""
 
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with create_upstream_client(proxy=proxy, timeout=20.0) as client:
         async with client.stream(
             "POST",
             target.url,

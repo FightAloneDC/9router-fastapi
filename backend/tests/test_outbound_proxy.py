@@ -2,9 +2,11 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
+import app.services.outbound_proxy as outbound_proxy
 from app.providers.base import BaseProviderConfig, BaseProviderHandler, ValidateResult
 from app.routers.providers import testing
 from app.services.outbound_proxy import (
@@ -71,6 +73,56 @@ def test_resolve_strict_raises_when_inactive():
             usage=usage,
             purpose="upstream",
             pool=_Pool("http://p:1", active=False, strict=True),
+        )
+
+
+def test_connection_proxy_resolves_test_model_pool():
+    """Model tests use their connection's active proxy pool."""
+
+    class Result:
+        def scalar_one_or_none(self):
+            return _Pool("http://proxy.test:8080")
+
+    class Db:
+        async def execute(self, _statement):
+            return Result()
+
+    connection = SimpleNamespace(
+        proxy_pool_id="pool-id",
+        data=json.dumps({
+            "proxyUsage": {
+                "mode": "selective",
+                "flags": {"testModel": True},
+            },
+        }),
+    )
+
+    proxy = asyncio.run(
+        outbound_proxy.proxy_for_connection(Db(), connection, "testModel")
+    )
+
+    assert proxy == "http://proxy.test:8080"
+
+
+def test_connection_proxy_raises_for_inactive_strict_pool():
+    """Strict proxy connections reject upstream calls without an active pool."""
+
+    class Result:
+        def scalar_one_or_none(self):
+            return _Pool("http://proxy.test:8080", active=False, strict=True)
+
+    class Db:
+        async def execute(self, _statement):
+            return Result()
+
+    connection = SimpleNamespace(
+        proxy_pool_id="pool-id",
+        data=json.dumps({"proxyUsage": {"mode": "all", "flags": {}}}),
+    )
+
+    with pytest.raises(ProxyRequiredError):
+        asyncio.run(
+            outbound_proxy.proxy_for_connection(Db(), connection, "upstream")
         )
 
 

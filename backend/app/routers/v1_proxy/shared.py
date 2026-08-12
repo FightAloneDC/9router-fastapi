@@ -18,6 +18,7 @@ from app.services.proxy import (
 from app.services.quota import observe_upstream_response
 from app.services.usage_tracking import save_request_tracking
 from app.services.active_requests import track_request_end
+from app.services.outbound_proxy import create_upstream_client
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared helper classes / types
@@ -280,6 +281,7 @@ async def _stream_response(
     request_start_time: float | None = None,
     raw_body: bytes | None = None,
     active_request_id: str | None = None,
+    proxy: str | None = None,
 ) -> StreamingResponse:
     """Forward request to upstream and stream SSE back to client.
 
@@ -317,7 +319,7 @@ async def _stream_response(
     # Skip for Qoder — their endpoint returns SSE (streaming), so a pre-flight
     # would consume the entire stream. Errors are caught during streaming instead.
     if not is_qoder:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with create_upstream_client(proxy=proxy, timeout=30.0) as client:
             check_resp = await client.post(target.url, **send_kwargs)
             if check_resp.status_code >= 400:
                 raise httpx.HTTPStatusError(
@@ -391,7 +393,10 @@ async def _stream_response(
             except Exception as e:
                 print(f"[STREAM SNIFF ERROR] {e}", flush=True)
 
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with create_upstream_client(
+            proxy=proxy,
+            timeout=300.0,
+        ) as client:
             try:
                 async with client.stream(
                     "POST",
@@ -554,7 +559,9 @@ async def _stream_response(
 
 async def _non_stream_response(
     target: ProxyTarget, body: dict, request_id: str,
-    *, raw_body: bytes | None = None,
+    *,
+    raw_body: bytes | None = None,
+    proxy: str | None = None,
 ) -> tuple[JSONResponse, dict]:
     """Forward request to upstream and return complete response.
 
@@ -577,7 +584,7 @@ async def _non_stream_response(
     else:
         send_kwargs["json"] = body
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with create_upstream_client(proxy=proxy, timeout=300.0) as client:
         resp = await client.post(target.url, **send_kwargs)
         resp.raise_for_status()
 

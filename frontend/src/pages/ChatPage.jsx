@@ -203,6 +203,7 @@ export default function ChatPage() {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token || ''}`,
+          'X-9Router-Purpose': 'test-chat',
         },
         body: JSON.stringify({
           model: selectedModel,

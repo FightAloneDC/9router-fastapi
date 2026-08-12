@@ -20,6 +20,12 @@ from app.services.proxy import (
 from app.services.quota import observe_upstream_response
 from app.services.usage_tracking import save_request_tracking
 from app.services.active_requests import track_request_start, track_request_end
+from app.services.outbound_proxy import (
+    ProxyRequiredError,
+    create_upstream_client,
+    proxy_for_connection,
+    purpose_from_header,
+)
 from app.models.provider import ProviderConnection
 from sqlalchemy import select
 
@@ -68,6 +74,7 @@ async def chat_completions(
 
     stream: bool = body.get("stream", False)
     request_id: str = str(uuid.uuid4())
+    purpose = purpose_from_header(request.headers.get("x-9router-purpose"))
 
     # Apply combo rotation strategy (per-combo override > global)
     strategy, sticky_limit = await get_combo_strategy(db, combo_name=model)
@@ -91,6 +98,7 @@ async def chat_completions(
         target = targets[0]
         forward_body: dict = {**body, "model": target.model}
         raw_body: bytes | None = None
+        proxy: str | None = None
 
         # ── FORMAT=claude / openai-responses: translated upstreams ──
         is_claude_upstream: bool = False
@@ -115,6 +123,13 @@ async def chat_completions(
             conn = conn_result.scalar_one_or_none()
             if conn:
                 conn_data = json.loads(conn.data) if conn.data else {}
+                try:
+                    proxy = await proxy_for_connection(db, conn, purpose)
+                except ProxyRequiredError as exc:
+                    return JSONResponse(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        content={"error": {"message": str(exc)}},
+                    )
                 try:
                     raw_body, signed_headers = await _build_provider_request(target, body, conn_data)
                     if signed_headers:
@@ -147,6 +162,7 @@ async def chat_completions(
                         request_body=body,
                         request_start_time=request_start_time,
                         active_request_id=active_request_id,
+                        proxy=proxy,
                     )
                 elif is_responses_upstream:
                     resp = await _stream_grok_responses(
@@ -158,6 +174,7 @@ async def chat_completions(
                         request_start_time=request_start_time,
                         raw_body=raw_body,
                         active_request_id=active_request_id,
+                        proxy=proxy,
                     )
                 else:
                     resp = await _stream_response(
@@ -169,21 +186,25 @@ async def chat_completions(
                         request_start_time=request_start_time,
                         raw_body=raw_body,
                         active_request_id=active_request_id,
+                        proxy=proxy,
                     )
             else:
                 if is_claude_upstream:
                     resp, resp_data = await _non_stream_claude(
                         target, forward_body, request_id,
+                        proxy=proxy,
                     )
                 elif is_responses_upstream:
                     resp, resp_data = await _non_stream_grok_responses(
                         target, forward_body, request_id,
                         raw_body=raw_body, db=db,
+                        proxy=proxy,
                     )
                 else:
                     resp, resp_data = await _non_stream_response(
                         target, forward_body, request_id,
                         raw_body=raw_body,
+                        proxy=proxy,
                     )
             total_latency_ms: int = int((time.time() - request_start_time) * 1000)
 
@@ -288,6 +309,8 @@ async def _non_stream_claude(
     target,
     body: dict,
     request_id: str,
+    *,
+    proxy: str | None = None,
 ) -> tuple[JSONResponse, dict]:
     """Non-streaming call to FORMAT=claude upstream.
 
@@ -306,7 +329,7 @@ async def _non_stream_claude(
     usage_data: dict = {}
     finish_reason: str = "stop"
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with create_upstream_client(proxy=proxy, timeout=300.0) as client:
         async with client.stream(
             "POST",
             target.url,
@@ -392,6 +415,7 @@ async def _stream_claude_response(
     request_body: dict | None = None,
     request_start_time: float | None = None,
     active_request_id: str | None = None,
+    proxy: str | None = None,
 ) -> StreamingResponse:
     """Streaming call to FORMAT=claude upstream.
 
@@ -411,7 +435,10 @@ async def _stream_claude_response(
 
     async def generate():
         usage: dict = {}
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with create_upstream_client(
+            proxy=proxy,
+            timeout=300.0,
+        ) as client:
             try:
                 async with client.stream(
                     "POST",
@@ -521,6 +548,7 @@ async def _non_stream_grok_responses(
     request_id: str,
     raw_body: bytes | None = None,
     db=None,
+    proxy: str | None = None,
 ) -> tuple[JSONResponse, dict]:
     """Non-streaming call to FORMAT=openai-responses upstream.
 
@@ -539,7 +567,7 @@ async def _non_stream_grok_responses(
         send_kwargs["json"] = body
 
     completed_response: dict = {}
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with create_upstream_client(proxy=proxy, timeout=300.0) as client:
         async with client.stream(
             "POST", target.url, **send_kwargs,
         ) as resp:
@@ -616,6 +644,7 @@ async def _stream_grok_responses(
     request_start_time: float | None = None,
     raw_body: bytes | None = None,
     active_request_id: str | None = None,
+    proxy: str | None = None,
 ) -> StreamingResponse:
     """Streaming call to FORMAT=openai-responses upstream.
 
@@ -637,7 +666,7 @@ async def _stream_grok_responses(
     else:
         send_kwargs["json"] = body
 
-    client = httpx.AsyncClient(timeout=300.0)
+    client = create_upstream_client(proxy=proxy, timeout=300.0)
     upstream_req = client.build_request(
         "POST", target.url, **send_kwargs,
     )
