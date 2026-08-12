@@ -1330,6 +1330,7 @@ export default function ProviderDetailPage() {
   providerStorageAliasRef.current = providerStorageAlias
   const connectionPageRef = useRef(connectionPage)
   connectionPageRef.current = connectionPage
+  const connFetchGen = useRef(0)
   const connectionFilterSignature = JSON.stringify({
     q: connSearchQ,
     isActive: connFilterActive,
@@ -1437,6 +1438,7 @@ export default function ProviderDetailPage() {
 
   // ── Fetch connections + nodes + pools + settings ──
   const fetchConnections = useCallback(async (pageOverride) => {
+    const fetchGen = ++connFetchGen.current
     const page = pageOverride ?? connectionPageRef.current
     const storageAlias = providerStorageAliasRef.current
     const pid = useCatalogStore.getState().resolveProviderId(rawProviderId)
@@ -1461,6 +1463,8 @@ export default function ProviderDetailPage() {
         providersApi.getProviderConnections(pid, params),
         proxyPoolsApi.getAll(),
       ])
+      if (fetchGen !== connFetchGen.current) return
+
       const payload = connRes.data || {}
       const filtered = payload.items || []
       setConnections(filtered)
@@ -1493,11 +1497,14 @@ export default function ProviderDetailPage() {
           const disabledRes = await client.get('/models/disabled', {
             params: { providerAlias: storageAlias },
           })
+          if (fetchGen !== connFetchGen.current) return
           disabledIds = disabledRes.data?.ids || []
           setDisabledModelIds(disabledIds)
         } catch {
           // Disabled models endpoint may not exist yet
         }
+        if (fetchGen !== connFetchGen.current) return
+
         const disabledSet = new Set(disabledIds)
         const enabledIds = modelsList.filter((m) => !disabledSet.has(m))
         setEnabledModelIds(new Set(enabledIds))
@@ -1508,6 +1515,7 @@ export default function ProviderDetailPage() {
 
       try {
         const nodesRes = await providersApi.getProviderNodes()
+        if (fetchGen !== connFetchGen.current) return
         const node = (nodesRes.data || []).find((n) => n.id === pid) || null
         setProviderNode(node)
       } catch {
@@ -1516,6 +1524,7 @@ export default function ProviderDetailPage() {
 
       try {
         const settingsRes = await settingsApi.get()
+        if (fetchGen !== connFetchGen.current) return
         const settingsData = settingsRes.data || {}
         const strategies = settingsData.provider_strategies || settingsData.providerStrategies || {}
         const override = strategies[pid] || {}
@@ -1528,9 +1537,13 @@ export default function ProviderDetailPage() {
         // Settings may not be available
       }
     } catch (err) {
-      console.error('Failed to fetch connections:', err)
+      if (fetchGen === connFetchGen.current) {
+        console.error('Failed to fetch connections:', err)
+      }
     } finally {
-      setLoading(false)
+      if (fetchGen === connFetchGen.current) {
+        setLoading(false)
+      }
     }
   }, [
     rawProviderId,
