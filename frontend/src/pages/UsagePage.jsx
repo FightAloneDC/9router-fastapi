@@ -1,4 +1,6 @@
-import { useState, useEffect, useCallback, Fragment } from 'react'
+import {
+  useState, useEffect, useCallback, useRef, Fragment,
+} from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   AreaChart,
@@ -28,9 +30,19 @@ import { subscribeUsageStream } from '../api/usageStream'
 
 const RECENT_REQUESTS_LIMIT = 20
 
+/** Normalize ISO timestamps so REST (+00:00/ms) and WS (Z/sec) match. */
+function normalizeRecentTs(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return String(iso)
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z')
+}
+
 function recentRequestKey(req) {
+  // Prefer server-assigned id (ring buffer) so same-second rows stay distinct
+  if (req?.id) return `id:${req.id}`
   return [
-    req?.timestamp,
+    normalizeRecentTs(req?.timestamp),
     req?.provider,
     req?.model,
     req?.promptTokens,
@@ -39,7 +51,7 @@ function recentRequestKey(req) {
   ].join('|')
 }
 
-/** Merge WS ring-buffer rows into REST recent list (newest first). */
+/** Merge recent rows (newest first). Never drop newer WS rows for REST. */
 function mergeRecentRequests(prev, incoming) {
   const map = new Map()
   for (const req of prev || []) {
@@ -51,9 +63,12 @@ function mergeRecentRequests(prev, incoming) {
     map.set(recentRequestKey(req), req)
   }
   return Array.from(map.values())
-    .sort((a, b) =>
-      String(b.timestamp || '').localeCompare(String(a.timestamp || '')),
-    )
+    .sort((a, b) => {
+      const tb = new Date(b.timestamp || 0).getTime() || 0
+      const ta = new Date(a.timestamp || 0).getTime() || 0
+      if (tb !== ta) return tb - ta
+      return String(b.id || '').localeCompare(String(a.id || ''))
+    })
     .slice(0, RECENT_REQUESTS_LIMIT)
 }
 
@@ -350,7 +365,10 @@ function RecentRequests({ requests }) {
           </thead>
           <tbody>
             {requests.map((req, idx) => (
-              <tr key={idx} className="border-b border-zinc-800/50 last:border-b-0">
+              <tr
+                key={req.id || recentRequestKey(req) || idx}
+                className="border-b border-zinc-800/50 last:border-b-0"
+              >
                 <td className="px-4 py-2.5">
                   <div className="flex items-center gap-2">
                     <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
@@ -1196,6 +1214,9 @@ export default function UsagePage() {
   const [activeRequests, setActiveRequests] = useState([])
   const [recentRequests, setRecentRequests] = useState([])
   const [errorProvider, setErrorProvider] = useState('')
+  // Ignore stale REST responses that finish after a newer fetch/WS merge
+  const fetchGenRef = useRef(0)
+  const loadedOnceRef = useRef(false)
 
   // Table view & sort from URL
   const tabParam = searchParams.get('tab')
@@ -1213,27 +1234,35 @@ export default function UsagePage() {
   }
 
   const fetchData = useCallback(async (p) => {
-    setLoading(true)
+    const gen = ++fetchGenRef.current
+    // Soft refresh: keep table mounted so WS merges stay visible
+    if (!loadedOnceRef.current) setLoading(true)
     try {
       const [statsRes, chartRes] = await Promise.all([
         usageApi.getUsageStats(p),
         usageApi.getUsageChart(p),
       ])
+      if (gen !== fetchGenRef.current) return
       const statsData = statsRes.data
       setStats(statsData)
-      setRecentRequests(statsData?.recentRequests || [])
+      // MERGE — never replace; in-flight REST must not wipe newer WS rows
+      setRecentRequests((prev) =>
+        mergeRecentRequests(statsData?.recentRequests || [], prev),
+      )
       setChartData(chartRes.data || [])
 
       const totalReqs = statsData.totalRequests || 0
       setHasData(totalReqs > 0 || (chartRes.data && chartRes.data.length > 0))
+      loadedOnceRef.current = true
     } catch (err) {
+      if (gen !== fetchGenRef.current) return
       console.error('Failed to fetch usage data:', err)
       setStats(null)
-      setRecentRequests([])
       setChartData([])
       setHasData(false)
+      // Keep recentRequests — WS ring may still have live rows
     } finally {
-      setLoading(false)
+      if (gen === fetchGenRef.current) setLoading(false)
     }
   }, [])
 
@@ -1264,6 +1293,7 @@ export default function UsagePage() {
         setRecentRequests((prev) =>
           mergeRecentRequests(prev, data.recentRequests),
         )
+        setHasData(true)
       }
       if (data.errorProvider !== undefined) {
         setErrorProvider(data.errorProvider)

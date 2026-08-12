@@ -85,16 +85,21 @@ def push_recent_request(
     recentRequests order and the Recent Requests table.
     Called from save_request_tracking() after a request is saved to DB.
     """
+    # Millisecond ISO + unique id so UI merge keys stay distinct from
+    # REST rows and from same-second completions.
+    now = time.time()
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now))
+    ms = int((now % 1) * 1000)
     _recent_requests.appendleft({
-        "timestamp": time.strftime(
-            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-        ),
+        "id": secrets.token_hex(8),
+        "timestamp": f"{ts}.{ms:03d}Z",
         "model": model,
         "provider": provider,
         "promptTokens": prompt_tokens,
         "completionTokens": completion_tokens,
         "status": status,
     })
+    _notify_sse()
 
 
 def get_active_requests() -> list[dict[str, object]]:
