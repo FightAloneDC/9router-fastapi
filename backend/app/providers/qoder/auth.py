@@ -26,8 +26,10 @@ Token Refresh:
 
 import base64
 import hashlib
+import logging
 import secrets
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -45,6 +47,69 @@ from .constants import (
     QODER_REFRESH_TOKEN_URL,
     QODER_USERINFO_URL,
 )
+
+logger = logging.getLogger(__name__)
+
+# Values larger than this are treated as milliseconds (Qoder jobToken
+# returns expires_in=86400000 for 24h). Below → already seconds.
+_EXPIRES_IN_MS_THRESHOLD = 10_000_000
+
+
+def expires_in_to_seconds(expires_in: object) -> int | None:
+    """Normalize Qoder expires_in (seconds or ms) to seconds."""
+    if expires_in is None:
+        return None
+    try:
+        value = int(expires_in)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    if value > _EXPIRES_IN_MS_THRESHOLD:
+        return value // 1000
+    return value
+
+
+def apply_qoder_token_expiry(
+    data: dict[str, Any],
+    new_tokens: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Write expiresAt / refreshTokenExpiresAt after a successful refresh.
+
+    Prefer absolute timestamps from upstream; otherwise derive from
+    expires_in / refresh_token_expires_in (ms or seconds).
+    """
+    now = now or datetime.now(timezone.utc)
+
+    expires_at = (
+        new_tokens.get("expires_at")
+        or new_tokens.get("expiresAt")
+    )
+    if isinstance(expires_at, str) and expires_at.strip():
+        data["expiresAt"] = expires_at.strip()
+    else:
+        seconds = expires_in_to_seconds(new_tokens.get("expires_in"))
+        if seconds is not None:
+            data["expiresAt"] = (
+                now + timedelta(seconds=seconds)
+            ).isoformat()
+
+    refresh_exp = (
+        new_tokens.get("refresh_token_expires_at")
+        or new_tokens.get("refreshTokenExpiresAt")
+    )
+    if isinstance(refresh_exp, str) and refresh_exp.strip():
+        data["refreshTokenExpiresAt"] = refresh_exp.strip()
+    else:
+        refresh_seconds = expires_in_to_seconds(
+            new_tokens.get("refresh_token_expires_in"),
+        )
+        if refresh_seconds is not None:
+            data["refreshTokenExpiresAt"] = (
+                now + timedelta(seconds=refresh_seconds)
+            ).isoformat()
 
 
 def _base64url(data: bytes) -> str:
@@ -344,6 +409,11 @@ async def refresh_job_token(
         )
 
     if response.status_code != 200:
+        logger.warning(
+            "Qoder jobToken/refresh HTTP %s: %s",
+            response.status_code,
+            (response.text or "")[:200],
+        )
         return None
 
     data = response.json()
@@ -357,12 +427,22 @@ async def refresh_job_token(
         return None
 
     expires_in = data.get("expires_in") or data.get("expireTimeS")
+    refresh_token_expires_in = (
+        data.get("refresh_token_expires_in")
+        or data.get("refreshTokenExpireTimeS")
+    )
     new_refresh_token = data.get("refreshToken") or data.get("refresh_token")
 
     return {
         "access_token": access_token,
         "refresh_token": new_refresh_token or refresh_token,
         "expires_in": expires_in,
+        "refresh_token_expires_in": refresh_token_expires_in,
+        "expires_at": data.get("expires_at") or data.get("expiresAt"),
+        "refresh_token_expires_at": (
+            data.get("refresh_token_expires_at")
+            or data.get("refreshTokenExpiresAt")
+        ),
     }
 
 
@@ -434,7 +514,6 @@ async def try_refresh_connection(db, connection_id: str) -> bool:
     """
     import json
     import logging
-    from datetime import datetime, timezone
     from sqlalchemy import select
     from app.models.provider import ProviderConnection
 
@@ -453,19 +532,36 @@ async def try_refresh_connection(db, connection_id: str) -> bool:
         logger.warning(f"Qoder refresh: no refresh_token for connection {connection_id}")
         return False
 
+    # jobToken/refresh only accepts jrt-* (job refresh). Device-style
+    # drt-* tokens need a different flow and must not be mis-logged as
+    # "refresh_token expired".
+    if isinstance(refresh_token, str) and refresh_token.startswith("drt-"):
+        logger.warning(
+            "Qoder refresh: unsupported refresh token type drt-* "
+            "for connection %s — re-import via PAT/device flow",
+            connection_id,
+        )
+        return False
+
     proxy = await proxy_for_connection(db, conn, "oauthRefresh")
     async with use_outbound_proxy(proxy):
         new_tokens = await refresh_job_token(refresh_token)
     if not new_tokens:
-        logger.warning(f"Qoder refresh: refresh_token expired for connection {connection_id}")
+        logger.warning(
+            "Qoder refresh: jobToken/refresh failed for connection %s",
+            connection_id,
+        )
         return False
 
-    # Update tokens in DB
+    # Update tokens + expiry in DB (expiresAt was previously omitted,
+    # so UI/DB looked expired while refresh still succeeded).
     data["accessToken"] = new_tokens["access_token"]
     data["refreshToken"] = new_tokens["refresh_token"]
+    apply_qoder_token_expiry(data, new_tokens)
     data["testStatus"] = "connected"
     data.pop("lastError", None)
     data.pop("lastErrorAt", None)
+    data.pop("errorCode", None)
     conn.data = json.dumps(data)
 
     await db.flush()
@@ -512,19 +608,36 @@ async def refresh_all_qoder_connections() -> dict[str, bool]:
                 continue
 
             conn_id = str(conn.id)
+            if isinstance(refresh_token, str) and refresh_token.startswith(
+                "drt-",
+            ):
+                logger.warning(
+                    "Qoder background refresh SKIP: %s... "
+                    "(drt-* unsupported by jobToken/refresh)",
+                    conn_id[:8],
+                )
+                results[conn_id] = False
+                continue
+
             proxy = await proxy_for_connection(db, conn, "oauthRefresh")
             async with use_outbound_proxy(proxy):
                 new_tokens = await refresh_job_token(refresh_token)
             if not new_tokens:
-                logger.warning(f"Qoder background refresh FAILED: {conn_id[:8]}... (refresh_token expired)")
+                logger.warning(
+                    "Qoder background refresh FAILED: %s... "
+                    "(jobToken/refresh rejected)",
+                    conn_id[:8],
+                )
                 results[conn_id] = False
                 continue
 
             data["accessToken"] = new_tokens["access_token"]
             data["refreshToken"] = new_tokens["refresh_token"]
+            apply_qoder_token_expiry(data, new_tokens)
             data["testStatus"] = "connected"
             data.pop("lastError", None)
             data.pop("lastErrorAt", None)
+            data.pop("errorCode", None)
             conn.data = json.dumps(data)
             db.add(conn)
 

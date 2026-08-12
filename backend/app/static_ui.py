@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -18,6 +18,24 @@ _RESERVED_PREFIXES = (
     "docs",
     "redoc",
     "openapi.json",
+)
+
+# Static provider id → existing icon basename (no .png).
+# Dynamic node ids (openai-compatible-*) use prefix rules below.
+_ICON_ALIASES: dict[str, str] = {
+    "gitlab": "github",
+    "keelcode": "kilocode",
+    "kilo-gateway": "kilocode",
+    "amazon-bedrock": "aws-polly",
+    "bedrock": "aws-polly",
+}
+
+# Tiny transparent 1×1 PNG — last resort so <img> does not 404.
+_TRANSPARENT_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+    b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    b"\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+    b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
 )
 
 
@@ -89,6 +107,37 @@ class SpaHtmlMiddleware:
         await self.app(scope, receive, send)
 
 
+def resolve_provider_icon(
+    icons_dir: Path, name: str,
+) -> Path | None:
+    """Resolve provider id to an icon file under *icons_dir*.
+
+    Order: exact file → static alias → compatible-node prefix → None.
+    """
+    exact = icons_dir / f"{name}.png"
+    if exact.is_file():
+        return exact
+
+    alias = _ICON_ALIASES.get(name)
+    if alias:
+        aliased = icons_dir / f"{alias}.png"
+        if aliased.is_file():
+            return aliased
+
+    # Custom OpenAI/Anthropic-compatible nodes: id is
+    # openai-compatible-chat-<hash> / anthropic-compatible-<hash>
+    if name.startswith("openai-compatible"):
+        openai = icons_dir / "openai.png"
+        if openai.is_file():
+            return openai
+    if name.startswith("anthropic-compatible"):
+        anthropic = icons_dir / "anthropic.png"
+        if anthropic.is_file():
+            return anthropic
+
+    return None
+
+
 def mount_provider_icons(
     app: FastAPI,
     static_dir: Path | None = None,
@@ -99,7 +148,9 @@ def mount_provider_icons(
     authenticated /providers/{conn_id} route returns 401 for icons.
 
     Path must keep the `.png` suffix so /providers/client etc. still
-    reach the API routers.
+    reach the API routers. Missing brand icons fall back via
+    resolve_provider_icon (aliases / compatible-node prefix) so the
+    Providers page does not spam 404s in the browser console.
     """
     root = static_dir or STATIC_DIR
     icons = root / "providers"
@@ -110,10 +161,15 @@ def mount_provider_icons(
     async def provider_png(name: str):
         if "/" in name or "\\" in name or ".." in name:
             raise HTTPException(status_code=404, detail="Not Found")
-        path = icons / f"{name}.png"
-        if not path.is_file():
-            raise HTTPException(status_code=404, detail="Not Found")
-        return FileResponse(path)
+        path = resolve_provider_icon(icons, name)
+        if path is not None:
+            return FileResponse(path)
+        # Avoid console 404 noise for unknown catalog ids; 1×1 PNG.
+        return Response(
+            content=_TRANSPARENT_PNG,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
 
 
 def mount_static_ui(

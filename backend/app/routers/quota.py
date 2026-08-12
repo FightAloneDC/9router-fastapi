@@ -245,17 +245,57 @@ async def get_quota(
     start = (page - 1) * page_size
     page_rows = enriched[start:start + page_size]
 
-    items = [
-        ProviderQuota(
-            id=str(conn.id),
-            provider=conn.provider,
-            name=conn.name,
-            is_active=conn.is_active,
-            quotas=quotas,
-            plan=plan,
+    items: list[ProviderQuota] = []
+    for conn, quotas, plan in page_rows:
+        handler = get_usage_handler(conn.provider)
+        # Local-state handlers (grok-cli, …) are cheap DB sums —
+        # refresh the visible page so the list is not stuck on
+        # stale header snapshots (used always 0).
+        if handler is not None and not handler.USES_UPSTREAM:
+            try:
+                data = (
+                    json.loads(conn.data) if conn.data else {}
+                )
+            except (json.JSONDecodeError, TypeError):
+                data = {}
+            try:
+                result = await handler.fetch(
+                    access_token="",
+                    provider_data=data,
+                    connection_id=str(conn.id),
+                )
+                if result.quotas:
+                    await _store_quota_cache(db, conn, result)
+                    quotas = [
+                        QuotaItem(
+                            name=q.name,
+                            used=q.used,
+                            total=q.total,
+                            reset_at=q.reset_at,
+                            remaining_percentage=(
+                                q.remaining_percentage
+                            ),
+                        )
+                        for q in result.quotas
+                    ]
+                    if result.plan:
+                        plan = result.plan
+            except Exception as e:
+                logger.warning(
+                    "Local quota refresh failed for %s: %s",
+                    conn.id,
+                    e,
+                )
+        items.append(
+            ProviderQuota(
+                id=str(conn.id),
+                provider=conn.provider,
+                name=conn.name,
+                is_active=conn.is_active,
+                quotas=quotas,
+                plan=plan,
+            )
         )
-        for conn, quotas, plan in page_rows
-    ]
 
     return QuotaListResponse(
         items=items,
@@ -426,7 +466,9 @@ async def get_connection_usage(
         provider_data=data,
         connection_id=str(conn.id),
     )
-    if result.quotas and handler.USES_UPSTREAM:
+    # Persist for all handlers (including local-state like grok-cli)
+    # so GET /quota list stays accurate after refresh.
+    if result.quotas:
         await _store_quota_cache(db, conn, result)
     return result
 

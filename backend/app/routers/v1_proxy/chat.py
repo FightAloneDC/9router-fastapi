@@ -1,5 +1,6 @@
 """POST /v1/chat/completions — OpenAI-compatible chat completions proxy."""
 
+import asyncio
 import json
 import time
 import uuid
@@ -435,96 +436,104 @@ async def _stream_claude_response(
 
     async def generate():
         usage: dict = {}
-        async with create_upstream_client(
-            proxy=proxy,
-            timeout=300.0,
-        ) as client:
-            try:
-                async with client.stream(
-                    "POST",
-                    target.url,
-                    **send_kwargs,
-                ) as resp:
-                    if resp.status_code >= 400:
-                        err = await resp.aread()
-                        raise httpx.HTTPStatusError(
-                            f"HTTP {resp.status_code}",
-                            request=resp,
-                            response=resp,
-                        )
-                    buffer = b""
-                    async for chunk in resp.aiter_bytes():
-                        buffer += chunk
-                        while b"\n" in buffer:
-                            line_bytes, buffer = buffer.split(
-                                b"\n", 1
+        end_status = "ok"
+        try:
+            async with create_upstream_client(
+                proxy=proxy,
+                timeout=300.0,
+            ) as client:
+                try:
+                    async with client.stream(
+                        "POST",
+                        target.url,
+                        **send_kwargs,
+                    ) as resp:
+                        if resp.status_code >= 400:
+                            err = await resp.aread()
+                            raise httpx.HTTPStatusError(
+                                f"HTTP {resp.status_code}",
+                                request=resp,
+                                response=resp,
                             )
+                        buffer = b""
+                        async for chunk in resp.aiter_bytes():
+                            buffer += chunk
+                            while b"\n" in buffer:
+                                line_bytes, buffer = buffer.split(
+                                    b"\n", 1
+                                )
+                                try:
+                                    line = line_bytes.decode(
+                                        "utf-8", errors="ignore"
+                                    )
+                                except Exception:
+                                    continue
+                                for ev in translator.feed(line):
+                                    yield ev.encode()
+                                    try:
+                                        if ev.strip(
+                                        ).startswith("data:"):
+                                            d = json.loads(
+                                                ev[6:].strip()
+                                            )
+                                            if d.get("usage"):
+                                                usage = d["usage"]
+                                    except Exception:
+                                        pass
+                        if buffer:
                             try:
-                                line = line_bytes.decode(
+                                line = buffer.decode(
                                     "utf-8", errors="ignore"
                                 )
                             except Exception:
-                                continue
+                                line = ""
                             for ev in translator.feed(line):
                                 yield ev.encode()
-                                try:
-                                    if ev.strip(
-                                    ).startswith("data:"):
-                                        d = json.loads(
-                                            ev[6:].strip()
-                                        )
-                                        if d.get("usage"):
-                                            usage = d["usage"]
-                                except Exception:
-                                    pass
-                    if buffer:
-                        try:
-                            line = buffer.decode(
-                                "utf-8", errors="ignore"
-                            )
-                        except Exception:
-                            line = ""
-                        for ev in translator.feed(line):
-                            yield ev.encode()
-            except httpx.HTTPStatusError:
-                raise
-            except Exception:
-                raise
+                except httpx.HTTPStatusError:
+                    end_status = "error"
+                    raise
+                except Exception:
+                    end_status = "error"
+                    raise
 
-        if db and provider and model:
-            from app.services.usage_tracking import (
-                save_request_tracking,
-            )
-            await save_request_tracking(
-                db,
-                provider=provider,
-                model=model,
-                connection_id=connection_id,
-                endpoint="/v1/chat/completions",
-                prompt_tokens=usage.get(
-                    "prompt_tokens", 0
-                ),
-                completion_tokens=usage.get(
-                    "completion_tokens", 0
-                ),
-                tokens_json=usage,
-                latency_ttft=int(
-                    (time.time() - (request_start_time or 0))
-                    * 1000
-                ),
-                latency_total=int(
-                    (time.time() - (request_start_time or 0))
-                    * 1000
-                ),
-                request_body=request_body or body,
-                provider_request_body=body,
-                provider_response_body=usage,
-                response_body=usage,
-            )
-
-        # End active request tracking when stream finishes
-        if active_request_id:
-            track_request_end(active_request_id)
+            if db and provider and model:
+                from app.services.usage_tracking import (
+                    save_request_tracking,
+                )
+                await save_request_tracking(
+                    db,
+                    provider=provider,
+                    model=model,
+                    connection_id=connection_id,
+                    endpoint="/v1/chat/completions",
+                    prompt_tokens=usage.get(
+                        "prompt_tokens", 0
+                    ),
+                    completion_tokens=usage.get(
+                        "completion_tokens", 0
+                    ),
+                    tokens_json=usage,
+                    latency_ttft=int(
+                        (time.time() - (request_start_time or 0))
+                        * 1000
+                    ),
+                    latency_total=int(
+                        (time.time() - (request_start_time or 0))
+                        * 1000
+                    ),
+                    request_body=request_body or body,
+                    provider_request_body=body,
+                    provider_response_body=usage,
+                    response_body=usage,
+                )
+        except (asyncio.CancelledError, GeneratorExit):
+            end_status = "error"
+            raise
+        finally:
+            if active_request_id:
+                track_request_end(
+                    active_request_id, status=end_status,
+                )
 
     return StreamingResponse(
         generate(),
@@ -689,73 +698,87 @@ async def _stream_grok_responses(
 
     async def generate():  # type: ignore[no-untyped-def]
         usage: dict = {}
+        end_status = "ok"
         try:
-            buffer = b""
-            async for chunk in resp.aiter_bytes():
-                buffer += chunk
-                while b"\n" in buffer:
-                    line_bytes, buffer = buffer.split(b"\n", 1)
-                    line = line_bytes.decode(
-                        "utf-8", errors="ignore",
-                    )
+            try:
+                buffer = b""
+                async for chunk in resp.aiter_bytes():
+                    buffer += chunk
+                    while b"\n" in buffer:
+                        line_bytes, buffer = buffer.split(b"\n", 1)
+                        line = line_bytes.decode(
+                            "utf-8", errors="ignore",
+                        )
+                        for ev in translator.feed(line):
+                            yield ev.encode()
+                            try:
+                                if ev.startswith("data: {"):
+                                    parsed = json.loads(
+                                        ev[6:].strip(),
+                                    )
+                                    if parsed.get("usage"):
+                                        usage = parsed["usage"]
+                            except (json.JSONDecodeError, ValueError):
+                                pass
+                if buffer:
+                    line = buffer.decode("utf-8", errors="ignore")
                     for ev in translator.feed(line):
                         yield ev.encode()
-                        try:
-                            if ev.startswith("data: {"):
-                                parsed = json.loads(
-                                    ev[6:].strip(),
-                                )
-                                if parsed.get("usage"):
-                                    usage = parsed["usage"]
-                        except (json.JSONDecodeError, ValueError):
-                            pass
-            if buffer:
-                line = buffer.decode("utf-8", errors="ignore")
-                for ev in translator.feed(line):
-                    yield ev.encode()
+            finally:
+                await resp.aclose()
+                await client.aclose()
+
+            # Always finalize: upstream may close without
+            # response.completed
+            for ev in translator.close():
+                yield ev.encode()
+                try:
+                    if ev.startswith("data: {"):
+                        parsed = json.loads(ev[6:].strip())
+                        if parsed.get("usage"):
+                            usage = parsed["usage"]
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+            if db and provider and model:
+                from app.services.usage_tracking import (
+                    save_request_tracking,
+                )
+                await save_request_tracking(
+                    db,
+                    provider=provider,
+                    model=model,
+                    connection_id=connection_id,
+                    endpoint="/v1/chat/completions",
+                    prompt_tokens=usage.get("prompt_tokens", 0),
+                    completion_tokens=usage.get(
+                        "completion_tokens", 0,
+                    ),
+                    tokens_json=usage,
+                    latency_ttft=int(
+                        (time.time() - (request_start_time or 0))
+                        * 1000
+                    ),
+                    latency_total=int(
+                        (time.time() - (request_start_time or 0))
+                        * 1000
+                    ),
+                    request_body=request_body or body,
+                    provider_request_body=body,
+                    provider_response_body=usage,
+                    response_body=usage,
+                )
+        except (asyncio.CancelledError, GeneratorExit):
+            end_status = "error"
+            raise
+        except Exception:
+            end_status = "error"
+            raise
         finally:
-            await resp.aclose()
-            await client.aclose()
-
-        # Always finalize: upstream may close without response.completed
-        for ev in translator.close():
-            yield ev.encode()
-            try:
-                if ev.startswith("data: {"):
-                    parsed = json.loads(ev[6:].strip())
-                    if parsed.get("usage"):
-                        usage = parsed["usage"]
-            except (json.JSONDecodeError, ValueError):
-                pass
-
-        if db and provider and model:
-            from app.services.usage_tracking import (
-                save_request_tracking,
-            )
-            await save_request_tracking(
-                db,
-                provider=provider,
-                model=model,
-                connection_id=connection_id,
-                endpoint="/v1/chat/completions",
-                prompt_tokens=usage.get("prompt_tokens", 0),
-                completion_tokens=usage.get("completion_tokens", 0),
-                tokens_json=usage,
-                latency_ttft=int(
-                    (time.time() - (request_start_time or 0)) * 1000
-                ),
-                latency_total=int(
-                    (time.time() - (request_start_time or 0)) * 1000
-                ),
-                request_body=request_body or body,
-                provider_request_body=body,
-                provider_response_body=usage,
-                response_body=usage,
-            )
-
-        # End active request tracking when stream finishes
-        if active_request_id:
-            track_request_end(active_request_id)
+            if active_request_id:
+                track_request_end(
+                    active_request_id, status=end_status,
+                )
 
     return StreamingResponse(
         generate(),

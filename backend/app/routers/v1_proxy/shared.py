@@ -331,6 +331,7 @@ async def _stream_response(
     async def generate():  # type: ignore[no-untyped-def]
         usage: dict = {}
         chunk_count: int = 0
+        end_status = "ok"
         # Lightweight stall sniffer (G1): summarize finish_reason / tools.
         sniff: dict = {
             "provider": provider,
@@ -393,158 +394,221 @@ async def _stream_response(
             except Exception as e:
                 print(f"[STREAM SNIFF ERROR] {e}", flush=True)
 
-        async with create_upstream_client(
-            proxy=proxy,
-            timeout=300.0,
-        ) as client:
-            try:
-                async with client.stream(
-                    "POST",
-                    target.url,
-                    **send_kwargs,
-                ) as resp:
-                    # PS hook: snapshot upstream rate-limit headers
-                    await observe_upstream_response(
-                        db, provider, connection_id, resp.headers,
-                    )
-                    # Qoder SSE lines may be split across read boundaries;
-                    # buffer bytes until a full line is available, or the
-                    # fragments are dropped and deltas are lost (corrupted
-                    # tool-call arguments / mangled text).
-                    qoder_buf = b""
-                    async for chunk in resp.aiter_bytes():
-                        chunk_count += 1
-                        if is_qoder:
-                            # Qoder sends wrapped SSE:
-                            # {"statusCodeValue":200,"body":"..."}
-                            qoder_buf += chunk
-                            while b"\n" in qoder_buf:
-                                line_b, qoder_buf = qoder_buf.split(
-                                    b"\n", 1,
-                                )
-                                line = line_b.decode(
-                                    "utf-8", errors="ignore",
-                                )
-                                unwrapped = _unwrap_qoder_sse_line(line)
-                                if unwrapped:
-                                    _sniff_openai_sse_line(unwrapped)
-                                    yield f"{unwrapped}\n\n".encode()
-                                    usage = _capture_qoder_usage(
-                                        unwrapped, usage,
+        try:
+            async with create_upstream_client(
+                proxy=proxy,
+                timeout=300.0,
+            ) as client:
+                try:
+                    async with client.stream(
+                        "POST",
+                        target.url,
+                        **send_kwargs,
+                    ) as resp:
+                        # PS hook: snapshot upstream rate-limit headers
+                        await observe_upstream_response(
+                            db, provider, connection_id, resp.headers,
+                        )
+                        # Qoder SSE lines may be split across read boundaries;
+                        # buffer bytes until a full line is available, or the
+                        # fragments are dropped and deltas are lost (corrupted
+                        # tool-call arguments / mangled text).
+                        qoder_buf = b""
+                        async for chunk in resp.aiter_bytes():
+                            chunk_count += 1
+                            if is_qoder:
+                                # Qoder sends wrapped SSE:
+                                # {"statusCodeValue":200,"body":"..."}
+                                qoder_buf += chunk
+                                while b"\n" in qoder_buf:
+                                    line_b, qoder_buf = qoder_buf.split(
+                                        b"\n", 1,
                                     )
-                                    # CHECK FOR QODER STREAMING ERRORS (quota/exhaustion via envelope)
-                                    try:
-                                        json_data = json.loads(unwrapped[6:])  # strip "data: "
-                                        choices = json_data.get("choices") or []
-                                        if choices and isinstance(choices[0], dict):
-                                            delta = choices[0].get("delta", {})
-                                            content = delta.get("content", "")
-                                            if isinstance(content, str) and content.startswith("[qoder error"):
-                                                # Parse error message: "[qoder error 429: Insufficient quota]"
-                                                import re
-                                                match = re.search(r"\[qoder error (\d+): (.+)\]", content)
-                                                if match:
-                                                    status_code = int(match.group(1))
-                                                    error_detail = match.group(2)[:500]
-                                                    # Call cooldown helper with fresh session
-                                                    await _mark_upstream_stream_error(
-                                                        provider, connection_id, model,
-                                                        status_code, error_detail,
+                                    line = line_b.decode(
+                                        "utf-8", errors="ignore",
+                                    )
+                                    unwrapped = _unwrap_qoder_sse_line(line)
+                                    if unwrapped:
+                                        _sniff_openai_sse_line(unwrapped)
+                                        yield f"{unwrapped}\n\n".encode()
+                                        usage = _capture_qoder_usage(
+                                            unwrapped, usage,
+                                        )
+                                        # CHECK FOR QODER STREAMING ERRORS
+                                        try:
+                                            json_data = json.loads(
+                                                unwrapped[6:],
+                                            )
+                                            choices = (
+                                                json_data.get("choices") or []
+                                            )
+                                            if (
+                                                choices
+                                                and isinstance(choices[0], dict)
+                                            ):
+                                                delta = choices[0].get(
+                                                    "delta", {},
+                                                )
+                                                content = delta.get(
+                                                    "content", "",
+                                                )
+                                                if (
+                                                    isinstance(content, str)
+                                                    and content.startswith(
+                                                        "[qoder error"
                                                     )
-                                                    # Raise exception to stop stream and trigger fallback
-                                                    raise httpx.HTTPStatusError(
-                                                        f"HTTP {status_code}: {error_detail}",
-                                                        request=resp.request,
-                                                        response=resp,
+                                                ):
+                                                    import re
+                                                    match = re.search(
+                                                        r"\[qoder error "
+                                                        r"(\d+): (.+)\]",
+                                                        content,
                                                     )
-                                    except (json.JSONDecodeError, IndexError, KeyError, ValueError, AttributeError):
-                                        # Not an error envelope — continue streaming
-                                        pass
-                        else:
-                            yield chunk
-                            # Parse SSE to capture usage from last chunk
-                            try:
-                                text = chunk.decode("utf-8", errors="ignore")
-                                for line in text.split("\n"):
-                                    _sniff_openai_sse_line(line)
-                                    if line.startswith("data: ") and line.strip() != "data: [DONE]":
-                                        data = json.loads(line[6:])
-                                        if "usage" in data and data["usage"]:
-                                            usage = data["usage"]
-                            except (json.JSONDecodeError, UnicodeDecodeError):
-                                pass
-                    # Flush a final Qoder line without trailing newline
-                    if is_qoder and qoder_buf:
-                        line = qoder_buf.decode("utf-8", errors="ignore")
-                        unwrapped = _unwrap_qoder_sse_line(line)
-                        if unwrapped:
-                            _sniff_openai_sse_line(unwrapped)
-                            yield f"{unwrapped}\n\n".encode()
-                            usage = _capture_qoder_usage(
-                                unwrapped, usage,
+                                                    if match:
+                                                        status_code = int(
+                                                            match.group(1)
+                                                        )
+                                                        error_detail = (
+                                                            match.group(2)[:500]
+                                                        )
+                                                        await (
+                                                            _mark_upstream_stream_error(
+                                                                provider,
+                                                                connection_id,
+                                                                model,
+                                                                status_code,
+                                                                error_detail,
+                                                            )
+                                                        )
+                                                        raise httpx.HTTPStatusError(
+                                                            f"HTTP {status_code}: "
+                                                            f"{error_detail}",
+                                                            request=resp.request,
+                                                            response=resp,
+                                                        )
+                                        except (
+                                            json.JSONDecodeError,
+                                            IndexError,
+                                            KeyError,
+                                            ValueError,
+                                            AttributeError,
+                                        ):
+                                            pass
+                            else:
+                                yield chunk
+                                # Parse SSE to capture usage from last chunk
+                                try:
+                                    text = chunk.decode(
+                                        "utf-8", errors="ignore",
+                                    )
+                                    for line in text.split("\n"):
+                                        _sniff_openai_sse_line(line)
+                                        if (
+                                            line.startswith("data: ")
+                                            and line.strip() != "data: [DONE]"
+                                        ):
+                                            data = json.loads(line[6:])
+                                            if (
+                                                "usage" in data
+                                                and data["usage"]
+                                            ):
+                                                usage = data["usage"]
+                                except (
+                                    json.JSONDecodeError,
+                                    UnicodeDecodeError,
+                                ):
+                                    pass
+                        # Flush a final Qoder line without trailing newline
+                        if is_qoder and qoder_buf:
+                            line = qoder_buf.decode(
+                                "utf-8", errors="ignore",
                             )
-            except asyncio.CancelledError:
-                _flush_sniff({"ended": "cancelled"})
-                raise
-            except GeneratorExit:
-                # Client disconnected mid-stream. Do not yield [DONE] here:
-                # yielding inside finally during GeneratorExit raises
-                # "generator ignored GeneratorExit" and spams logs.
-                _flush_sniff({"ended": "client_disconnect"})
-                raise
-            except Exception as e:
-                _flush_sniff({"ended": "error", "error": str(e)[:300]})
-                error_data = json.dumps({
-                    "error": {
-                        "message": f"Proxy error: {str(e)}",
-                        "type": "proxy_error",
-                    }
-                })
-                yield f"data: {error_data}\n\n".encode()
-                yield b"data: [DONE]\n\n"
-            else:
-                _flush_sniff({"ended": "ok"})
-                yield b"data: [DONE]\n\n"
+                            unwrapped = _unwrap_qoder_sse_line(line)
+                            if unwrapped:
+                                _sniff_openai_sse_line(unwrapped)
+                                yield f"{unwrapped}\n\n".encode()
+                                usage = _capture_qoder_usage(
+                                    unwrapped, usage,
+                                )
+                except asyncio.CancelledError:
+                    end_status = "error"
+                    _flush_sniff({"ended": "cancelled"})
+                    raise
+                except GeneratorExit:
+                    # Client disconnected mid-stream. Do not yield [DONE]:
+                    # yielding during GeneratorExit raises
+                    # "generator ignored GeneratorExit" and spams logs.
+                    end_status = "error"
+                    _flush_sniff({"ended": "client_disconnect"})
+                    raise
+                except Exception as e:
+                    end_status = "error"
+                    _flush_sniff({"ended": "error", "error": str(e)[:300]})
+                    error_data = json.dumps({
+                        "error": {
+                            "message": f"Proxy error: {str(e)}",
+                            "type": "proxy_error",
+                        }
+                    })
+                    yield f"data: {error_data}\n\n".encode()
+                    yield b"data: [DONE]\n\n"
+                else:
+                    _flush_sniff({"ended": "ok"})
+                    yield b"data: [DONE]\n\n"
 
-        # Save usage tracking AFTER stream is consumed (usage is now available)
-        # If no usage captured from stream, estimate from chunk count
-        if not usage.get("prompt_tokens") and not usage.get("completion_tokens"):
-            usage = {
-                "prompt_tokens": 0,
-                "completion_tokens": chunk_count * 10,
-                "total_tokens": chunk_count * 10,
-                "_estimated": True,
-            }
+            # Save usage tracking AFTER stream is consumed
+            if (
+                not usage.get("prompt_tokens")
+                and not usage.get("completion_tokens")
+            ):
+                usage = {
+                    "prompt_tokens": 0,
+                    "completion_tokens": chunk_count * 10,
+                    "total_tokens": chunk_count * 10,
+                    "_estimated": True,
+                }
 
-        if db and provider and request_start_time:
-            try:
-                from app.database import async_session
-                async with async_session() as tracking_db:
-                    total_latency_ms = int((time.time() - request_start_time) * 1000)
-                    prompt_tokens = usage.get("prompt_tokens", 0)
-                    completion_tokens = usage.get("completion_tokens", 0)
-                    await save_request_tracking(
-                        tracking_db,
-                        provider=provider,
-                        model=model,
-                        connection_id=connection_id,
-                        endpoint="/v1/chat/completions",
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        tokens_json=usage,
-                        latency_ttft=total_latency_ms,
-                        latency_total=total_latency_ms,
-                        request_body=request_body,
-                        provider_request_body=body,
-                        provider_response_body={"_note": "Streaming response — raw not captured"},
-                        response_body={"_note": "Streaming response"},
-                    )
-            except Exception as e:
-                print(f"[STREAM TRACKING ERROR] {e}", flush=True)
-
-        # End active request tracking when stream finishes
-        if active_request_id:
-            track_request_end(active_request_id)
+            if db and provider and request_start_time:
+                try:
+                    from app.database import async_session
+                    async with async_session() as tracking_db:
+                        total_latency_ms = int(
+                            (time.time() - request_start_time) * 1000
+                        )
+                        prompt_tokens = usage.get("prompt_tokens", 0)
+                        completion_tokens = usage.get(
+                            "completion_tokens", 0,
+                        )
+                        await save_request_tracking(
+                            tracking_db,
+                            provider=provider,
+                            model=model,
+                            connection_id=connection_id,
+                            endpoint="/v1/chat/completions",
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            tokens_json=usage,
+                            latency_ttft=total_latency_ms,
+                            latency_total=total_latency_ms,
+                            request_body=request_body,
+                            provider_request_body=body,
+                            provider_response_body={
+                                "_note": (
+                                    "Streaming response — raw not captured"
+                                ),
+                            },
+                            response_body={"_note": "Streaming response"},
+                        )
+                except Exception as e:
+                    print(f"[STREAM TRACKING ERROR] {e}", flush=True)
+        finally:
+            # Always clear active tracking — client disconnect /
+            # CancelledError previously skipped track_request_end and
+            # left /usage animations stuck until process restart.
+            if active_request_id:
+                track_request_end(
+                    active_request_id, status=end_status,
+                )
 
     return StreamingResponse(
         generate(),

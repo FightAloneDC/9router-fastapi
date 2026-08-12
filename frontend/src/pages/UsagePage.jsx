@@ -26,6 +26,37 @@ import ProviderTopology from '../components/ProviderTopology'
 import useCatalogStore from '../stores/catalogStore'
 import { subscribeUsageStream } from '../api/usageStream'
 
+const RECENT_REQUESTS_LIMIT = 20
+
+function recentRequestKey(req) {
+  return [
+    req?.timestamp,
+    req?.provider,
+    req?.model,
+    req?.promptTokens,
+    req?.completionTokens,
+    req?.status,
+  ].join('|')
+}
+
+/** Merge WS ring-buffer rows into REST recent list (newest first). */
+function mergeRecentRequests(prev, incoming) {
+  const map = new Map()
+  for (const req of prev || []) {
+    if (!req) continue
+    map.set(recentRequestKey(req), req)
+  }
+  for (const req of incoming || []) {
+    if (!req) continue
+    map.set(recentRequestKey(req), req)
+  }
+  return Array.from(map.values())
+    .sort((a, b) =>
+      String(b.timestamp || '').localeCompare(String(a.timestamp || '')),
+    )
+    .slice(0, RECENT_REQUESTS_LIMIT)
+}
+
 // --- Number formatting helpers ---
 
 const nf = new Intl.NumberFormat('en-US')
@@ -1163,6 +1194,7 @@ export default function UsagePage() {
   const [loading, setLoading] = useState(true)
   const [hasData, setHasData] = useState(false)
   const [activeRequests, setActiveRequests] = useState([])
+  const [recentRequests, setRecentRequests] = useState([])
   const [errorProvider, setErrorProvider] = useState('')
 
   // Table view & sort from URL
@@ -1189,6 +1221,7 @@ export default function UsagePage() {
       ])
       const statsData = statsRes.data
       setStats(statsData)
+      setRecentRequests(statsData?.recentRequests || [])
       setChartData(chartRes.data || [])
 
       const totalReqs = statsData.totalRequests || 0
@@ -1196,6 +1229,7 @@ export default function UsagePage() {
     } catch (err) {
       console.error('Failed to fetch usage data:', err)
       setStats(null)
+      setRecentRequests([])
       setChartData([])
       setHasData(false)
     } finally {
@@ -1218,16 +1252,18 @@ export default function UsagePage() {
     if (!token) return
 
     return subscribeUsageStream(token, (data) => {
-      if (data.activeRequests) {
+      if (Array.isArray(data.activeRequests)) {
         setActiveRequests(data.activeRequests)
       }
-      // Only merge recentRequests if WS has entries — don't let empty
-      // ring buffer (e.g. after server restart) overwrite REST-fetched data
-      if (data.recentRequests && data.recentRequests.length > 0) {
-        setStats((prev) => {
-          if (!prev) return prev
-          return { ...prev, recentRequests: data.recentRequests }
-        })
+      // Merge WS ring into REST-loaded recent — never replace wholesale
+      // (ring is empty after restart / incomplete during early notifies).
+      if (
+        Array.isArray(data.recentRequests)
+        && data.recentRequests.length > 0
+      ) {
+        setRecentRequests((prev) =>
+          mergeRecentRequests(prev, data.recentRequests),
+        )
       }
       if (data.errorProvider !== undefined) {
         setErrorProvider(data.errorProvider)
@@ -1294,12 +1330,12 @@ export default function UsagePage() {
                   <ProviderTopology
                     providers={stats?.byProvider || []}
                     activeRequests={activeRequests}
-                    lastProvider={stats?.recentRequests?.[0]?.provider || ''}
+                    lastProvider={recentRequests[0]?.provider || ''}
                     errorProvider={errorProvider}
                   />
                 </div>
                 <div className="lg:col-span-2 min-h-[400px]">
-                  <RecentRequests requests={stats?.recentRequests || []} />
+                  <RecentRequests requests={recentRequests} />
                 </div>
               </div>
 

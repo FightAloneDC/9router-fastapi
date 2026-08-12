@@ -1,5 +1,6 @@
 """POST /v1/messages — Claude Messages API compatible proxy."""
 
+import asyncio
 import json
 import time
 import uuid
@@ -418,39 +419,66 @@ async def _messages_stream_response(
 
     # Wrap to save tracking after stream is consumed
     async def tracked_generate():  # type: ignore[no-untyped-def]
-        async for chunk in generator:
-            yield chunk
-        # After stream consumed, save usage tracking
-        if db and provider and request_start_time:
-            try:
-                from app.database import async_session
-                async with async_session() as tracking_db:
-                    total_latency_ms = int((time.time() - request_start_time) * 1000)
-                    usage = usage_ref["usage"]
-                    prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens", 0))
-                    completion_tokens = usage.get("completion_tokens", usage.get("output_tokens", 0))
-                    await save_request_tracking(
-                        tracking_db,
-                        provider=provider,
-                        model=model,
-                        connection_id=connection_id,
-                        endpoint="/v1/messages",
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        tokens_json=usage,
-                        latency_ttft=total_latency_ms,
-                        latency_total=total_latency_ms,
-                        request_body=request_body,
-                        provider_request_body=body,
-                        provider_response_body={"_note": "Streaming response — raw not captured"},
-                        response_body={"_note": "Streaming response"},
+        end_status = "ok"
+        try:
+            async for chunk in generator:
+                yield chunk
+            # After stream consumed, save usage tracking
+            if db and provider and request_start_time:
+                try:
+                    from app.database import async_session
+                    async with async_session() as tracking_db:
+                        total_latency_ms = int(
+                            (time.time() - request_start_time) * 1000
+                        )
+                        usage = usage_ref["usage"]
+                        prompt_tokens = usage.get(
+                            "prompt_tokens",
+                            usage.get("input_tokens", 0),
+                        )
+                        completion_tokens = usage.get(
+                            "completion_tokens",
+                            usage.get("output_tokens", 0),
+                        )
+                        await save_request_tracking(
+                            tracking_db,
+                            provider=provider,
+                            model=model,
+                            connection_id=connection_id,
+                            endpoint="/v1/messages",
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            tokens_json=usage,
+                            latency_ttft=total_latency_ms,
+                            latency_total=total_latency_ms,
+                            request_body=request_body,
+                            provider_request_body=body,
+                            provider_response_body={
+                                "_note": (
+                                    "Streaming response — raw not "
+                                    "captured"
+                                ),
+                            },
+                            response_body={
+                                "_note": "Streaming response",
+                            },
+                        )
+                except Exception as e:
+                    print(
+                        f"[MESSAGES STREAM TRACKING ERROR] {e}",
+                        flush=True,
                     )
-            except Exception as e:
-                print(f"[MESSAGES STREAM TRACKING ERROR] {e}", flush=True)
-
-        # End active request tracking when stream finishes
-        if active_request_id:
-            track_request_end(active_request_id)
+        except (asyncio.CancelledError, GeneratorExit):
+            end_status = "error"
+            raise
+        except Exception:
+            end_status = "error"
+            raise
+        finally:
+            if active_request_id:
+                track_request_end(
+                    active_request_id, status=end_status,
+                )
 
     return StreamingResponse(
         tracked_generate(),

@@ -1,5 +1,6 @@
 """POST /v1/responses — OpenAI Responses API compatible proxy."""
 
+import asyncio
 import json
 import time
 import uuid
@@ -354,6 +355,7 @@ async def _stream_responses(
 
     async def generate():  # type: ignore[no-untyped-def]
         usage: dict = {}
+        end_status = "ok"
 
         def _handle_chat_sse_line(line: str) -> list[str]:
             nonlocal usage
@@ -383,97 +385,123 @@ async def _stream_responses(
                 )
             return out
 
-        async with create_upstream_client(
-            proxy=proxy,
-            timeout=300.0,
-        ) as client:
-            try:
-                async with client.stream(
-                    "POST", target.url, **send_kwargs,
-                ) as resp:
-                    resp.raise_for_status()
-                    if is_qoder:
-                        qoder_buf = b""
-                        async for chunk in resp.aiter_bytes():
-                            qoder_buf += chunk
-                            while b"\n" in qoder_buf:
-                                line_b, qoder_buf = qoder_buf.split(
-                                    b"\n", 1,
-                                )
-                                line = line_b.decode(
+        try:
+            async with create_upstream_client(
+                proxy=proxy,
+                timeout=300.0,
+            ) as client:
+                try:
+                    async with client.stream(
+                        "POST", target.url, **send_kwargs,
+                    ) as resp:
+                        resp.raise_for_status()
+                        if is_qoder:
+                            qoder_buf = b""
+                            async for chunk in resp.aiter_bytes():
+                                qoder_buf += chunk
+                                while b"\n" in qoder_buf:
+                                    line_b, qoder_buf = qoder_buf.split(
+                                        b"\n", 1,
+                                    )
+                                    line = line_b.decode(
+                                        "utf-8", errors="ignore",
+                                    )
+                                    unwrapped = _unwrap_qoder_sse_line(
+                                        line,
+                                    )
+                                    if not unwrapped:
+                                        continue
+                                    for piece in _handle_chat_sse_line(
+                                        unwrapped,
+                                    ):
+                                        yield piece
+                            if qoder_buf:
+                                line = qoder_buf.decode(
                                     "utf-8", errors="ignore",
                                 )
                                 unwrapped = _unwrap_qoder_sse_line(line)
-                                if not unwrapped:
-                                    continue
-                                for piece in _handle_chat_sse_line(
-                                    unwrapped,
-                                ):
-                                    yield piece
-                        if qoder_buf:
-                            line = qoder_buf.decode(
-                                "utf-8", errors="ignore",
+                                if unwrapped:
+                                    for piece in _handle_chat_sse_line(
+                                        unwrapped,
+                                    ):
+                                        yield piece
+                        else:
+                            buffer = ""
+                            async for chunk in resp.aiter_text():
+                                buffer += chunk
+                                while "\n" in buffer:
+                                    line, buffer = buffer.split(
+                                        "\n", 1,
+                                    )
+                                    for piece in _handle_chat_sse_line(
+                                        line,
+                                    ):
+                                        yield piece
+                        for event in translator.finalize(usage):
+                            yield (
+                                f"event: {event['event']}\n"
+                                f"data: {json.dumps(event['data'])}\n\n"
                             )
-                            unwrapped = _unwrap_qoder_sse_line(line)
-                            if unwrapped:
-                                for piece in _handle_chat_sse_line(
-                                    unwrapped,
-                                ):
-                                    yield piece
-                    else:
-                        buffer = ""
-                        async for chunk in resp.aiter_text():
-                            buffer += chunk
-                            while "\n" in buffer:
-                                line, buffer = buffer.split("\n", 1)
-                                for piece in _handle_chat_sse_line(line):
-                                    yield piece
+                except Exception as e:
+                    end_status = "error"
+                    yield (
+                        f"event: error\n"
+                        f"data: {json.dumps({'message': str(e)})}\n\n"
+                    )
                     for event in translator.finalize(usage):
                         yield (
                             f"event: {event['event']}\n"
                             f"data: {json.dumps(event['data'])}\n\n"
                         )
-            except Exception as e:
-                yield (
-                    f"event: error\n"
-                    f"data: {json.dumps({'message': str(e)})}\n\n"
+
+            # Save usage tracking after stream consumed
+            if db and provider and request_start_time:
+                try:
+                    from app.database import async_session
+                    async with async_session() as tracking_db:
+                        total_latency_ms = int(
+                            (time.time() - request_start_time) * 1000
+                        )
+                        prompt_tokens = usage.get("prompt_tokens", 0)
+                        completion_tokens = usage.get(
+                            "completion_tokens", 0,
+                        )
+                        await save_request_tracking(
+                            tracking_db,
+                            provider=provider,
+                            model=model,
+                            connection_id=connection_id,
+                            endpoint="/v1/responses",
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            tokens_json=usage,
+                            latency_ttft=total_latency_ms,
+                            latency_total=total_latency_ms,
+                            request_body=request_body,
+                            provider_request_body=body,
+                            provider_response_body={
+                                "_note": (
+                                    "Streaming response — raw not "
+                                    "captured"
+                                ),
+                            },
+                            response_body={
+                                "_note": "Streaming response",
+                            },
+                        )
+                except Exception as e:
+                    print(
+                        f"[RESPONSES STREAM TRACKING ERROR] {e}",
+                        flush=True,
+                    )
+        except (asyncio.CancelledError, GeneratorExit):
+            end_status = "error"
+            raise
+        finally:
+            if active_request_id:
+                track_request_end(
+                    active_request_id, status=end_status,
                 )
-                for event in translator.finalize(usage):
-                    yield (
-                        f"event: {event['event']}\n"
-                        f"data: {json.dumps(event['data'])}\n\n"
-                    )
-
-        # Save usage tracking after stream consumed
-        if db and provider and request_start_time:
-            try:
-                from app.database import async_session
-                async with async_session() as tracking_db:
-                    total_latency_ms = int((time.time() - request_start_time) * 1000)
-                    prompt_tokens = usage.get("prompt_tokens", 0)
-                    completion_tokens = usage.get("completion_tokens", 0)
-                    await save_request_tracking(
-                        tracking_db,
-                        provider=provider,
-                        model=model,
-                        connection_id=connection_id,
-                        endpoint="/v1/responses",
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        tokens_json=usage,
-                        latency_ttft=total_latency_ms,
-                        latency_total=total_latency_ms,
-                        request_body=request_body,
-                        provider_request_body=body,
-                        provider_response_body={"_note": "Streaming response — raw not captured"},
-                        response_body={"_note": "Streaming response"},
-                    )
-            except Exception as e:
-                print(f"[RESPONSES STREAM TRACKING ERROR] {e}", flush=True)
-
-        # End active request tracking when stream finishes
-        if active_request_id:
-            track_request_end(active_request_id)
 
     return StreamingResponse(
         generate(),
@@ -574,6 +602,7 @@ async def _stream_responses_passthrough(
 
     async def generate():  # type: ignore[no-untyped-def]
         usage: dict = {}
+        end_status = "ok"
         saw_terminal = False
         terminal_types = {
             "response.completed",
@@ -622,78 +651,91 @@ async def _stream_responses_passthrough(
                 if resp_obj.get("id"):
                     response_id = resp_obj["id"]
 
-        async with create_upstream_client(
-            proxy=proxy,
-            timeout=300.0,
-        ) as client:
-            try:
-                async with client.stream(
-                    "POST", target.url, **send_kwargs,
-                ) as resp:
-                    resp.raise_for_status()
-                    async for chunk in resp.aiter_text():
-                        yield chunk
-                        line_buf += chunk
-                        while "\n" in line_buf:
-                            line, line_buf = line_buf.split("\n", 1)
-                            _observe_sse_line(line)
-                    if line_buf.strip():
-                        _observe_sse_line(line_buf)
-                if not saw_terminal:
-                    yield build_incomplete_terminal_sse(
-                        response_id=response_id,
-                        model=model,
+        try:
+            async with create_upstream_client(
+                proxy=proxy,
+                timeout=300.0,
+            ) as client:
+                try:
+                    async with client.stream(
+                        "POST", target.url, **send_kwargs,
+                    ) as resp:
+                        resp.raise_for_status()
+                        async for chunk in resp.aiter_text():
+                            yield chunk
+                            line_buf += chunk
+                            while "\n" in line_buf:
+                                line, line_buf = line_buf.split(
+                                    "\n", 1,
+                                )
+                                _observe_sse_line(line)
+                        if line_buf.strip():
+                            _observe_sse_line(line_buf)
+                    if not saw_terminal:
+                        yield build_incomplete_terminal_sse(
+                            response_id=response_id,
+                            model=model,
+                        )
+                except Exception as e:
+                    end_status = "error"
+                    yield (
+                        "event: error\n"
+                        f"data: {json.dumps({'message': str(e)})}\n\n"
                     )
-            except Exception as e:
-                yield (
-                    "event: error\n"
-                    f"data: {json.dumps({'message': str(e)})}\n\n"
-                )
-                if not saw_terminal:
-                    yield build_incomplete_terminal_sse(
-                        response_id=response_id,
-                        model=model,
-                    )
+                    if not saw_terminal:
+                        yield build_incomplete_terminal_sse(
+                            response_id=response_id,
+                            model=model,
+                        )
 
-        # Save usage tracking after stream consumed
-        if db and provider and request_start_time:
-            try:
-                from app.database import async_session
-                async with async_session() as tracking_db:
-                    total_latency_ms = int(
-                        (time.time() - request_start_time) * 1000
-                    )
-                    await save_request_tracking(
-                        tracking_db,
-                        provider=provider,
-                        model=model,
-                        connection_id=connection_id,
-                        endpoint="/v1/responses",
-                        prompt_tokens=usage.get("prompt_tokens", 0),
-                        completion_tokens=usage.get(
-                            "completion_tokens", 0,
-                        ),
-                        tokens_json=usage,
-                        latency_ttft=total_latency_ms,
-                        latency_total=total_latency_ms,
-                        request_body=request_body,
-                        provider_request_body=body,
-                        provider_response_body={
-                            "_note": (
-                                "Streaming response — raw not captured"
+            # Save usage tracking after stream consumed
+            if db and provider and request_start_time:
+                try:
+                    from app.database import async_session
+                    async with async_session() as tracking_db:
+                        total_latency_ms = int(
+                            (time.time() - request_start_time) * 1000
+                        )
+                        await save_request_tracking(
+                            tracking_db,
+                            provider=provider,
+                            model=model,
+                            connection_id=connection_id,
+                            endpoint="/v1/responses",
+                            prompt_tokens=usage.get(
+                                "prompt_tokens", 0,
                             ),
-                        },
-                        response_body={"_note": "Streaming response"},
+                            completion_tokens=usage.get(
+                                "completion_tokens", 0,
+                            ),
+                            tokens_json=usage,
+                            latency_ttft=total_latency_ms,
+                            latency_total=total_latency_ms,
+                            request_body=request_body,
+                            provider_request_body=body,
+                            provider_response_body={
+                                "_note": (
+                                    "Streaming response — raw not "
+                                    "captured"
+                                ),
+                            },
+                            response_body={
+                                "_note": "Streaming response",
+                            },
+                        )
+                except Exception as e:
+                    print(
+                        f"[RESPONSES PASSTHROUGH TRACKING ERROR] {e}",
+                        flush=True,
                     )
-            except Exception as e:
-                print(
-                    f"[RESPONSES PASSTHROUGH TRACKING ERROR] {e}",
-                    flush=True,
+        except (asyncio.CancelledError, GeneratorExit):
+            end_status = "error"
+            raise
+        finally:
+            if active_request_id:
+                track_request_end(
+                    active_request_id, status=end_status,
                 )
-
-        # End active request tracking when stream finishes
-        if active_request_id:
-            track_request_end(active_request_id)
 
     return StreamingResponse(
         generate(),

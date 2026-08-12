@@ -229,9 +229,14 @@ class GrokCliUsageHandler(BaseUsageHandler):
         if limit is None or remaining is None:
             return  # not a rate-limited upstream response
 
+        # Token "remaining" headers are static on free tier (always
+        # full) — do not trust them for used. Accumulate from local
+        # usage_history instead.
+        used = await self._today_token_usage(connection_id)
+
         quotas = [_quota_dict(
             "Daily free (grok-4.5)",
-            used=max(0, limit - remaining),
+            used=used,
             total=limit,
         )]
 
@@ -253,7 +258,7 @@ class GrokCliUsageHandler(BaseUsageHandler):
             )
             db.add(cache)
         cache.quotas = json.dumps(quotas)
-        cache.limit_reached = remaining <= 0
+        cache.limit_reached = used >= limit
         cache.fetched_at = datetime.now(timezone.utc)
         await db.commit()
 

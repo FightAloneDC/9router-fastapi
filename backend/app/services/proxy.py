@@ -613,7 +613,7 @@ async def resolve_model_to_targets(
     1. Check if model is a combo name → resolve to list of models, apply rotation
     2. Check if model is in 'provider/model' format → direct provider lookup
     3. Check provider_connections table for matching model
-    4. Fall back to openai provider with the model name as-is
+    4. Return empty when nothing matches (never invent a wrong provider)
 
     When *combo_strategy* is provided and the model is a combo, rotation is
     applied internally so callers receive already-ordered targets.
@@ -626,16 +626,52 @@ async def resolve_model_to_targets(
     if combo:
         combo_models = json.loads(combo.models) if combo.models else []
         for combo_model in combo_models:
-            sub_targets = await _resolve_single_model(db, combo_model, stream, exclude_ids)
+            sub_targets = await _resolve_single_model(
+                db, combo_model, stream, exclude_ids,
+            )
             targets.extend(sub_targets)
         if targets and combo_strategy:
-            targets = get_rotated_targets(targets, model, combo_strategy, combo_sticky_limit)
-        if targets:
-            return targets
+            targets = get_rotated_targets(
+                targets, model, combo_strategy, combo_sticky_limit,
+            )
+        # Combo name matched: never fall through to bare-name lookup.
+        # Empty means every member is exhausted/excluded — caller 503s.
+        return targets
 
     # 2. Resolve single model
-    targets = await _resolve_single_model(db, model, stream, exclude_ids)
-    return targets
+    return await _resolve_single_model(db, model, stream, exclude_ids)
+
+
+def _conn_model_ids(conn_models: object) -> set[str]:
+    """Normalize connection models blob to a set of model id strings.
+
+    Accepts legacy ``["gpt-4"]`` lists and current
+    ``[{"id": "gpt-4", "type": "llm"}]`` entries.
+    """
+    if not isinstance(conn_models, list):
+        return set()
+    ids: set[str] = set()
+    for entry in conn_models:
+        if isinstance(entry, str) and entry:
+            ids.add(entry)
+            continue
+        if isinstance(entry, dict):
+            mid = entry.get("id")
+            if isinstance(mid, str) and mid:
+                ids.add(mid)
+    return ids
+
+
+def _connection_has_model(
+    conn_models: object, provider: str, model: str,
+) -> bool:
+    """True when *model* is registered on this connection."""
+    ids = _conn_model_ids(conn_models)
+    if model in ids:
+        return True
+    if f"{provider}/{model}" in ids:
+        return True
+    return False
 
 
 async def _resolve_single_model(
@@ -649,57 +685,41 @@ async def _resolve_single_model(
     # Parse provider/model format
     if "/" in model:
         provider_name, model_name = model.split("/", 1)
-        return await _build_target_for_provider(db, provider_name, model_name, stream, exclude_ids)
+        return await _build_target_for_provider(
+            db, provider_name, model_name, stream, exclude_ids,
+        )
 
     # Look through active provider connections for a match
     result = await db.execute(
         select(ProviderConnection)
-        .where(ProviderConnection.is_active == True)
+        .where(ProviderConnection.is_active == True)  # noqa: E712
         .order_by(ProviderConnection.priority)
     )
     connections = result.scalars().all()
 
-    # Check provider nodes
-    node_result = await db.execute(select(ProviderNode))
-    nodes = {n.id: n for n in node_result.scalars().all()}
-
-    # Try to find a connection whose provider supports this model
-    # First pass: check if any connection has this model registered
+    # Match by registered model id only. Do NOT fall back to "first
+    # active connection" — that misroutes combo leftovers (e.g. grok-4.5
+    # onto alims-intl / voyage / nvidia) and poisons modelLock_*.
     for conn in connections:
         cid = str(conn.id)
         if exclude_ids and cid in exclude_ids:
             continue
         data = json.loads(conn.data) if conn.data else {}
-        conn_models = data.get("models", [])
-        # Check both exact match and provider-prefixed match
-        model_match = model in conn_models or f"{conn.provider}/{model}" in conn_models
-        if model_match:
-            conn_api_key = data.get("apiKey", "") or data.get("accessToken", "")
-            base_url = _resolve_base_url(conn.provider, data)
-            url = _build_upstream_url(conn.provider, base_url, stream, data, model)
-            try:
-                headers = _build_headers(conn.provider, conn_api_key, stream, data)
-            except ValueError:
-                continue
-            return [ResolvedTarget(
-                url=url,
-                headers=headers,
-                provider=conn.provider,
-                model=model,
-                connection_id=str(conn.id),
-            )]
-
-    # Second pass: no model match found, fall back to first active connection
-    for conn in connections:
-        cid = str(conn.id)
-        if exclude_ids and cid in exclude_ids:
+        if not _connection_has_model(
+            data.get("models", []), conn.provider, model,
+        ):
             continue
-        data = json.loads(conn.data) if conn.data else {}
-        conn_api_key = data.get("apiKey", "") or data.get("accessToken", "")
+        conn_api_key = data.get("apiKey", "") or data.get(
+            "accessToken", "",
+        )
         base_url = _resolve_base_url(conn.provider, data)
-        url = _build_upstream_url(conn.provider, base_url, stream, data, model)
+        url = _build_upstream_url(
+            conn.provider, base_url, stream, data, model,
+        )
         try:
-            headers = _build_headers(conn.provider, conn_api_key, stream, data)
+            headers = _build_headers(
+                conn.provider, conn_api_key, stream, data,
+            )
         except ValueError:
             continue
         return [ResolvedTarget(
@@ -710,7 +730,6 @@ async def _resolve_single_model(
             connection_id=str(conn.id),
         )]
 
-    # Default: no matching connection found — return empty so caller can give a meaningful error
     return []
 
 

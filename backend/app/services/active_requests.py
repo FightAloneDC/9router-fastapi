@@ -31,7 +31,7 @@ _recent_requests: deque = deque(maxlen=20)
 _last_error_provider: dict[str, object] = {"provider": "", "ts": 0.0}
 
 # Entries older than this are considered stale and pruned on access.
-_MAX_ACTIVE_REQUEST_AGE = 600  # seconds
+_MAX_ACTIVE_REQUEST_AGE = 120  # seconds
 _ERROR_PROVIDER_TTL = 10  # seconds
 
 
@@ -81,9 +81,11 @@ def push_recent_request(
 ) -> None:
     """Push a completed request to the recent ring buffer.
 
+    Newest entries are at the front (index 0), matching GET /usage
+    recentRequests order and the Recent Requests table.
     Called from save_request_tracking() after a request is saved to DB.
     """
-    _recent_requests.append({
+    _recent_requests.appendleft({
         "timestamp": time.strftime(
             "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
         ),
@@ -116,7 +118,7 @@ def get_active_requests() -> list[dict[str, object]]:
 
 
 def get_recent_requests() -> list[dict[str, object]]:
-    """Get recent completed requests from the ring buffer (max 20)."""
+    """Get recent completed requests (newest first, max 20)."""
     return list(_recent_requests)
 
 

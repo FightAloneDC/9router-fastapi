@@ -120,6 +120,9 @@ def test_provider_png_served_before_api_route(tmp_path: Path):
     icons = tmp_path / "providers"
     icons.mkdir()
     (icons / "grok-cli.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    (icons / "openai.png").write_bytes(b"\x89PNG\r\n\x1a\nopenai")
+    (icons / "github.png").write_bytes(b"\x89PNG\r\n\x1a\ngithub")
+    (icons / "kilocode.png").write_bytes(b"\x89PNG\r\n\x1a\nkilo")
 
     app = FastAPI()
     mount_provider_icons(app, tmp_path)
@@ -139,3 +142,18 @@ def test_provider_png_served_before_api_route(tmp_path: Path):
     # Non-png provider API paths must not be stolen by icon route
     assert client.get("/providers/client").json() == {"ok": True}
     assert client.get("/providers/some-uuid").json()["id"] == "some-uuid"
+
+    # Alias + compatible-node prefix must not 404
+    assert client.get("/providers/gitlab.png").content.endswith(
+        b"github"
+    )
+    assert client.get(
+        "/providers/openai-compatible-chat-108a0827fbc2.png"
+    ).content.endswith(b"openai")
+    assert client.get(
+        "/providers/kilo-gateway.png"
+    ).content.endswith(b"kilo")
+    # Unknown id → transparent PNG (200), not 404
+    unknown = client.get("/providers/totally-unknown-xyz.png")
+    assert unknown.status_code == 200
+    assert unknown.headers["content-type"].startswith("image/png")
