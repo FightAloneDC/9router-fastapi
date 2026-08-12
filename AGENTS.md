@@ -96,24 +96,25 @@ Self-hosted OpenRouter alternative. Clients send OpenAI-compatible requests → 
 # On main, after UI changes:
 ./scripts/release-prod.sh
 docker compose -f docker-compose.prod.yml up --build -d
-# App+UI: http://localhost:9000
+# App+UI: http://localhost:8013
 # Swagger: only if DEBUG=true in backend/.env → /docs
+# DB: existing host Postgres (postgres_aidev_db :5432) — not in this compose
 ```
 
-### Development (primary — host + DB Docker)
+### Development (primary — host)
 
 ```bash
-docker compose -f docker-compose.dev.yml up db -d
-# backend on host :9000, Vite on host :5173
+# Postgres already on host :5432; run backend + Vite locally
+# UI: http://localhost:5173  Backend: http://localhost:9000
 ```
 
 ### Development (fallback — full compose)
 
 ```bash
 docker compose -f docker-compose.dev.yml up --build
+# or: docker compose -f docker-compose-v1.yml up --build
 # Frontend: http://localhost:5173
 # Backend:  http://localhost:9000/docs  (DEBUG)
-# DB:       PostgreSQL on localhost:5432
 ```
 
 ## Architecture
@@ -166,17 +167,12 @@ frontend/src/
 └── utils/               # Helpers
 
 docs/
-├── archives/            # Archived docs (completed plans, audits, QA reports)
-│   ├── agent-instructions/
-│   ├── completed-plans/
-│   ├── investigations/
-│   ├── porting/
-│   ├── provider-audits/
-│   └── qa-reports/
-├── plans/               # Active plans
-│   └── frontend-compliance/BACKEND-DRIVEN-PROVIDERS.md
-├── qoder/               # Qoder provider documentation
-└── reference/           # Reference docs (combo system, etc.)
+├── README.md            # Docs index
+├── architecture/        # Runtime topology, modules
+├── configuration/       # Env, compose, proxy usage
+├── operations/          # Production + development runbooks
+├── gotchas/             # SPA/API collisions and similar
+└── archives/            # Completed plans, audits, old investigations
 ```
 
 ## Critical Patterns (MUST KNOW)
