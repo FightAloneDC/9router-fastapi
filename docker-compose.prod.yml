@@ -1,24 +1,11 @@
 # Production — single FastAPI serves API + built UI
 # Usage: docker compose -f docker-compose.prod.yml up --build -d
 # Refresh UI on main first: ./scripts/release-prod.sh
+#
+# DB: external postgres_aidev_db on host :5432 (same as docker-compose-v1.yml).
+# App port: host 8013 → container 9000 (daily URL preserved).
 
 services:
-  db:
-    image: postgres:16-alpine
-    container_name: 9router-postgres
-    restart: unless-stopped
-    env_file:
-      - .env.docker
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
   backend:
     build:
       context: ./backend
@@ -27,14 +14,11 @@ services:
     container_name: 9router-backend
     restart: unless-stopped
     ports:
-      - "9000:9000"
+      - "8013:9000"
       - "1455:1455"
     env_file:
       - ./backend/.env
-      - .env.docker
-    depends_on:
-      db:
-        condition: service_healthy
-
-volumes:
-  pgdata:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://dev_9route:dev_9route_pass@host.docker.internal:5432/db_9route"
