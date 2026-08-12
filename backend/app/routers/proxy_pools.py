@@ -1,5 +1,6 @@
 """Proxy pool management endpoints."""
 
+import json
 import time
 from datetime import datetime, timezone
 
@@ -9,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.provider import ProviderConnection
 from app.models.proxy_pool import ProxyPool
 from app.routers.auth import get_current_user
 from app.schemas.proxy_pool import (
@@ -17,8 +19,30 @@ from app.schemas.proxy_pool import (
     ProxyPoolTestResult,
     ProxyPoolUpdate,
 )
+from app.services.outbound_proxy import merge_proxy_usage_into_data
 
 router = APIRouter(prefix="/proxy-pools", tags=["proxy-pools"])
+
+
+async def apply_pool_usage_to_connections(
+    db: AsyncSession,
+    pool: ProxyPool,
+) -> int:
+    """Apply the pool's usage template to every assigned connection."""
+    result = await db.execute(
+        select(ProviderConnection).where(
+            ProviderConnection.proxy_pool_id == pool.id
+        )
+    )
+    connections = result.scalars().all()
+
+    for connection in connections:
+        data = json.loads(connection.data) if connection.data else {}
+        connection.data = json.dumps(
+            merge_proxy_usage_into_data(data, pool.default_proxy_usage)
+        )
+
+    return len(connections)
 
 
 @router.get("", response_model=list[ProxyPoolOut])
@@ -50,11 +74,32 @@ async def create_proxy_pool(
         pool_type=body.pool_type,
         is_active=body.is_active,
         strict_proxy=body.strict_proxy,
+        default_proxy_usage=body.default_proxy_usage,
     )
     db.add(pool)
     await db.flush()
     await db.refresh(pool)
     return ProxyPoolOut.model_validate(pool)
+
+
+@router.post("/{pool_id}/apply-usage")
+async def apply_proxy_pool_usage(
+    pool_id: str,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Apply the pool's usage template to assigned connections."""
+    result = await db.execute(select(ProxyPool).where(ProxyPool.id == pool_id))
+    pool = result.scalar_one_or_none()
+    if pool is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Proxy pool not found",
+        )
+
+    updated = await apply_pool_usage_to_connections(db, pool)
+    await db.commit()
+    return {"updated": updated}
 
 
 @router.get("/{pool_id}", response_model=ProxyPoolOut)

@@ -16,6 +16,7 @@ class ProxyPoolCreate(BaseModel):
     pool_type: str = "http"
     is_active: bool = True
     strict_proxy: bool = False
+    default_proxy_usage: Optional[dict] = None
 
 
 class ProxyPoolUpdate(BaseModel):
@@ -27,6 +28,7 @@ class ProxyPoolUpdate(BaseModel):
     pool_type: Optional[str] = None
     is_active: Optional[bool] = None
     strict_proxy: Optional[bool] = None
+    default_proxy_usage: Optional[dict] = None
 
 
 class ProxyPoolOut(BaseModel):
@@ -39,6 +41,7 @@ class ProxyPoolOut(BaseModel):
     pool_type: str
     is_active: bool
     strict_proxy: bool
+    default_proxy_usage: Optional[dict] = None
     test_status: Optional[str] = None
     last_tested_at: Optional[datetime] = None
     last_error: Optional[str] = None

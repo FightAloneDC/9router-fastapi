@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -46,6 +46,10 @@ class ProxyPool(Base):
         Boolean,
         nullable=False,
         default=False,
+    )
+    default_proxy_usage: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
     )
     test_status: Mapped[str | None] = mapped_column(
         String(50),
