@@ -5,6 +5,7 @@ import time
 import httpx
 
 from app.providers.base import BaseProviderHandler, ValidateResult
+from app.services.outbound_proxy import create_upstream_client
 
 
 class OllamaHandler(BaseProviderHandler):
@@ -15,7 +16,7 @@ class OllamaHandler(BaseProviderHandler):
 
         start = time.monotonic()
         url = f"{base_url}/api/tags"
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with create_upstream_client(timeout=5.0) as client:
             try:
                 resp = await client.get(url)
                 latency = int((time.monotonic() - start) * 1000)

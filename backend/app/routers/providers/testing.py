@@ -13,12 +13,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.provider import ProviderConnection, ProviderNode
+from app.models.proxy_pool import ProxyPool
 from app.providers.provider import Provider
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
 from app.routers.providers.helpers import _get_base_url
 from app.routers.providers.nodes import _build_node_handler
 from app.routers.providers.validation import _validate_provider, _validate_custom_openai
+from app.services.outbound_proxy import (
+    ProxyRequiredError,
+    parse_proxy_usage,
+    resolve_proxy_url,
+    use_outbound_proxy,
+)
 from app.schemas.provider import (
     BatchTestRequest,
     BatchTestResponse,
@@ -39,6 +46,27 @@ async def _test_provider_connection(conn: ProviderConnection, db: AsyncSession) 
 
     api_key = data.get("apiKey", "") or data.get("accessToken", "")
     provider = conn.provider
+    usage = parse_proxy_usage(data.get("proxyUsage"))
+    pool = None
+    if conn.proxy_pool_id:
+        pool_result = await db.execute(
+            select(ProxyPool).where(ProxyPool.id == conn.proxy_pool_id)
+        )
+        pool = pool_result.scalar_one_or_none()
+
+    try:
+        proxy_url = resolve_proxy_url(
+            usage=usage,
+            purpose="testConnection",
+            pool=pool,
+        )
+    except ProxyRequiredError as exc:
+        return {
+            "valid": False,
+            "error": str(exc),
+            "latencyMs": 0,
+            "models": None,
+        }
 
     # Check if this is a compatible provider (node-based)
     node_result = await db.execute(
@@ -54,7 +82,8 @@ async def _test_provider_connection(conn: ProviderConnection, db: AsyncSession) 
             pass
         node_base_url = node_data.get("baseUrl", "")
         handler = _build_node_handler(node.type, node_base_url, node.name, node.id)
-        result = await handler.validate(api_key, data)
+        async with use_outbound_proxy(proxy_url):
+            result = await handler.validate(api_key, data)
         return {"valid": result.valid, "error": result.error, "latencyMs": result.latency_ms, "models": result.models}
 
     # Built-in provider — use handler
@@ -64,7 +93,8 @@ async def _test_provider_connection(conn: ProviderConnection, db: AsyncSession) 
     try:
         p = Provider(provider)
         handler = p.handler()
-        result = await handler.validate(api_key, data)
+        async with use_outbound_proxy(proxy_url):
+            result = await handler.validate(api_key, data)
         return {"valid": result.valid, "error": result.error, "latencyMs": result.latency_ms, "models": result.models}
     except (ValueError, ModuleNotFoundError):
         return {"valid": False, "error": f"Unknown provider: {provider}", "latencyMs": 0, "models": None}

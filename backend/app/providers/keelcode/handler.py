@@ -10,6 +10,7 @@ from app.providers.base import (
     BaseProviderHandler,
     ValidateResult,
 )
+from app.services.outbound_proxy import create_upstream_client
 
 
 class KeelcodeHandler(BaseProviderHandler):
@@ -43,7 +44,7 @@ class KeelcodeHandler(BaseProviderHandler):
         }
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with create_upstream_client(timeout=15.0) as client:
                 resp = await client.get(url, headers=headers)
                 latency = int(
                     (time.monotonic() - start) * 1000

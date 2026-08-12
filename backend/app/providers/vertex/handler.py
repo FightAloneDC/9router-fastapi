@@ -6,6 +6,7 @@ import time
 import httpx
 
 from app.providers.base import BaseProviderHandler, ValidateResult
+from app.services.outbound_proxy import create_upstream_client
 
 
 class VertexHandler(BaseProviderHandler):
@@ -27,7 +28,7 @@ class VertexHandler(BaseProviderHandler):
         # Raw API key: probe Vertex
         start = time.monotonic()
         url = f"https://aiplatform.googleapis.com/v1/publishers/google/models/__probe__:generateContent?key={api_key}"
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with create_upstream_client(timeout=15.0) as client:
             try:
                 resp = await client.post(url, headers={"Content-Type": "application/json"}, json={})
                 latency = int((time.monotonic() - start) * 1000)

@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from app.providers.base import BaseProviderHandler, ValidateResult
+from app.services.outbound_proxy import create_upstream_client
 
 # Gemini has no voice list API — 30 prebuilt voices documented by Google.
 _GEMINI_VOICES: list[dict[str, str]] = [
@@ -60,7 +61,7 @@ class GeminiHandler(BaseProviderHandler):
 
         start = time.monotonic()
         url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with create_upstream_client(timeout=15.0) as client:
             try:
                 resp = await client.get(url)
                 latency = int((time.monotonic() - start) * 1000)

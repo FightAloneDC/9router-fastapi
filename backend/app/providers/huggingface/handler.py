@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from app.providers.base import BaseProviderHandler, ValidateResult
+from app.services.outbound_proxy import create_upstream_client
 
 
 class HuggingfaceHandler(BaseProviderHandler):
@@ -82,7 +83,7 @@ class HuggingfaceHandler(BaseProviderHandler):
         headers = {"Authorization": f"Bearer {api_key}"}
 
         start = time.monotonic()
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with create_upstream_client(timeout=15.0) as client:
             try:
                 resp = await client.get(url, headers=headers)
                 latency = int((time.monotonic() - start) * 1000)

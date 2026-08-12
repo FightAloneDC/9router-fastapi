@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from app.providers.base import BaseProviderHandler, ValidateResult
+from app.services.outbound_proxy import create_upstream_client
 
 
 class AzureHandler(BaseProviderHandler):
@@ -40,7 +41,7 @@ class AzureHandler(BaseProviderHandler):
         url = f"{endpoint}/openai/deployments?api-version={api_version}"
         headers = {"api-key": api_key}
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with create_upstream_client(timeout=15.0) as client:
             try:
                 resp = await client.get(url, headers=headers)
                 latency = int((time.monotonic() - start) * 1000)

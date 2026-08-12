@@ -1,15 +1,22 @@
 """Unit tests for outbound proxy resolution."""
 
+import asyncio
+import json
+
 import pytest
 
+from app.providers.base import BaseProviderConfig, BaseProviderHandler, ValidateResult
+from app.routers.providers import testing
 from app.services.outbound_proxy import (
     DEFAULT_PROXY_USAGE,
     ProxyRequiredError,
+    create_upstream_client,
     merge_proxy_usage_into_data,
     parse_proxy_usage,
     purpose_from_header,
     resolve_proxy_url,
     should_use_proxy,
+    use_outbound_proxy,
 )
 
 
@@ -81,3 +88,117 @@ def test_merge_proxy_usage_into_data():
     out = merge_proxy_usage_into_data(data, usage)
     assert out["apiKey"] == "x"
     assert out["proxyUsage"]["mode"] == "all"
+
+
+def test_base_validation_inherits_outbound_proxy(monkeypatch):
+    """Base validation sends its request through the active proxy context."""
+    created = []
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"data": []}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return Response()
+
+    def make_client(**kwargs):
+        created.append(kwargs)
+        return Client()
+
+    monkeypatch.setattr("httpx.AsyncClient", make_client)
+    config = BaseProviderConfig(
+        PROVIDER_NAME="Test",
+        PROVIDER_ID="test",
+        ALIAS="test",
+        BASE_URL="https://example.com/v1",
+    )
+    handler = BaseProviderHandler(config)
+
+    async def run():
+        async with use_outbound_proxy("http://proxy.test:8080"):
+            return await handler.validate("key")
+
+    assert asyncio.run(run()).valid is True
+    assert created == [{"timeout": 15.0, "proxy": "http://proxy.test:8080"}]
+
+
+def test_connection_test_uses_configured_proxy_pool(monkeypatch):
+    """Connection tests resolve proxyUsage before validating credentials."""
+    created = []
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"data": []}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return Response()
+
+    def make_client(**kwargs):
+        created.append(kwargs)
+        return Client()
+
+    class Pool:
+        proxy_url = "http://proxy.test:8080"
+        is_active = True
+        strict_proxy = False
+
+    class Result:
+        def __init__(self, value):
+            self.value = value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    class Db:
+        def __init__(self):
+            self.results = iter([Result(Pool()), Result(None)])
+
+        async def execute(self, _statement):
+            return next(self.results)
+
+    class Handler:
+        async def validate(self, _api_key, _data):
+            async with create_upstream_client() as client:
+                await client.get("https://example.com/v1/models")
+            return ValidateResult(valid=True)
+
+    class Provider:
+        def __init__(self, _provider):
+            pass
+
+        def handler(self):
+            return Handler()
+
+    class Connection:
+        provider = "test"
+        proxy_pool_id = "pool-id"
+        data = json.dumps({
+            "apiKey": "key",
+            "proxyUsage": {"mode": "all", "flags": {}},
+        })
+
+    monkeypatch.setattr("httpx.AsyncClient", make_client)
+    monkeypatch.setattr(testing, "Provider", Provider)
+
+    result = asyncio.run(testing._test_provider_connection(Connection(), Db()))
+
+    assert result["valid"] is True
+    assert created == [{"timeout": 30.0, "proxy": "http://proxy.test:8080"}]

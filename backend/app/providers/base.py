@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pydantic import BaseModel
 
+from app.services.outbound_proxy import create_upstream_client
+
 
 class BaseProviderConfig(BaseModel):
     """Base config for all providers.
@@ -191,7 +193,7 @@ class BaseProviderHandler:
         if extra_headers:
             headers.update(extra_headers)
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with create_upstream_client(timeout=15.0) as client:
             try:
                 resp = await client.get(url, headers=headers)
                 latency = int((time.monotonic() - start) * 1000)
@@ -239,7 +241,7 @@ class BaseProviderHandler:
             "Authorization": f"Bearer {api_key}",
         }
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with create_upstream_client(timeout=15.0) as client:
             try:
                 resp = await client.get(url, headers=headers)
                 latency = int((time.monotonic() - start) * 1000)
@@ -269,7 +271,7 @@ class BaseProviderHandler:
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with create_upstream_client(timeout=15.0) as client:
             try:
                 resp = await client.post(
                     url, headers=headers,
