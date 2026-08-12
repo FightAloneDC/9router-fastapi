@@ -1325,6 +1325,7 @@ export default function ProviderDetailPage() {
   const [connections, setConnections] = useState([])
   const [selectedConnIds, setSelectedConnIds] = useState(new Set())
   const [bulkJob, setBulkJob] = useState(null)
+  const bulkJobStartingRef = useRef(false)
   const bulkJobUnsubscribeRef = useRef(null)
   const [loading, setLoading] = useState(true)
   const [providerNode, setProviderNode] = useState(null)
@@ -2039,8 +2040,16 @@ export default function ProviderDetailPage() {
     })
   }
 
+  useEffect(() => () => {
+    bulkJobUnsubscribeRef.current?.()
+  }, [])
+
   const startBulkAction = async (action) => {
-    if (bulkJob?.running || selectedConnIds.size === 0) return
+    if (
+      bulkJob?.running ||
+      bulkJobStartingRef.current ||
+      selectedConnIds.size === 0
+    ) return
 
     const ids = [...selectedConnIds]
     if (action === 'delete') {
@@ -2059,6 +2068,19 @@ export default function ProviderDetailPage() {
   }
 
   const startBulkActionConfirmed = async (action, ids) => {
+    if (bulkJobStartingRef.current) return
+
+    bulkJobStartingRef.current = true
+    setBulkJob({
+      jobId: null,
+      action,
+      total: ids.length,
+      done: 0,
+      passed: 0,
+      failed: 0,
+      running: true,
+    })
+
     try {
       const response = await providersApi.startBulkConnectionJob(
         providerId,
@@ -2067,15 +2089,12 @@ export default function ProviderDetailPage() {
       const job = response.data || {}
       if (!job.jobId) throw new Error('Bulk job did not return a job ID')
 
-      setBulkJob({
+      setBulkJob((previous) => ({
+        ...previous,
         jobId: job.jobId,
         action: job.action || action,
         total: job.total || ids.length,
-        done: 0,
-        passed: 0,
-        failed: 0,
-        running: true,
-      })
+      }))
 
       const token = localStorage.getItem('token') ||
         useAuthStore.getState().token
@@ -2122,6 +2141,7 @@ export default function ProviderDetailPage() {
 
           bulkJobUnsubscribeRef.current?.()
           bulkJobUnsubscribeRef.current = null
+          bulkJobStartingRef.current = false
           setBulkJob((previous) => previous && ({
             ...previous,
             done: event.summary?.total ?? previous.done,
@@ -2136,6 +2156,8 @@ export default function ProviderDetailPage() {
         },
       )
     } catch (err) {
+      bulkJobStartingRef.current = false
+      setBulkJob(null)
       console.error(`Failed to start bulk ${action}:`, err)
     }
   }
