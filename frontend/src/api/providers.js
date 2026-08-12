@@ -22,6 +22,11 @@ export const providersApi = {
     client.post(`/providers/${connId}/reorder`, { direction }),
   deleteProvider: (id) => client.delete(`/providers/${id}`),
   bulkDeleteProviders: (data) => client.post('/providers/bulk-delete', data),
+  startBulkConnectionJob: (providerId, data) =>
+    client.post(
+      `/providers/by-provider/${providerId}/connections/bulk-jobs`,
+      data,
+    ),
 
   // Provider validation
   validateProvider: (data) => client.post('/providers/validate', data),
