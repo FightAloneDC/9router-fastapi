@@ -29,6 +29,14 @@ describe('summarizeLastError', () => {
     assert.equal(summarizeLastError(raw), 'upstream failed')
   })
 
+  it('extracts message from truncated JSON', () => {
+    const raw = '{"error":{"message":"Rate limit exceeded for gpt-4...'
+    assert.equal(
+      summarizeLastError(raw),
+      'Rate limit exceeded for gpt-4...',
+    )
+  })
+
   it('strips crude HTML and takes first line', () => {
     const raw = '<html><body><p>Gateway timeout</p></body></html>'
     const out = summarizeLastError(raw)

@@ -132,16 +132,12 @@ function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMo
   const isEmail = (v) => typeof v === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
   const providerSpecific = connection.providerSpecificData || connection.provider_specific || {}
   const _psd = connection.providerSpecificData || connection.provider_specific || {}
-  const lastError =
-    connection.lastError ||
-    connection.last_error ||
-    providerSpecific.lastError ||
-    ''
-  const lastErrorAt =
-    connection.lastErrorAt ||
-    connection.last_error_at ||
-    providerSpecific.lastErrorAt ||
-    null
+  const lastError = connection.lastError !== undefined
+    ? connection.lastError
+    : connection.last_error || providerSpecific.lastError || ''
+  const lastErrorAt = connection.lastErrorAt !== undefined
+    ? connection.lastErrorAt
+    : connection.last_error_at || providerSpecific.lastErrorAt || null
   const errorSummary = summarizeLastError(lastError)
   const errorAgo = formatLastErrorAgo(lastErrorAt)
   const _isOAuth = _psd.loginMethod === 'pat' ? false : (connection.auth_type ? connection.auth_type === 'oauth' : isOAuth)
@@ -2109,11 +2105,24 @@ export default function ProviderDetailPage() {
       const data = res.data
       setTestResults(prev => ({ ...prev, [connectionId]: { valid: data.valid, error: data.error } }))
       setConnections(prev => prev.map(c =>
-        c.id === connectionId ? { ...c, test_status: data.valid ? 'connected' : 'error', last_error: data.error || null } : c
+        c.id === connectionId ? {
+          ...c,
+          test_status: data.valid ? 'connected' : 'error',
+          lastError: data.valid ? null : data.error || 'Test failed',
+          lastErrorAt: data.valid ? null : new Date().toISOString(),
+        } : c
       ))
     } catch (err) {
       const msg = err.response?.data?.detail || err.message || 'Test failed'
       setTestResults(prev => ({ ...prev, [connectionId]: { valid: false, error: msg } }))
+      setConnections(prev => prev.map(c =>
+        c.id === connectionId ? {
+          ...c,
+          test_status: 'error',
+          lastError: msg,
+          lastErrorAt: new Date().toISOString(),
+        } : c
+      ))
     } finally {
       setTestingConnectionId(null)
     }

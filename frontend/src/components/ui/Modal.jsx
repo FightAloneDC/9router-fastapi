@@ -1,23 +1,29 @@
 import { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 import { X } from 'lucide-react'
 
 export default function Modal({ isOpen, onClose, title, children, className = '' }) {
   useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden'
-    } else {
-      document.body.style.overflow = ''
+    if (!isOpen) return undefined
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose()
     }
+
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', handleKeyDown)
+
     return () => {
       document.body.style.overflow = ''
+      document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [isOpen])
+  }, [isOpen, onClose])
 
   if (!isOpen) return null
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
@@ -46,6 +52,7 @@ export default function Modal({ isOpen, onClose, title, children, className = ''
         {/* Body */}
         <div className="px-6 py-4">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

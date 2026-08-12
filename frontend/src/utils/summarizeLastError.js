@@ -54,6 +54,19 @@ function textFirstLine(s) {
   return plainTextFirstLine(s)
 }
 
+function messageFromTruncatedJson(s) {
+  const match = s.match(
+    /"message"\s*:\s*"((?:\\.|[^"\\])*)(?:"|$)/,
+  )
+  if (!match) return ''
+
+  try {
+    return JSON.parse(`"${match[1]}"`).trim()
+  } catch {
+    return match[1].replace(/\\"/g, '"').trim()
+  }
+}
+
 /**
  * @param {unknown} raw
  * @param {number} [maxLen]
@@ -94,6 +107,10 @@ export function summarizeLastError(raw, maxLen = DEFAULT_MAX) {
       }
       candidate = inner ? `${status}: ${inner}` : `${status}: ${rest}`
     }
+  }
+
+  if (!candidate) {
+    candidate = messageFromTruncatedJson(s)
   }
 
   if (!candidate) {
