@@ -126,14 +126,10 @@ async def messages_endpoint(
         try:
             proxy = await proxy_for_connection(db, conn, purpose)
         except ProxyRequiredError as exc:
-            return JSONResponse(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                content={
-                    "type": "error",
-                    "error": {"type": "api_error", "message": str(exc)},
-                },
-                headers={"X-Request-Id": request_id},
-            )
+            last_error_detail = str(exc)
+            last_error_status = status.HTTP_503_SERVICE_UNAVAILABLE
+            exclude_ids.add(target.connection_id)
+            continue
 
         # Determine if the upstream is Claude-format or OpenAI-format
         is_claude_upstream: bool = False

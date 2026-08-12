@@ -126,10 +126,10 @@ async def chat_completions(
                 try:
                     proxy = await proxy_for_connection(db, conn, purpose)
                 except ProxyRequiredError as exc:
-                    return JSONResponse(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        content={"error": {"message": str(exc)}},
-                    )
+                    last_error_detail = str(exc)
+                    last_error_status = status.HTTP_503_SERVICE_UNAVAILABLE
+                    exclude_ids.add(target.connection_id)
+                    continue
                 try:
                     raw_body, signed_headers = await _build_provider_request(target, body, conn_data)
                     if signed_headers:
