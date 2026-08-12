@@ -1271,6 +1271,16 @@ export default function ProviderDetailPage() {
   const CONNECTIONS_PER_PAGE = 10
   const [connectionPage, setConnectionPage] = useState(1)
   const [connectionTotal, setConnectionTotal] = useState(0)
+  const [connectionTotalAll, setConnectionTotalAll] = useState(0)
+  const [connSearchInput, setConnSearchInput] = useState('')
+  const [connSearchQ, setConnSearchQ] = useState('')
+  const [connFilterActive, setConnFilterActive] = useState('')
+  const [connFilterStatus, setConnFilterStatus] = useState('')
+  const [connFilterAuth, setConnFilterAuth] = useState('')
+  const [connFilterProxy, setConnFilterProxy] = useState('')
+  const [connFilterPoolId, setConnFilterPoolId] = useState('')
+  const [connFilterToken, setConnFilterToken] = useState('')
+  const [connFilterCooldown, setConnFilterCooldown] = useState('')
 
   // Models state
   const [models, setModels] = useState([])
@@ -1320,6 +1330,37 @@ export default function ProviderDetailPage() {
   providerStorageAliasRef.current = providerStorageAlias
   const connectionPageRef = useRef(connectionPage)
   connectionPageRef.current = connectionPage
+  const connectionFilterSignature = JSON.stringify({
+    q: connSearchQ,
+    isActive: connFilterActive,
+    testStatus: connFilterStatus,
+    authType: connFilterAuth,
+    hasProxy: connFilterProxy,
+    proxyPoolId: connFilterPoolId,
+    tokenIssue: connFilterToken,
+    inCooldown: connFilterCooldown,
+  })
+  const loadedFilterSignatureRef = useRef(connectionFilterSignature)
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      setConnSearchQ(connSearchInput.trim())
+    }, 300)
+    return () => clearTimeout(timeout)
+  }, [connSearchInput])
+
+  useEffect(() => {
+    setConnectionPage(1)
+  }, [
+    connSearchQ,
+    connFilterActive,
+    connFilterStatus,
+    connFilterAuth,
+    connFilterProxy,
+    connFilterPoolId,
+    connFilterToken,
+    connFilterCooldown,
+  ])
 
   // Thinking config — safe fallback
   const THINKING_EXTENDED_DEFAULT = { options: ["auto", "on", "off"], defaultMode: "auto", defaultBudgetTokens: 10000 }
@@ -1399,19 +1440,36 @@ export default function ProviderDetailPage() {
     const page = pageOverride ?? connectionPageRef.current
     const storageAlias = providerStorageAliasRef.current
     const pid = useCatalogStore.getState().resolveProviderId(rawProviderId)
+    const params = {
+      page,
+      page_size: CONNECTIONS_PER_PAGE,
+      include_models: true,
+    }
+    if (connSearchQ) params.q = connSearchQ
+    if (connFilterActive === 'true') params.is_active = true
+    if (connFilterActive === 'false') params.is_active = false
+    if (connFilterStatus) params.test_status = connFilterStatus
+    if (connFilterAuth) params.auth_type = connFilterAuth
+    if (connFilterProxy === 'yes') params.has_proxy = true
+    if (connFilterProxy === 'no') params.has_proxy = false
+    if (connFilterPoolId) params.proxy_pool_id = connFilterPoolId
+    if (connFilterToken) params.token_issue = connFilterToken
+    if (connFilterCooldown === 'yes') params.in_cooldown = true
+    if (connFilterCooldown === 'no') params.in_cooldown = false
     try {
       const [connRes, proxyRes] = await Promise.all([
-        providersApi.getProviderConnections(pid, {
-          page,
-          page_size: CONNECTIONS_PER_PAGE,
-          include_models: true,
-        }),
+        providersApi.getProviderConnections(pid, params),
         proxyPoolsApi.getAll(),
       ])
       const payload = connRes.data || {}
       const filtered = payload.items || []
       setConnections(filtered)
       setConnectionTotal(payload.total || 0)
+      setConnectionTotalAll(
+        payload.total_all != null
+          ? payload.total_all
+          : (payload.total || 0),
+      )
       setProxyPools((proxyRes.data || []).filter((p) => p.is_active !== false))
 
       // Models returned once (union), not duplicated per connection
@@ -1474,13 +1532,33 @@ export default function ProviderDetailPage() {
     } finally {
       setLoading(false)
     }
-  }, [rawProviderId])
+  }, [
+    rawProviderId,
+    connSearchQ,
+    connFilterActive,
+    connFilterStatus,
+    connFilterAuth,
+    connFilterProxy,
+    connFilterPoolId,
+    connFilterToken,
+    connFilterCooldown,
+  ])
 
   // Single initial/page load: wait for catalog entry, then fetch once.
   // Dedupe covers React StrictMode double-invoke in development.
   useEffect(() => {
+    if (
+      connectionPage !== 1
+      && loadedFilterSignatureRef.current !== connectionFilterSignature
+    ) {
+      return
+    }
+    loadedFilterSignatureRef.current = connectionFilterSignature
+
     let cancelled = false
-    const key = `${rawProviderId}:${connectionPage}`
+    const key = (
+      `${rawProviderId}:${connectionPage}:${connectionFilterSignature}`
+    )
     setLoading(true)
     setCatalogReady(false)
 
@@ -1507,7 +1585,13 @@ export default function ProviderDetailPage() {
     return () => {
       cancelled = true
     }
-  }, [rawProviderId, connectionPage, fetchConnections, fetchAliases])
+  }, [
+    rawProviderId,
+    connectionPage,
+    connectionFilterSignature,
+    fetchConnections,
+    fetchAliases,
+  ])
 
   const handleChangeModelType = useCallback(async (modelId, newType) => {
     const connId = connections[0]?.id
