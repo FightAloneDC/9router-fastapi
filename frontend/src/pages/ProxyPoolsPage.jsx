@@ -24,6 +24,74 @@ import Modal from '../components/ui/Modal'
 import Input from '../components/ui/Input'
 import Toggle from '../components/ui/Toggle'
 import { proxyPoolsApi } from '../api/proxyPools'
+import { useNotificationStore } from '../stores/notificationStore'
+
+const PROXY_USAGE_FLAGS = [
+  ['testConnection', 'Test connection'],
+  ['testModel', 'Test model'],
+  ['testChat', 'Test chat'],
+  ['oauthRefresh', 'OAuth refresh'],
+]
+
+const EMPTY_PROXY_USAGE = {
+  mode: 'off',
+  flags: Object.fromEntries(PROXY_USAGE_FLAGS.map(([key]) => [key, false])),
+}
+
+function proxyUsageWithMode(mode, current) {
+  return {
+    mode,
+    flags: { ...EMPTY_PROXY_USAGE.flags, ...(current?.flags || {}) },
+  }
+}
+
+function ProxyUsageControls({ value, onChange }) {
+  const usage = proxyUsageWithMode(value?.mode || 'off', value)
+
+  return (
+    <div className="rounded-lg border border-zinc-700/40 bg-zinc-900/50 p-3">
+      <p className="mb-2 text-sm font-medium text-zinc-300">Proxy usage</p>
+      <div className="flex flex-wrap gap-3">
+        {['off', 'selective', 'all'].map((mode) => (
+          <label
+            key={mode}
+            className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-300"
+          >
+            <input
+              type="radio"
+              name="default-proxy-usage"
+              checked={usage.mode === mode}
+              onChange={() => onChange(proxyUsageWithMode(mode, usage))}
+              className="border-zinc-600 bg-zinc-800 text-primary-500"
+            />
+            {mode.charAt(0).toUpperCase() + mode.slice(1)}
+          </label>
+        ))}
+      </div>
+      {usage.mode === 'selective' && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {PROXY_USAGE_FLAGS.map(([key, label]) => (
+            <label
+              key={key}
+              className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400"
+            >
+              <input
+                type="checkbox"
+                checked={usage.flags[key] === true}
+                onChange={(event) => onChange({
+                  ...usage,
+                  flags: { ...usage.flags, [key]: event.target.checked },
+                })}
+                className="rounded border-zinc-600 bg-zinc-800 text-primary-500"
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function ProxyPoolsPage() {
   const [pools, setPools] = useState([])
@@ -41,8 +109,11 @@ export default function ProxyPoolsPage() {
     pool_type: 'http',
     is_active: true,
     strict_proxy: false,
+    default_proxy_usage: EMPTY_PROXY_USAGE,
   })
   const [saving, setSaving] = useState(false)
+  const [applyingUsageId, setApplyingUsageId] = useState(null)
+  const addNotification = useNotificationStore((state) => state.addNotification)
 
   // Batch import modal
   const [showBatchModal, setShowBatchModal] = useState(false)
@@ -109,6 +180,7 @@ export default function ProxyPoolsPage() {
       pool_type: 'http',
       is_active: true,
       strict_proxy: false,
+      default_proxy_usage: EMPTY_PROXY_USAGE,
     })
     setShowModal(true)
   }
@@ -122,6 +194,10 @@ export default function ProxyPoolsPage() {
       pool_type: pool.pool_type,
       is_active: pool.is_active,
       strict_proxy: pool.strict_proxy,
+      default_proxy_usage: proxyUsageWithMode(
+        pool.default_proxy_usage?.mode || 'off',
+        pool.default_proxy_usage,
+      ),
     })
     setShowModal(true)
   }
@@ -165,6 +241,32 @@ export default function ProxyPoolsPage() {
       setPools((prev) => prev.map((p) => (p.id === pool.id ? res.data : p)))
     } catch (err) {
       console.error('Failed to toggle proxy pool:', err)
+    }
+  }
+
+  const handleApplyUsage = async (pool) => {
+    const confirmed = window.confirm(
+      'Apply usage settings to all connections using this pool?',
+    )
+    if (!confirmed) return
+
+    setApplyingUsageId(pool.id)
+    try {
+      const res = await proxyPoolsApi.applyUsage(pool.id)
+      addNotification({
+        type: 'success',
+        message: `Applied usage settings to ${res.data.updated} connection${
+          res.data.updated === 1 ? '' : 's'
+        }`,
+      })
+    } catch (err) {
+      console.error('Failed to apply proxy usage settings:', err)
+      addNotification({
+        type: 'error',
+        message: 'Failed to apply usage settings',
+      })
+    } finally {
+      setApplyingUsageId(null)
     }
   }
 
@@ -617,6 +719,33 @@ export default function ProxyPoolsPage() {
               onChange={(val) => setForm({ ...form, strict_proxy: val })}
             />
           </div>
+
+          <ProxyUsageControls
+            value={form.default_proxy_usage}
+            onChange={(default_proxy_usage) => setForm({
+              ...form,
+              default_proxy_usage,
+            })}
+          />
+
+          {editing && (
+            <div className="rounded-lg border border-zinc-700/40 p-3">
+              <p className="text-xs text-zinc-500">
+                Save changes before applying this template.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => handleApplyUsage(editing)}
+                disabled={applyingUsageId === editing.id}
+              >
+                {applyingUsageId === editing.id
+                  ? 'Applying...'
+                  : 'Apply usage settings to all connections using this pool'}
+              </Button>
+            </div>
+          )}
 
           <div className="flex justify-end gap-3 pt-2">
             <Button variant="ghost" onClick={() => setShowModal(false)}>

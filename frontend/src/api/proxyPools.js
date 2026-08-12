@@ -6,4 +6,5 @@ export const proxyPoolsApi = {
   update: (id, data) => client.patch(`/proxy-pools/${id}`, data),
   delete: (id) => client.delete(`/proxy-pools/${id}`),
   test: (id) => client.post(`/proxy-pools/${id}/test`),
+  applyUsage: (id) => client.post(`/proxy-pools/${id}/apply-usage`),
 }
