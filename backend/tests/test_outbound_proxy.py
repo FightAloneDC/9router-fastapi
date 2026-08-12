@@ -202,3 +202,76 @@ def test_connection_test_uses_configured_proxy_pool(monkeypatch):
 
     assert result["valid"] is True
     assert created == [{"timeout": 30.0, "proxy": "http://proxy.test:8080"}]
+
+
+def test_qoder_user_info_inherits_outbound_proxy(monkeypatch):
+    """Qoder validation user-info requests inherit the active proxy."""
+    from app.providers.qoder.auth import fetch_user_info
+
+    created = []
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"id": "user-id"}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return Response()
+
+    def make_client(**kwargs):
+        created.append(kwargs)
+        return Client()
+
+    monkeypatch.setattr("httpx.AsyncClient", make_client)
+
+    async def run():
+        async with use_outbound_proxy("http://proxy.test:8080"):
+            return await fetch_user_info("token")
+
+    assert asyncio.run(run()) == {"id": "user-id"}
+    assert created == [{"timeout": 15.0, "proxy": "http://proxy.test:8080"}]
+
+
+def test_grok_cli_model_fetching_inherits_outbound_proxy(monkeypatch):
+    """Grok CLI validation model fetches inherit the active proxy."""
+    from app.providers.grok_cli.models import fetch_models
+
+    created = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return []
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return Response()
+
+    def make_client(**kwargs):
+        created.append(kwargs)
+        return Client()
+
+    monkeypatch.setattr("httpx.AsyncClient", make_client)
+
+    async def run():
+        async with use_outbound_proxy("http://proxy.test:8080"):
+            return await fetch_models("token")
+
+    assert asyncio.run(run()) == []
+    assert created == [{"timeout": 30.0, "proxy": "http://proxy.test:8080"}]

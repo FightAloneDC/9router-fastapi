@@ -32,6 +32,8 @@ from typing import Any
 
 import httpx
 
+from app.services.outbound_proxy import create_upstream_client
+
 from .constants import (
     QODER_DEVICE_TOKEN_URL,
     QODER_LOGIN_URL,
@@ -189,7 +191,7 @@ async def fetch_user_info(access_token: str, timeout: float = 15.0) -> dict[str,
         "Authorization": f"Bearer {access_token}",
     }
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with create_upstream_client(timeout=timeout) as client:
         # First try with Authorization header
         response = await client.get(
             QODER_USERINFO_URL,

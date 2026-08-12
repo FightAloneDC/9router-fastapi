@@ -17,6 +17,7 @@ from app.providers.grok_cli.constants import (
     GROK_CLI_USER_AGENT,
     GROK_CLI_VERSION,
 )
+from app.services.outbound_proxy import create_upstream_client
 
 _MODELS_URL = f"{GROK_CLI_BASE_URL}/models"
 
@@ -133,7 +134,7 @@ async def fetch_models(
     psd = (data or {}).get("providerSpecificData") or {}
     headers = build_models_headers(api_key, psd)
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with create_upstream_client(timeout=30.0) as client:
         resp = await client.get(_MODELS_URL, headers=headers)
         resp.raise_for_status()
         return parse_response(resp.json())
