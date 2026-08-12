@@ -339,6 +339,7 @@ cd backend && ../.venv-local/bin/pytest tests/ -v
 8. **Use catalogStore** — Frontend gets provider metadata from backend via `/providers/catalog`. Don't hardcode provider lists.
 9. **Respect backup files** — Files with `-v*` suffix are intentional backups in `.gitignore`. Don't delete or modify them.
 10. **Docs in English** — All documentation and code comments must be in English. Use chat language (Indonesian) for user communication.
+11. **Scratch folders stay out of git** — Before creating any junk/scratch/agent artifact directory (e.g. `.superpowers/`, `.scratch/`, SDD reports, temp workdirs), confirm it is listed in `.gitignore` first. If missing, add the ignore entry, then create the folder. Never force-add ignored paths. Do not turn the user's repository into a pile of agent trash.
 
 ---
 
@@ -352,6 +353,7 @@ cd backend && ../.venv-local/bin/pytest tests/ -v
 - Prefer reading existing code before making changes
 - If file exceeds 200-300 lines, split or make modular
 - Never write test artifacts, scratch files, or temporary scripts to `/tmp`. Use a `tests/` folder inside the current workdir. The host has 1+ month uptime — `/tmp` does not auto-clean.
+- Before creating scratch/junk/agent folders in the repo, register them in `.gitignore` first. Never commit agent artifacts (reports, SDD dumps, temp dirs).
 
 ## Python Rules (Backend — FastAPI)
 

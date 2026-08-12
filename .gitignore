@@ -96,6 +96,7 @@ frontend/dist/
 tmp/
 dist/
 build/
+.worktrees/
 
 #-------------------------
 # AGENT / AI TOOL FOLDERS
