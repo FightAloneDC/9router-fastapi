@@ -36,6 +36,11 @@ describe('summarizeLastError', () => {
     assert.ok(!out.includes('<'))
   })
 
+  it('uses first line only for multiline plain text', () => {
+    const raw = 'Gateway timeout\nupstream diagnostics'
+    assert.equal(summarizeLastError(raw), 'Gateway timeout')
+  })
+
   it('truncates long plain text at maxLen with ellipsis', () => {
     const raw = 'x'.repeat(100)
     const out = summarizeLastError(raw, 40)

@@ -26,8 +26,13 @@ function pickFromObject(obj) {
   return ''
 }
 
-function stripHtml(s) {
+function stripHtmlLine(s) {
   return s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function plainTextFirstLine(s) {
+  const first = s.split(/\r?\n/)[0] ?? s
+  return stripHtmlLine(first)
 }
 
 /**
@@ -73,7 +78,7 @@ export function summarizeLastError(raw, maxLen = DEFAULT_MAX) {
   }
 
   if (!candidate) {
-    candidate = stripHtml(s).split(/\n/)[0] || stripHtml(s)
+    candidate = plainTextFirstLine(s)
   }
 
   return truncateAtWord(candidate, maxLen)
