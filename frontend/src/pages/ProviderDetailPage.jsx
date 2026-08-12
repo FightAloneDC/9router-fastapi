@@ -18,6 +18,7 @@ import Toggle from '../components/ui/Toggle'
 import { providersApi } from '../api/providers'
 import { proxyPoolsApi } from '../api/proxyPools'
 import { settingsApi } from '../api/settings'
+import { subscribeBulkJob } from '../api/bulkJobStream'
 import useCatalogStore from '../stores/catalogStore'
 import { copyToClipboard } from '../utils/clipboard'
 import { fetchSuggestedModels } from '../utils/providerModelsFetcher'
@@ -1323,6 +1324,8 @@ export default function ProviderDetailPage() {
 
   const [connections, setConnections] = useState([])
   const [selectedConnIds, setSelectedConnIds] = useState(new Set())
+  const [bulkJob, setBulkJob] = useState(null)
+  const bulkJobUnsubscribeRef = useRef(null)
   const [loading, setLoading] = useState(true)
   const [providerNode, setProviderNode] = useState(null)
   const [proxyPools, setProxyPools] = useState([])
@@ -2036,23 +2039,105 @@ export default function ProviderDetailPage() {
     })
   }
 
-  const handleDeleteSelected = () => {
+  const startBulkAction = async (action) => {
+    if (bulkJob?.running || selectedConnIds.size === 0) return
+
     const ids = [...selectedConnIds]
-    if (!ids.length) return
-    setConfirmState({
-      title: 'Delete Selected',
-      message: `Delete ${ids.length} selected connection(s)? This cannot be undone.`,
-      onConfirm: async () => {
-        setConfirmState(null)
-        try {
-          await providersApi.bulkDeleteProviders({ ids })
-          setSelectedConnIds(new Set())
-          await fetchConnections()
-        } catch (err) {
-          console.error('Failed to delete:', err)
-        }
-      }
-    })
+    if (action === 'delete') {
+      setConfirmState({
+        title: 'Delete Selected',
+        message: `Delete ${ids.length} selected connection(s)? This cannot be undone.`,
+        onConfirm: async () => {
+          setConfirmState(null)
+          await startBulkActionConfirmed(action, ids)
+        },
+      })
+      return
+    }
+
+    await startBulkActionConfirmed(action, ids)
+  }
+
+  const startBulkActionConfirmed = async (action, ids) => {
+    try {
+      const response = await providersApi.startBulkConnectionJob(
+        providerId,
+        { action, ids },
+      )
+      const job = response.data || {}
+      if (!job.jobId) throw new Error('Bulk job did not return a job ID')
+
+      setBulkJob({
+        jobId: job.jobId,
+        action: job.action || action,
+        total: job.total || ids.length,
+        done: 0,
+        passed: 0,
+        failed: 0,
+        running: true,
+      })
+
+      const token = localStorage.getItem('token') ||
+        useAuthStore.getState().token
+      bulkJobUnsubscribeRef.current = subscribeBulkJob(
+        token,
+        job.jobId,
+        (event) => {
+          if (event.type === 'item') {
+            setConnections((previous) => previous.map((connection) => {
+              if (connection.id !== event.connectionId) return connection
+
+              const patch = {}
+              if (event.isActive !== undefined) {
+                patch.is_active = event.isActive
+                patch.isActive = event.isActive
+              }
+              if (event.testStatus !== undefined) {
+                patch.test_status = event.testStatus
+                patch.testStatus = event.testStatus
+                patch.lastError = event.ok
+                  ? null
+                  : event.error || 'Test failed'
+                patch.lastErrorAt = event.ok
+                  ? null
+                  : new Date().toISOString()
+              }
+              return { ...connection, ...patch }
+            }))
+            return
+          }
+
+          if (event.type === 'progress') {
+            setBulkJob((previous) => previous && ({
+              ...previous,
+              total: event.total,
+              done: event.completed,
+              passed: event.passed,
+              failed: event.failed,
+            }))
+            return
+          }
+
+          if (event.type !== 'done' && event.type !== 'error') return
+
+          bulkJobUnsubscribeRef.current?.()
+          bulkJobUnsubscribeRef.current = null
+          setBulkJob((previous) => previous && ({
+            ...previous,
+            done: event.summary?.total ?? previous.done,
+            passed: event.summary?.passed ?? previous.passed,
+            failed: event.summary?.failed ?? previous.failed,
+            running: false,
+          }))
+          if (event.type === 'done') {
+            setSelectedConnIds(new Set())
+            fetchConnections()
+          }
+        },
+      )
+    } catch (err) {
+      console.error(`Failed to start bulk ${action}:`, err)
+    }
   }
 
   const handleToggleSelect = (connId) => {
@@ -2065,6 +2150,7 @@ export default function ProviderDetailPage() {
   }
 
   const handleSelectAll = () => {
+    if (bulkJob?.running) return
     const pageIds = pagedConnections.map((c) => c.id)
     const allPageSelected = pageIds.every((id) => selectedConnIds.has(id))
     setSelectedConnIds((prev) => {
@@ -2079,6 +2165,7 @@ export default function ProviderDetailPage() {
   }
 
   const handleSelectAllPages = async () => {
+    if (bulkJob?.running) return
     if (connectionTotal > 0 && selectedConnIds.size === connectionTotal) {
       setSelectedConnIds(new Set())
       return
@@ -2886,21 +2973,72 @@ export default function ProviderDetailPage() {
                     type="checkbox"
                     checked={pagedConnections.length > 0 && pagedConnections.every((c) => selectedConnIds.has(c.id))}
                     onChange={handleSelectAll}
-                    className="rounded border-zinc-600 bg-zinc-800 accent-red-500 cursor-pointer"
+                    disabled={bulkJob?.running}
+                    className="rounded border-zinc-600 bg-zinc-800 accent-red-500 cursor-pointer disabled:cursor-not-allowed"
                   />
                   This page
                 </label>
                 <div className="flex items-center gap-2">
-                  <Button size="sm" variant="warning" onClick={handleSelectAllPages}>
+                  <Button
+                    size="sm"
+                    variant="warning"
+                    onClick={handleSelectAllPages}
+                    disabled={bulkJob?.running}
+                  >
                     Select All{connFiltersActive ? ' filtered' : ''} ({connectionTotal})
                   </Button>
                   {selectedConnIds.size > 0 && (
-                    <Button size="sm" variant="danger" onClick={handleDeleteSelected}>
-                      <Trash2 size={14} className="mr-1" /> Delete Selected ({selectedConnIds.size})
-                    </Button>
+                    <>
+                      <Button
+                        size="sm"
+                        onClick={() => startBulkAction('enable')}
+                        disabled={bulkJob?.running}
+                      >
+                        <CheckCircle2 size={14} className="mr-1" />
+                        Enable ({selectedConnIds.size})
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => startBulkAction('disable')}
+                        disabled={bulkJob?.running}
+                      >
+                        <Ban size={14} className="mr-1" />
+                        Disable ({selectedConnIds.size})
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="warning"
+                        onClick={() => startBulkAction('test')}
+                        disabled={bulkJob?.running}
+                      >
+                        <Beaker size={14} className="mr-1" />
+                        Test ({selectedConnIds.size})
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onClick={() => startBulkAction('delete')}
+                        disabled={bulkJob?.running}
+                      >
+                        <Trash2 size={14} className="mr-1" />
+                        Delete ({selectedConnIds.size})
+                      </Button>
+                    </>
                   )}
                 </div>
               </div>
+              {bulkJob?.running && (
+                <div className="mb-3 rounded bg-zinc-800/70 px-3 py-2 text-xs text-zinc-300">
+                  {({
+                    enable: 'Enabling',
+                    disable: 'Disabling',
+                    test: 'Testing',
+                    delete: 'Deleting',
+                  })[bulkJob.action]} {bulkJob.done}/{bulkJob.total} ·{' '}
+                  {bulkJob.passed} ok · {bulkJob.failed} fail
+                </div>
+              )}
               <div className="flex min-w-0 flex-col divide-y divide-zinc-800/50">
                 {pagedConnections.map((conn, index) => {
                   const actualIndex = connStart + index
