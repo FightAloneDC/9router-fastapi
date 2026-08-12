@@ -2401,6 +2401,27 @@ export default function ProviderDetailPage() {
   }
 
   const activePools = proxyPools.filter((p) => p.is_active === true)
+  const connFiltersActive = Boolean(
+    connSearchQ ||
+    connFilterActive ||
+    connFilterStatus ||
+    connFilterAuth ||
+    connFilterProxy ||
+    connFilterPoolId ||
+    connFilterToken ||
+    connFilterCooldown
+  )
+  const clearConnFilters = () => {
+    setConnSearchInput('')
+    setConnSearchQ('')
+    setConnFilterActive('')
+    setConnFilterStatus('')
+    setConnFilterAuth('')
+    setConnFilterProxy('')
+    setConnFilterPoolId('')
+    setConnFilterToken('')
+    setConnFilterCooldown('')
+  }
 
   // Connection pagination computed values (server-side pages)
   const connTotalPages = Math.max(1, Math.ceil(connectionTotal / CONNECTIONS_PER_PAGE))
@@ -2475,7 +2496,9 @@ export default function ProviderDetailPage() {
             <p className="text-zinc-500">
               {isFreeNoAuth
                 ? 'No authentication required'
-                : `${connectionTotal} connection${connectionTotal === 1 ? '' : 's'} configured`}
+                : `${connectionTotalAll || connectionTotal} connection${
+                  (connectionTotalAll || connectionTotal) === 1 ? '' : 's'
+                } configured`}
             </p>
           </div>
         </div>
@@ -2569,6 +2592,104 @@ export default function ProviderDetailPage() {
             )}
           </div>
 
+          {!isFreeNoAuth && connectionTotalAll > 0 && (
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <div className="relative min-w-[180px] flex-1">
+                <Search
+                  size={14}
+                  className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500"
+                />
+                <input
+                  type="search"
+                  value={connSearchInput}
+                  onChange={(event) => setConnSearchInput(event.target.value)}
+                  placeholder="Search connections..."
+                  className="w-full rounded-md border border-zinc-700 bg-zinc-800/50 py-1.5 pl-8 pr-3 text-xs text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                />
+              </div>
+              <select
+                value={connFilterActive}
+                onChange={(event) => setConnFilterActive(event.target.value)}
+                className="rounded-md border border-zinc-700 bg-zinc-800/50 px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              >
+                <option value="">All activity</option>
+                <option value="true">Active</option>
+                <option value="false">Inactive</option>
+              </select>
+              <select
+                value={connFilterStatus}
+                onChange={(event) => setConnFilterStatus(event.target.value)}
+                className="rounded-md border border-zinc-700 bg-zinc-800/50 px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              >
+                <option value="">All statuses</option>
+                <option value="connected">Connected</option>
+                <option value="error">Error</option>
+                <option value="expired">Expired</option>
+                <option value="unavailable">Unavailable</option>
+                <option value="untested">Untested</option>
+                <option value="unknown">Unknown</option>
+              </select>
+              {info?.supportsPAT && (
+                <select
+                  value={connFilterAuth}
+                  onChange={(event) => setConnFilterAuth(event.target.value)}
+                  className="rounded-md border border-zinc-700 bg-zinc-800/50 px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                >
+                  <option value="">All auth</option>
+                  <option value="oauth">OAuth</option>
+                  <option value="apikey">API key</option>
+                </select>
+              )}
+              <select
+                value={connFilterProxy}
+                onChange={(event) => setConnFilterProxy(event.target.value)}
+                className="rounded-md border border-zinc-700 bg-zinc-800/50 px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              >
+                <option value="">All proxy states</option>
+                <option value="yes">With proxy</option>
+                <option value="no">Without proxy</option>
+              </select>
+              {activePools.length > 0 && (
+                <select
+                  value={connFilterPoolId}
+                  onChange={(event) => setConnFilterPoolId(event.target.value)}
+                  className="rounded-md border border-zinc-700 bg-zinc-800/50 px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                >
+                  <option value="">All pools</option>
+                  {activePools.map((pool) => (
+                    <option key={pool.id} value={pool.id}>{pool.name}</option>
+                  ))}
+                </select>
+              )}
+              {isOAuth && (
+                <select
+                  value={connFilterToken}
+                  onChange={(event) => setConnFilterToken(event.target.value)}
+                  className="rounded-md border border-zinc-700 bg-zinc-800/50 px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                >
+                  <option value="">All token states</option>
+                  <option value="any">Any token issue</option>
+                  <option value="expired">Expired token</option>
+                  <option value="refresh_error">Refresh error</option>
+                </select>
+              )}
+              <select
+                value={connFilterCooldown}
+                onChange={(event) => setConnFilterCooldown(event.target.value)}
+                className="rounded-md border border-zinc-700 bg-zinc-800/50 px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              >
+                <option value="">All cooldown states</option>
+                <option value="yes">In cooldown</option>
+                <option value="no">Not in cooldown</option>
+              </select>
+              {connFiltersActive && (
+                <Button size="sm" variant="secondary" onClick={clearConnFilters}>
+                  Clear
+                </Button>
+              )}
+            </div>
+          )}
+
           {/* ── noAuth provider: simplified status ── */}
           {isFreeNoAuth ? (
             connectionTotal === 0 ? (
@@ -2630,10 +2751,20 @@ export default function ProviderDetailPage() {
           ) : connectionTotal === 0 ? (
             <div className="flex flex-col items-center justify-center py-10">
               <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary-600/10 text-primary-400 mb-4">
-                {isOAuth ? <Lock size={20} /> : <Key size={20} />}
+                {connFiltersActive
+                  ? <Search size={20} />
+                  : (isOAuth ? <Lock size={20} /> : <Key size={20} />)}
               </div>
-              <p className="text-sm text-zinc-400 mb-4">No connections yet</p>
-              {isFreeNoAuth ? (
+              <p className="text-sm text-zinc-400 mb-4">
+                {connectionTotalAll > 0 && connFiltersActive
+                  ? 'No connections match filters'
+                  : 'No connections yet'}
+              </p>
+              {connectionTotalAll > 0 && connFiltersActive ? (
+                <Button size="sm" variant="secondary" onClick={clearConnFilters}>
+                  Clear filters
+                </Button>
+              ) : isFreeNoAuth ? (
                 <Button size="sm" onClick={handleNoAuthConnect} disabled={connectingNoAuth}>
                   {connectingNoAuth ? (
                     <><Loader2 size={14} className="animate-spin mr-1" /> Connecting...</>
@@ -2675,7 +2806,7 @@ export default function ProviderDetailPage() {
                 </label>
                 <div className="flex items-center gap-2">
                   <Button size="sm" variant="warning" onClick={handleSelectAllPages}>
-                    Select All ({connectionTotal})
+                    Select All{connFiltersActive ? ' filtered' : ''} ({connectionTotal})
                   </Button>
                   {selectedConnIds.size > 0 && (
                     <Button size="sm" variant="danger" onClick={handleDeleteSelected}>
@@ -2722,11 +2853,14 @@ export default function ProviderDetailPage() {
                   )
                 })}
               </div>
-              {connTotalPages > 1 && (
-                <div className="mt-3 flex items-center justify-between">
-                  <span className="text-xs text-zinc-500">
-                    {connStart + 1}–{connEnd} of {connectionTotal}
-                  </span>
+              <div className="mt-3 flex items-center justify-between">
+                <span className="text-xs text-zinc-500">
+                  {connStart + 1}–{connEnd} of {connectionTotal}
+                  {connFiltersActive && connectionTotalAll > connectionTotal
+                    ? ` · filtered from ${connectionTotalAll}`
+                    : ''}
+                </span>
+                {connectionTotal > CONNECTIONS_PER_PAGE && (
                   <div className="flex items-center gap-1">
                     <button
                       onClick={() => setConnectionPage(p => Math.max(1, p - 1))}
@@ -2756,8 +2890,8 @@ export default function ProviderDetailPage() {
                       <ChevronRight size={16} className="text-zinc-400" />
                     </button>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
               <div className="mt-4 flex justify-stretch sm:justify-start gap-2">
                 <Button size="sm" onClick={() => {
                   if (isOAuth) {
