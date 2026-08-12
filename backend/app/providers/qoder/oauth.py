@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from app.providers import PROVIDER_QODER
 from app.providers.oauth_base import DeviceCodeHandler
+from app.services.outbound_proxy import create_upstream_client
 
 
 class QoderPATRequest(BaseModel):
@@ -103,7 +104,7 @@ class QoderOAuthHandler(DeviceCodeHandler):
 
     async def refresh_token(self, refresh_token: str) -> dict:
         c = self.config
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with create_upstream_client(timeout=30.0) as client:
             resp = await client.post(
                 c["refreshUrl"],
                 headers={"Content-Type": "application/json"},

@@ -2,11 +2,13 @@
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 
 import app.services.outbound_proxy as outbound_proxy
+import app.services.token_refresh as token_refresh
 from app.providers.base import BaseProviderConfig, BaseProviderHandler, ValidateResult
 from app.routers.providers import testing
 from app.services.outbound_proxy import (
@@ -326,4 +328,167 @@ def test_grok_cli_model_fetching_inherits_outbound_proxy(monkeypatch):
             return await fetch_models("token")
 
     assert asyncio.run(run()) == []
+    assert created == [{"timeout": 30.0, "proxy": "http://proxy.test:8080"}]
+
+
+def test_oauth_refresh_uses_connection_oauth_refresh_proxy(monkeypatch):
+    """OAuth refresh resolves and scopes the connection's refresh proxy."""
+    created = []
+    resolved_purposes = []
+    connection = SimpleNamespace(
+        id="connection-id",
+        provider="test",
+        auth_type="oauth",
+        is_active=True,
+        data=json.dumps({
+            "refreshToken": "refresh-token",
+            "expiresAt": (
+                datetime.now(timezone.utc) - timedelta(minutes=1)
+            ).isoformat(),
+        }),
+    )
+
+    class Result:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [connection]
+
+    class Session:
+        async def execute(self, _statement):
+            return Result()
+
+        def add(self, _connection):
+            return None
+
+        async def commit(self):
+            return None
+
+    class SessionContext:
+        async def __aenter__(self):
+            return Session()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            return None
+
+    async def resolve_proxy(_db, conn, purpose):
+        assert conn is connection
+        resolved_purposes.append(purpose)
+        return "http://proxy.test:8080"
+
+    async def refresh(_provider, _refresh_token, _provider_data):
+        async with create_upstream_client() as client:
+            await client.post("https://example.com/refresh")
+        return {"accessToken": "refreshed"}
+
+    async def refresh_qoder():
+        return {}
+
+    def make_client(**kwargs):
+        created.append(kwargs)
+        return Client()
+
+    from app.providers.qoder import auth as qoder_auth
+
+    monkeypatch.setattr(token_refresh, "async_session", lambda: SessionContext())
+    monkeypatch.setattr(
+        token_refresh, "proxy_for_connection", resolve_proxy, raising=False,
+    )
+    monkeypatch.setattr(token_refresh, "refresh_access_token", refresh)
+    monkeypatch.setattr(
+        qoder_auth, "refresh_all_qoder_connections", refresh_qoder,
+    )
+    monkeypatch.setattr("httpx.AsyncClient", make_client)
+
+    summary = asyncio.run(token_refresh.check_and_refresh_tokens())
+
+    assert summary["refreshed"] == 1
+    assert resolved_purposes == ["oauthRefresh"]
+    assert created == [{"timeout": 30.0, "proxy": "http://proxy.test:8080"}]
+
+
+def test_qoder_background_refresh_uses_connection_oauth_refresh_proxy(
+    monkeypatch,
+):
+    """Qoder's separate refresh loop scopes each connection's proxy."""
+    from app.providers.qoder import auth as qoder_auth
+
+    created = []
+    resolved_purposes = []
+    connection = SimpleNamespace(
+        id="connection-id",
+        data=json.dumps({"refreshToken": "refresh-token"}),
+    )
+
+    class Result:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [connection]
+
+    class Session:
+        async def execute(self, _statement):
+            return Result()
+
+        def add(self, _connection):
+            return None
+
+        async def commit(self):
+            return None
+
+    class SessionContext:
+        async def __aenter__(self):
+            return Session()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            return None
+
+    async def resolve_proxy(_db, conn, purpose):
+        assert conn is connection
+        resolved_purposes.append(purpose)
+        return "http://proxy.test:8080"
+
+    async def refresh(_refresh_token):
+        async with create_upstream_client() as client:
+            await client.post("https://example.com/refresh")
+        return {"access_token": "access", "refresh_token": "refresh"}
+
+    def make_client(**kwargs):
+        created.append(kwargs)
+        return Client()
+
+    monkeypatch.setattr(
+        "app.database.async_sessionmaker",
+        lambda *_args, **_kwargs: lambda: SessionContext(),
+    )
+    monkeypatch.setattr(qoder_auth, "proxy_for_connection", resolve_proxy)
+    monkeypatch.setattr(qoder_auth, "refresh_job_token", refresh)
+    monkeypatch.setattr("httpx.AsyncClient", make_client)
+
+    results = asyncio.run(qoder_auth.refresh_all_qoder_connections())
+
+    assert results == {"connection-id": True}
+    assert resolved_purposes == ["oauthRefresh"]
     assert created == [{"timeout": 30.0, "proxy": "http://proxy.test:8080"}]

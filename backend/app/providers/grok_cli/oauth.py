@@ -33,6 +33,7 @@ from app.providers.oauth_base import (
     decode_jwt_payload,
     extract_email_from_token,
 )
+from app.services.outbound_proxy import create_upstream_client
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +157,7 @@ class GrokCliOAuthHandler(DeviceCodeHandler):
         can persist the new tokens.
         """
         c = self.config
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with create_upstream_client(timeout=30.0) as client:
             resp = await client.post(
                 c["refreshUrl"],
                 headers=_oauth_headers(),

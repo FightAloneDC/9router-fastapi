@@ -32,7 +32,11 @@ from typing import Any
 
 import httpx
 
-from app.services.outbound_proxy import create_upstream_client
+from app.services.outbound_proxy import (
+    create_upstream_client,
+    proxy_for_connection,
+    use_outbound_proxy,
+)
 
 from .constants import (
     QODER_DEVICE_TOKEN_URL,
@@ -329,7 +333,7 @@ async def refresh_job_token(
     if not refresh_token:
         return None
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with create_upstream_client(timeout=timeout) as client:
         response = await client.post(
             QODER_REFRESH_TOKEN_URL,
             json={"refresh_token": refresh_token},
@@ -449,7 +453,9 @@ async def try_refresh_connection(db, connection_id: str) -> bool:
         logger.warning(f"Qoder refresh: no refresh_token for connection {connection_id}")
         return False
 
-    new_tokens = await refresh_job_token(refresh_token)
+    proxy = await proxy_for_connection(db, conn, "oauthRefresh")
+    async with use_outbound_proxy(proxy):
+        new_tokens = await refresh_job_token(refresh_token)
     if not new_tokens:
         logger.warning(f"Qoder refresh: refresh_token expired for connection {connection_id}")
         return False
@@ -506,7 +512,9 @@ async def refresh_all_qoder_connections() -> dict[str, bool]:
                 continue
 
             conn_id = str(conn.id)
-            new_tokens = await refresh_job_token(refresh_token)
+            proxy = await proxy_for_connection(db, conn, "oauthRefresh")
+            async with use_outbound_proxy(proxy):
+                new_tokens = await refresh_job_token(refresh_token)
             if not new_tokens:
                 logger.warning(f"Qoder background refresh FAILED: {conn_id[:8]}... (refresh_token expired)")
                 results[conn_id] = False

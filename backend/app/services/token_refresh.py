@@ -17,6 +17,10 @@ from sqlalchemy import select
 from app.database import async_session
 from app.models.provider import ProviderConnection
 from app.services.oauth import refresh_access_token
+from app.services.outbound_proxy import (
+    proxy_for_connection,
+    use_outbound_proxy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,9 +111,13 @@ async def check_and_refresh_tokens() -> dict:
 
             try:
                 provider_specific_data = data.get("providerSpecificData")
-                new_tokens = await refresh_access_token(
-                    conn.provider, refresh_token, provider_specific_data,
+                proxy = await proxy_for_connection(
+                    session, conn, "oauthRefresh"
                 )
+                async with use_outbound_proxy(proxy):
+                    new_tokens = await refresh_access_token(
+                        conn.provider, refresh_token, provider_specific_data,
+                    )
 
                 # Update data blob with new tokens
                 if new_tokens.get("accessToken"):

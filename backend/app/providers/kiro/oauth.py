@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from app.providers import PROVIDER_KIRO
 from app.providers.oauth_base import DeviceCodeHandler, extract_email_from_token, decode_jwt_payload
+from app.services.outbound_proxy import create_upstream_client
 
 
 class KiroImportRequest(BaseModel):
@@ -291,7 +292,7 @@ class KiroOAuthHandler(DeviceCodeHandler):
         """Refresh token — AWS SSO OIDC or social auth."""
         c = self.config
         # Social auth refresh
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with create_upstream_client(timeout=30.0) as client:
             resp = await client.post(
                 c["socialRefreshUrl"],
                 headers={"Content-Type": "application/json"},
