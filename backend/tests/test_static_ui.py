@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.openapi_ui import openapi_ui_kwargs
-from app.static_ui import mount_static_ui
+from app.static_ui import mount_provider_icons, mount_static_ui
 
 
 def test_missing_index_returns_clear_error(tmp_path: Path):
@@ -58,3 +58,28 @@ def test_serves_index_and_spa_fallback(tmp_path: Path):
     assert client.get("/docs").status_code == 404
     assert client.get("/redoc").status_code == 404
     assert client.get("/openapi.json").status_code == 404
+
+
+def test_provider_png_served_before_api_route(tmp_path: Path):
+    icons = tmp_path / "providers"
+    icons.mkdir()
+    (icons / "grok-cli.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
+
+    app = FastAPI()
+    mount_provider_icons(app, tmp_path)
+
+    @app.get("/providers/client")
+    async def client_list():
+        return {"ok": True}
+
+    @app.get("/providers/{conn_id}")
+    async def get_conn(conn_id: str):
+        return {"id": conn_id, "auth": True}
+
+    client = TestClient(app)
+    icon = client.get("/providers/grok-cli.png")
+    assert icon.status_code == 200
+    assert icon.content.startswith(b"\x89PNG")
+    # Non-png provider API paths must not be stolen by icon route
+    assert client.get("/providers/client").json() == {"ok": True}
+    assert client.get("/providers/some-uuid").json()["id"] == "some-uuid"

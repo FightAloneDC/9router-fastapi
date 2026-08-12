@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.openapi_ui import openapi_ui_kwargs
 from app.middleware.api_prefix import StripApiPrefixMiddleware
-from app.static_ui import mount_static_ui
+from app.static_ui import mount_provider_icons, mount_static_ui
 from app.routers import auth as auth_router
 from app.routers import api_keys as api_keys_router
 from app.routers import chat as chat_router
@@ -94,6 +94,9 @@ def create_app() -> FastAPI:
             source="http",
         )
         return response
+
+    # Provider icons must register before /providers/{conn_id} API routes.
+    mount_provider_icons(app)
 
     # Include routers
     app.include_router(auth_router.router)

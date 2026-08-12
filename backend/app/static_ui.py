@@ -20,6 +20,33 @@ _RESERVED_PREFIXES = (
 )
 
 
+def mount_provider_icons(
+    app: FastAPI,
+    static_dir: Path | None = None,
+) -> None:
+    """Serve /providers/{id}.png from static before API routes.
+
+    Frontend uses <img src="/providers/{id}.png">. Without this, the
+    authenticated /providers/{conn_id} route returns 401 for icons.
+
+    Path must keep the `.png` suffix so /providers/client etc. still
+    reach the API routers.
+    """
+    root = static_dir or STATIC_DIR
+    icons = root / "providers"
+    if not icons.is_dir():
+        return
+
+    @app.get("/providers/{name}.png")
+    async def provider_png(name: str):
+        if "/" in name or "\\" in name or ".." in name:
+            raise HTTPException(status_code=404, detail="Not Found")
+        path = icons / f"{name}.png"
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Not Found")
+        return FileResponse(path)
+
+
 def mount_static_ui(
     app: FastAPI,
     static_dir: Path | None = None,
