@@ -666,6 +666,9 @@ async def _resolve_single_model(
     # Try to find a connection whose provider supports this model
     # First pass: check if any connection has this model registered
     for conn in connections:
+        cid = str(conn.id)
+        if exclude_ids and cid in exclude_ids:
+            continue
         data = json.loads(conn.data) if conn.data else {}
         conn_models = data.get("models", [])
         # Check both exact match and provider-prefixed match
@@ -688,6 +691,9 @@ async def _resolve_single_model(
 
     # Second pass: no model match found, fall back to first active connection
     for conn in connections:
+        cid = str(conn.id)
+        if exclude_ids and cid in exclude_ids:
+            continue
         data = json.loads(conn.data) if conn.data else {}
         conn_api_key = data.get("apiKey", "") or data.get("accessToken", "")
         base_url = _resolve_base_url(conn.provider, data)
