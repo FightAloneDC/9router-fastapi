@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timezone
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
@@ -12,6 +13,10 @@ from app.database import get_db
 from app.models.provider import ProviderConnection, ProviderNode
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
+from app.routers.providers.connection_filters import (
+    ConnectionListFilters,
+    build_connection_filter_clause,
+)
 from app.routers.providers.constants import SUGGESTED_MODELS_FILTERS, normalize_models_list
 from app.routers.providers.helpers import _get_provider_config
 from app.routers.providers.helpers import (
@@ -109,6 +114,17 @@ async def list_provider_connections(
         True,
         description="Include models union once (not per connection)",
     ),
+    q: str | None = Query(None),
+    is_active: bool | None = Query(None),
+    test_status: str | None = Query(None),
+    auth_type: str | None = Query(None),
+    has_proxy: bool | None = Query(None),
+    proxy_pool_id: UUID | None = Query(None),
+    token_issue: str | None = Query(
+        None,
+        pattern="^(expired|refresh_error|any)$",
+    ),
+    in_cooldown: bool | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _user=Depends(get_current_user),
 ):
@@ -117,17 +133,40 @@ async def list_provider_connections(
     Avoids downloading every connection for every provider. Models are
     returned once at the top level; each item.models is omitted/empty.
     """
-    where = ProviderConnection.provider == provider_id
+    filters = ConnectionListFilters(
+        q=q,
+        is_active=is_active,
+        test_status=test_status,
+        auth_type=auth_type,
+        has_proxy=has_proxy,
+        proxy_pool_id=proxy_pool_id,
+        token_issue=token_issue,  # type: ignore[arg-type]
+        in_cooldown=in_cooldown,
+    )
+    provider_only = ProviderConnection.provider == provider_id
+    where = build_connection_filter_clause(provider_id, filters)
 
     # Heal legacy duplicate/gapped priorities once (page 1 only)
     if page == 1 and await _priorities_need_renumber(db, provider_id):
         await _renumber_provider_priorities(db, provider_id)
         await db.flush()
 
-    total = await db.scalar(
-        select(func.count()).select_from(ProviderConnection).where(where)
+    total_all = int(
+        await db.scalar(
+            select(func.count())
+            .select_from(ProviderConnection)
+            .where(provider_only)
+        )
+        or 0
     )
-    total_i = int(total or 0)
+    total_i = int(
+        await db.scalar(
+            select(func.count())
+            .select_from(ProviderConnection)
+            .where(where)
+        )
+        or 0
+    )
 
     offset = (page - 1) * page_size
     page_result = await db.execute(
@@ -146,9 +185,9 @@ async def list_provider_connections(
         items.append(out)
 
     models: list = []
-    if include_models and total_i > 0:
+    if include_models and total_all > 0:
         blobs = await db.execute(
-            select(ProviderConnection.data).where(where)
+            select(ProviderConnection.data).where(provider_only)
         )
         models = _models_union_from_data_blobs(
             list(blobs.scalars().all())
@@ -157,6 +196,7 @@ async def list_provider_connections(
     payload: dict = {
         "provider": provider_id,
         "total": total_i,
+        "total_all": total_all,
         "page": page,
         "page_size": page_size,
         "items": items,
