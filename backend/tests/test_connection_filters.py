@@ -84,6 +84,20 @@ def test_has_proxy_true_and_false():
         assert "proxy_pool_id" in sql
 
 
+def test_in_cooldown_false_compiles_not_exists():
+    clause = build_connection_filter_clause(
+        "qoder",
+        ConnectionListFilters(in_cooldown=False),
+    )
+    sql = str(
+        select(ProviderConnection).where(clause).compile(
+            compile_kwargs={"literal_binds": True},
+        )
+    ).lower()
+    assert "not exists" in sql
+    assert "modellock" in sql.replace("_", "")
+
+
 def test_token_issue_and_cooldown_reference_json():
     clause = build_connection_filter_clause(
         "qoder",

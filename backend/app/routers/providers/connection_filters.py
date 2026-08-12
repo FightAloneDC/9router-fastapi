@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy import and_, cast, func, or_
@@ -33,8 +33,29 @@ class ConnectionListFilters:
     in_cooldown: bool | None = None
 
 
-def _data_jsonb():
+def _data_jsonb() -> ColumnElement[Any]:
     return cast(ProviderConnection.data, JSONB)
+
+
+_COOLDOWN_EXISTS_BODY = """
+EXISTS (
+  SELECT 1
+  FROM jsonb_each_text(
+    CAST(provider_connections.data AS jsonb)
+  ) AS kv(key, value)
+  WHERE kv.key LIKE 'modelLock_%'
+    AND kv.value <> ''
+    AND kv.value > :now_iso
+)
+"""
+
+
+def _cooldown_clause(in_cooldown: bool) -> ColumnElement[bool]:
+    """Return EXISTS or NOT EXISTS for active modelLock_* cooldown keys."""
+    prefix = "" if in_cooldown else "NOT "
+    return text(prefix + _COOLDOWN_EXISTS_BODY.strip()).bindparams(
+        now_iso=datetime.now(timezone.utc).isoformat()
+    )
 
 
 def build_connection_filter_clause(
@@ -114,25 +135,6 @@ def build_connection_filter_clause(
             clauses.append(or_(expired, refresh_err))
 
     if filters.in_cooldown is not None:
-        # modelLock_* keys with future ISO timestamps in JSON object
-        cooldown_exists = text(
-            """
-            EXISTS (
-              SELECT 1
-              FROM jsonb_each_text(
-                CAST(provider_connections.data AS jsonb)
-              ) AS kv(key, value)
-              WHERE kv.key LIKE 'modelLock_%'
-                AND kv.value <> ''
-                AND kv.value > :now_iso
-            )
-            """
-        ).bindparams(
-            now_iso=datetime.now(timezone.utc).isoformat()
-        )
-        if filters.in_cooldown:
-            clauses.append(cooldown_exists)
-        else:
-            clauses.append(~cooldown_exists)
+        clauses.append(_cooldown_clause(filters.in_cooldown))
 
     return and_(*clauses)
