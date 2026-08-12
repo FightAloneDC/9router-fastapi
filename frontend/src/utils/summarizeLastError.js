@@ -26,13 +26,32 @@ function pickFromObject(obj) {
   return ''
 }
 
+function looksHtmlish(s) {
+  return /<[^>]+>/.test(s)
+}
+
 function stripHtmlLine(s) {
   return s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
+function htmlTextFirstLine(s) {
+  for (const line of s.split(/\r?\n/)) {
+    const t = stripHtmlLine(line)
+    if (t) return t
+  }
+  return ''
+}
+
 function plainTextFirstLine(s) {
   const first = s.split(/\r?\n/)[0] ?? s
-  return stripHtmlLine(first)
+  return first.replace(/\s+/g, ' ').trim()
+}
+
+function textFirstLine(s) {
+  if (looksHtmlish(s)) {
+    return htmlTextFirstLine(s)
+  }
+  return plainTextFirstLine(s)
 }
 
 /**
@@ -78,7 +97,7 @@ export function summarizeLastError(raw, maxLen = DEFAULT_MAX) {
   }
 
   if (!candidate) {
-    candidate = plainTextFirstLine(s)
+    candidate = textFirstLine(s)
   }
 
   return truncateAtWord(candidate, maxLen)

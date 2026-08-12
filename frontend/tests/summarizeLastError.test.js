@@ -36,6 +36,13 @@ describe('summarizeLastError', () => {
     assert.ok(!out.includes('<'))
   })
 
+  it('extracts text from HTML split across newlines', () => {
+    const raw = '<html>\n<body><p>Gateway timeout</p>'
+    const out = summarizeLastError(raw)
+    assert.match(out, /Gateway timeout/i)
+    assert.ok(!out.includes('<'))
+  })
+
   it('uses first line only for multiline plain text', () => {
     const raw = 'Gateway timeout\nupstream diagnostics'
     assert.equal(summarizeLastError(raw), 'Gateway timeout')
