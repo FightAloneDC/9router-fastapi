@@ -21,6 +21,10 @@ import { settingsApi } from '../api/settings'
 import useCatalogStore from '../stores/catalogStore'
 import { copyToClipboard } from '../utils/clipboard'
 import { fetchSuggestedModels } from '../utils/providerModelsFetcher'
+import {
+  formatLastErrorAgo,
+  summarizeLastError,
+} from '../utils/summarizeLastError'
 import EditCompatibleNodeModal from '../components/EditCompatibleNodeModal'
 import OAuthModal from '../components/OAuthModal'
 import OAuthEditModal from '../components/OAuthEditModal'
@@ -117,6 +121,8 @@ function ConfirmModal({ isOpen, onClose, onConfirm, title, message, variant = 'd
 function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onEdit, onDelete, onTest, testing, testResult, isOAuth = false, isSelected = false, onSelect = null }) {
   const [showProxyDropdown, setShowProxyDropdown] = useState(false)
   const [updatingProxy, setUpdatingProxy] = useState(false)
+  const [showLastError, setShowLastError] = useState(false)
+  const [copiedError, setCopiedError] = useState(false)
   const proxyDropdownRef = useRef(null)
 
   const isActive = connection.is_active ?? true
@@ -126,6 +132,18 @@ function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMo
   const isEmail = (v) => typeof v === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
   const providerSpecific = connection.providerSpecificData || connection.provider_specific || {}
   const _psd = connection.providerSpecificData || connection.provider_specific || {}
+  const lastError =
+    connection.lastError ||
+    connection.last_error ||
+    providerSpecific.lastError ||
+    ''
+  const lastErrorAt =
+    connection.lastErrorAt ||
+    connection.last_error_at ||
+    providerSpecific.lastErrorAt ||
+    null
+  const errorSummary = summarizeLastError(lastError)
+  const errorAgo = formatLastErrorAgo(lastErrorAt)
   const _isOAuth = _psd.loginMethod === 'pat' ? false : (connection.auth_type ? connection.auth_type === 'oauth' : isOAuth)
   const displayName = _isOAuth
     ? (isEmail(connection.email) ? connection.email
@@ -182,7 +200,8 @@ function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMo
   }
 
   return (
-    <div className={`group flex flex-col gap-3 p-2 rounded-lg sm:flex-row sm:items-center sm:justify-between hover:bg-zinc-800/40 transition-colors ${!isActive ? 'opacity-60' : ''}`}>
+    <>
+      <div className={`group flex flex-col gap-3 p-2 rounded-lg sm:flex-row sm:items-center sm:justify-between hover:bg-zinc-800/40 transition-colors ${!isActive ? 'opacity-60' : ''}`}>
       {/* Left side */}
       <div className="flex w-full min-w-0 flex-1 items-start gap-3 sm:items-center">
         {/* Selection checkbox */}
@@ -228,6 +247,19 @@ function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMo
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <span className="text-[11px] text-zinc-500 truncate max-w-[420px]" title={proxyDisplayText}>{proxyDisplayText}</span>
             </div>
+          )}
+          {errorSummary && (
+            <button
+              type="button"
+              onClick={() => setShowLastError(true)}
+              className="mt-1 block max-w-full truncate text-left text-[11px] text-red-400/90 hover:text-red-300"
+              title="View full last error"
+            >
+              <span>{errorSummary}</span>
+              {errorAgo ? (
+                <span className="text-zinc-500"> · {errorAgo}</span>
+              ) : null}
+            </button>
           )}
         </div>
       </div>
@@ -278,7 +310,51 @@ function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMo
         </div>
         <Toggle size="sm" checked={isActive} onChange={onToggleActive} title={isActive ? 'Disable' : 'Enable'} />
       </div>
-    </div>
+      </div>
+      <Modal
+        isOpen={showLastError}
+        onClose={() => setShowLastError(false)}
+        title="Last error"
+        className="max-w-2xl"
+      >
+        <div className="space-y-3">
+          {lastErrorAt && (
+            <p className="text-xs text-zinc-500">
+              {new Date(lastErrorAt).toLocaleString()}
+              {errorAgo ? ` (${errorAgo})` : ''}
+            </p>
+          )}
+          {errorSummary && (
+            <p className="text-sm text-zinc-300">{errorSummary}</p>
+          )}
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-md border border-zinc-700 bg-zinc-950 p-3 text-[11px] text-zinc-300">
+            {String(lastError)}
+          </pre>
+          <div className="flex justify-end gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={async () => {
+                const ok = await copyToClipboard(String(lastError))
+                if (ok) {
+                  setCopiedError(true)
+                  setTimeout(() => setCopiedError(false), 1500)
+                }
+              }}
+            >
+              {copiedError ? 'Copied' : 'Copy full error'}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowLastError(false)}
+            >
+              Close
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </>
   )
 }
 
