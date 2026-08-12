@@ -10,7 +10,7 @@ under [`archives/`](archives/).
 | [Architecture](architecture/overview.md) | Runtime topology, modules, data model |
 | [Configuration](configuration/environment.md) | Env vars, compose files, proxy usage |
 | [Production ops](operations/production.md) | Deploy, UI release, recreate app |
-| [Development ops](operations/local-workflow.md) | Local/host workflow and tests |
+| [Development ops](operations/development.md) | Local/host workflow and tests |
 | [Gotchas](gotchas/spa-routing.md) | SPA vs API collisions, icons, DEBUG docs |
 
 ## Archives
