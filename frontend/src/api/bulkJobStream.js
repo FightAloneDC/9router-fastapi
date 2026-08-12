@@ -9,6 +9,7 @@
 /** @typedef {object} JobStreamState */
 /** @type {Map<string, JobStreamState>} */
 const jobs = new Map()
+const MAX_RECONNECT_ATTEMPTS = 3
 
 function createJobState() {
   return {
@@ -19,6 +20,7 @@ function createJobState() {
     reconnectTimer: null,
     listeners: new Set(),
     terminal: false,
+    reconnectAttempts: 0,
   }
 }
 
@@ -80,6 +82,14 @@ function markTerminalIfNeeded(jobId, data) {
   clearReconnectTimer(state)
 }
 
+function endWithError(jobId, message) {
+  const state = jobs.get(jobId)
+  if (!state || state.terminal) return
+  state.terminal = true
+  clearReconnectTimer(state)
+  dispatch(jobId, { type: 'error', jobId, message })
+}
+
 function ensureConnected(jobId, token) {
   const state = getJobState(jobId)
   if (!token || state.terminal) return
@@ -98,6 +108,10 @@ function ensureConnected(jobId, token) {
   const socket = new WebSocket(wsUrl(token, jobId))
   state.socket = socket
 
+  socket.onopen = () => {
+    state.reconnectAttempts = 0
+  }
+
   socket.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data)
@@ -112,12 +126,21 @@ function ensureConnected(jobId, token) {
     // onclose handles reconnect
   }
 
-  socket.onclose = () => {
+  socket.onclose = (event) => {
     if (state.socket === socket) {
       state.socket = null
     }
     if (state.refCount <= 0 || state.terminal) return
+    if (event.code === 1008) {
+      endWithError(jobId, 'Bulk job stream is no longer available.')
+      return
+    }
+    if (state.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      endWithError(jobId, 'Unable to reconnect to bulk job stream.')
+      return
+    }
 
+    state.reconnectAttempts += 1
     clearReconnectTimer(state)
     state.reconnectTimer = setTimeout(() => {
       state.reconnectTimer = null

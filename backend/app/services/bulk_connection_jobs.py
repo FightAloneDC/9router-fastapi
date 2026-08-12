@@ -1,4 +1,4 @@
-"""In-memory bulk connection job store with pub/sub queues."""
+"""In-memory, single-process bulk connection job store with pub/sub queues."""
 
 from __future__ import annotations
 
@@ -20,7 +20,8 @@ def _cleanup_expired() -> None:
     expired = [
         job_id
         for job_id, job in _jobs.items()
-        if now - job["createdAt"] > JOB_TTL_SECONDS
+        if job["status"] in {"done", "error"}
+        and now - job["createdAt"] > JOB_TTL_SECONDS
     ]
     for job_id in expired:
         _jobs.pop(job_id, None)
@@ -110,7 +111,10 @@ def publish(job_id: str, event: dict) -> None:
         try:
             queue.put_nowait(event)
         except asyncio.QueueFull:
-            pass
+            if event["type"] not in {"done", "error"}:
+                continue
+            queue.get_nowait()
+            queue.put_nowait(event)
 
 
 def mark_done(job_id: str, summary: dict) -> None:

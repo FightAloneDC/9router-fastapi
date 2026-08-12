@@ -2152,7 +2152,19 @@ export default function ProviderDetailPage() {
           if (event.type === 'done') {
             setSelectedConnIds(new Set())
             fetchConnections()
+            useNotificationStore.getState().addNotification({
+              type: 'success',
+              title: 'Bulk action complete',
+              message: `Bulk ${action} completed.`,
+            })
+            return
           }
+          fetchConnections()
+          useNotificationStore.getState().addNotification({
+            type: 'error',
+            title: 'Bulk action failed',
+            message: event.message || 'Bulk action stream ended unexpectedly.',
+          })
         },
       )
     } catch (err) {

@@ -2,9 +2,11 @@
 
 import asyncio
 
+from app.services import bulk_connection_jobs
 from app.services.bulk_connection_jobs import (
     create_job,
     get_job,
+    mark_done,
     publish,
     subscribe,
     unsubscribe,
@@ -29,3 +31,22 @@ def test_publish_reaches_subscriber():
         assert ev["type"] == "started"
 
     asyncio.run(_run())
+
+
+def test_cleanup_only_removes_expired_terminal_jobs(monkeypatch) -> None:
+    """Expired pending jobs remain available while terminal jobs are evicted."""
+    monkeypatch.setattr(bulk_connection_jobs, "_jobs", {})
+    monkeypatch.setattr(bulk_connection_jobs.time, "time", lambda: 100.0)
+    pending_job = create_job("enable", "qoder", ["pending"])
+    done_job = create_job("disable", "qoder", ["done"])
+    mark_done(done_job["jobId"], {"total": 1, "passed": 1, "failed": 0})
+
+    monkeypatch.setattr(
+        bulk_connection_jobs.time,
+        "time",
+        lambda: 100.0 + bulk_connection_jobs.JOB_TTL_SECONDS + 1,
+    )
+    create_job("test", "qoder", ["new"])
+
+    assert get_job(pending_job["jobId"]) is not None
+    assert get_job(done_job["jobId"]) is None

@@ -38,6 +38,12 @@ class FakeSession:
     async def commit(self) -> None:
         return None
 
+    async def delete(self, _connection: FakeConnection) -> None:
+        return None
+
+    async def flush(self) -> None:
+        return None
+
 
 class FakeSessionContext:
     """Async context manager that supplies a fake database session."""
@@ -88,5 +94,39 @@ def test_enable_job_publishes_item_progress_and_done(monkeypatch) -> None:
             "passed": 1,
             "failed": 0,
         }
+
+    asyncio.run(run())
+
+
+def test_delete_job_invalidates_provider_connection_cache(monkeypatch) -> None:
+    """A successful delete invalidates the provider routing cache."""
+    async def run() -> None:
+        async def renumber(*_args) -> None:
+            return None
+
+        connection_id = uuid.uuid4()
+        connection = FakeConnection(connection_id)
+        session = FakeSession(connection)
+        job = create_job("delete", "qoder", [str(connection_id)])
+        invalidated = []
+        monkeypatch.setattr(
+            bulk_jobs,
+            "async_session",
+            lambda: FakeSessionContext(session),
+        )
+        monkeypatch.setattr(
+            bulk_jobs,
+            "_renumber_provider_priorities",
+            renumber,
+        )
+        monkeypatch.setattr(
+            bulk_jobs,
+            "invalidate_connection_cache",
+            invalidated.append,
+        )
+
+        await bulk_jobs.run_bulk_job(job["jobId"], [str(connection_id)])
+
+        assert invalidated == ["qoder"]
 
     asyncio.run(run())

@@ -31,6 +31,8 @@ from app.services.bulk_connection_jobs import (
 )
 from app.services.proxy import invalidate_connection_cache
 
+_background_tasks: set[asyncio.Task[None]] = set()
+
 
 class BulkJobCreate(BaseModel):
     """Request to run one action against provider connections."""
@@ -207,7 +209,7 @@ async def _run_standard_job(
             await db.flush()
             await _renumber_provider_priorities(db, provider_id)
         await db.commit()
-    if active_changed:
+    if active_changed or deleted:
         invalidate_connection_cache(provider_id)
     return passed, failed
 
@@ -285,7 +287,11 @@ async def create_bulk_job(
         )
 
     job = create_job(body.action, provider_id, [str(item) for item in body.ids])
-    asyncio.create_task(run_bulk_job(job["jobId"], [str(item) for item in body.ids]))
+    task = asyncio.create_task(
+        run_bulk_job(job["jobId"], [str(item) for item in body.ids])
+    )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return job
 
 
