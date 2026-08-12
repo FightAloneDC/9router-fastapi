@@ -34,6 +34,8 @@ COPY . .
 RUN npm run build
 
 # ── Production ── (nginx serving built assets)
+# Deprecated for compose prod: UI is served by FastAPI (app/static).
+# Kept for optional standalone nginx experiments only.
 FROM nginx:alpine AS prod
 
 # Copy built assets

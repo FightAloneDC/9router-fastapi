@@ -1,6 +1,6 @@
-# Example production-shaped compose (db + backend only).
-# Preferred file: docker-compose.prod.yml
-# UI is served by FastAPI from backend/app/static (see scripts/release-prod.sh).
+# Production — single FastAPI serves API + built UI
+# Usage: docker compose -f docker-compose.prod.yml up --build -d
+# Refresh UI on main first: ./scripts/release-prod.sh
 
 services:
   db:

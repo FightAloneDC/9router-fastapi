@@ -90,10 +90,29 @@ Self-hosted OpenRouter alternative. Clients send OpenAI-compatible requests → 
 
 ## Quick Start
 
+### Production (daily use)
+
+```bash
+# On main, after UI changes:
+./scripts/release-prod.sh
+docker compose -f docker-compose.prod.yml up --build -d
+# App+UI: http://localhost:9000
+# Swagger: only if DEBUG=true in backend/.env → /docs
+```
+
+### Development (primary — host + DB Docker)
+
+```bash
+docker compose -f docker-compose.dev.yml up db -d
+# backend on host :9000, Vite on host :5173
+```
+
+### Development (fallback — full compose)
+
 ```bash
 docker compose -f docker-compose.dev.yml up --build
 # Frontend: http://localhost:5173
-# Backend:  http://localhost:9000/docs
+# Backend:  http://localhost:9000/docs  (DEBUG)
 # DB:       PostgreSQL on localhost:5432
 ```
 

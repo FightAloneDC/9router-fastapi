@@ -90,6 +90,10 @@ _reference/
 node_modules/
 frontend/dist/
 
+# Production UI served by FastAPI (release-prod.sh)
+!backend/app/static/
+!backend/app/static/**
+
 #-------------------------
 # Project scratch folder
 #-------------------------

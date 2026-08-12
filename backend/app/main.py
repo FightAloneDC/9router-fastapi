@@ -8,6 +8,9 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.openapi_ui import openapi_ui_kwargs
+from app.middleware.api_prefix import StripApiPrefixMiddleware
+from app.static_ui import mount_static_ui
 from app.routers import auth as auth_router
 from app.routers import api_keys as api_keys_router
 from app.routers import chat as chat_router
@@ -56,6 +59,7 @@ def create_app() -> FastAPI:
         description="AI model proxy router with web dashboard",
         version="0.1.0",
         lifespan=lifespan,
+        **openapi_ui_kwargs(settings.DEBUG),
     )
 
     # CORS — allow all origins during development
@@ -70,6 +74,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(StripApiPrefixMiddleware)
 
     # Request logging middleware — feeds the console log buffer
     @app.middleware("http")
@@ -114,6 +119,8 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health():
         return {"status": "ok"}
+
+    mount_static_ui(app)
 
     return app
 
