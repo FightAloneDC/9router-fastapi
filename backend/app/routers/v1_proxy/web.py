@@ -14,14 +14,19 @@ from app.providers.provider import Provider
 from app.services.api_key_auth import validate_api_key
 from app.services.usage_tracking import save_request_tracking
 from app.models.provider import ProviderConnection
+from app.services.outbound_proxy import (
+    ProxyRequiredError,
+    create_upstream_client,
+    proxy_for_connection,
+)
 
 router = APIRouter()
 
 
 async def _resolve_webfetch_connection(
     provider: str | None, db: AsyncSession,
-) -> tuple[str, str] | None:
-    """Resolve a webFetch connection. Returns (provider_id, api_key) or None."""
+) -> tuple[ProviderConnection, str] | None:
+    """Resolve a webFetch connection. Returns (connection, api_key) or None."""
     result = await db.execute(
         select(ProviderConnection).where(ProviderConnection.is_active == True)
     )
@@ -32,7 +37,7 @@ async def _resolve_webfetch_connection(
             if conn.provider == provider:
                 data: dict = json.loads(conn.data) if conn.data else {}
                 api_key: str = data.get("apiKey", "")
-                return (conn.provider, api_key)
+                return (conn, api_key)
         return None
 
     # Auto-detect: find first active webFetch provider
@@ -44,7 +49,7 @@ async def _resolve_webfetch_connection(
             if "webFetch" in kinds:
                 data: dict = json.loads(conn.data) if conn.data else {}
                 api_key: str = data.get("apiKey", "")
-                return (conn.provider, api_key)
+                return (conn, api_key)
         except (ValueError, ModuleNotFoundError):
             continue
 
@@ -85,7 +90,8 @@ async def web_fetch(
             content={"error": {"message": f"No active webFetch provider found{f' for {requested_provider}' if requested_provider else ''}"}},
         )
 
-    provider_id, api_key = resolved
+    conn, api_key = resolved
+    provider_id = conn.provider
 
     # Dispatch to handler's build_webfetch_request
     try:
@@ -98,7 +104,15 @@ async def web_fetch(
             content={"error": {"message": f"Provider {provider_id} does not have a web fetch adapter"}},
         )
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    try:
+        proxy = await proxy_for_connection(db, conn, "upstream")
+    except ProxyRequiredError as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"error": {"message": str(exc)}},
+        )
+
+    async with create_upstream_client(proxy=proxy, timeout=30.0) as client:
         try:
             request_start_time: float = time.time()
             if method == "GET":

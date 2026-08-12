@@ -26,6 +26,11 @@ from app.providers.provider import Provider
 from app.services.usage_tracking import save_request_tracking
 from app.models.provider import ProviderConnection
 from app.services.stt_adapters import resolve_audio_mime
+from app.services.outbound_proxy import (
+    ProxyRequiredError,
+    create_upstream_client,
+    proxy_for_connection,
+)
 
 from .shared import _should_fallback_on_error, _mark_conn_failed
 
@@ -176,8 +181,21 @@ async def audio_speech(
             extra["language"] = body_language
 
         try:
+            proxy = await proxy_for_connection(db, conn, "upstream")
+        except ProxyRequiredError as exc:
+            last_error = {
+                "status": status.HTTP_503_SERVICE_UNAVAILABLE,
+                "detail": str(exc),
+            }
+            exclude_ids.add(conn_id)
+            continue
+
+        try:
             request_start_time: float = time.time()
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with create_upstream_client(
+                proxy=proxy,
+                timeout=120.0,
+            ) as client:
                 audio_bytes, content_type = await tts_handler.execute_tts(
                     client,
                     base_url=base_url,
@@ -400,8 +418,21 @@ async def audio_transcriptions(
         conn_id: str = str(conn.id)
 
         try:
+            proxy = await proxy_for_connection(db, conn, "upstream")
+        except ProxyRequiredError as exc:
+            last_error = {
+                "status": status.HTTP_503_SERVICE_UNAVAILABLE,
+                "detail": str(exc),
+            }
+            exclude_ids.add(conn_id)
+            continue
+
+        try:
             request_start_time: float = time.time()
-            async with httpx.AsyncClient(timeout=180.0) as client:
+            async with create_upstream_client(
+                proxy=proxy,
+                timeout=180.0,
+            ) as client:
                 result_payload: dict = await stt_handler.execute_stt(
                     client,
                     api_key=api_key,
@@ -538,7 +569,23 @@ async def audio_voices(
         api_key = data.get("apiKey") or data.get("api_key") or ""
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        proxy = await proxy_for_connection(db, conn, "upstream")
+    except ProxyRequiredError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": {
+                    "message": str(exc),
+                    "type": "server_error",
+                }
+            },
+        )
+
+    try:
+        async with create_upstream_client(
+            proxy=proxy,
+            timeout=30.0,
+        ) as client:
             voices = await fetch_voices_cached(client, provider, api_key, lang)
     except Exception as e:
         return JSONResponse(

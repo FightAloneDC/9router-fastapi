@@ -24,6 +24,11 @@ from app.services.image_adapters import IMAGE_ADAPTERS, image_comfyui, _stub_ada
 from app.services.usage_tracking import save_request_tracking
 from app.providers.provider import Provider
 from app.routers.providers.helpers import _get_provider_config
+from app.services.outbound_proxy import (
+    ProxyRequiredError,
+    create_upstream_client,
+    proxy_for_connection,
+)
 
 from .shared import _should_fallback_on_error, _mark_conn_failed
 
@@ -168,8 +173,21 @@ async def images_generations(
                 base_url = defaults.get("baseUrl", "http://localhost:7860")
 
         try:
+            proxy = await proxy_for_connection(db, conn, "upstream")
+        except ProxyRequiredError as exc:
+            last_error = {
+                "status": status.HTTP_503_SERVICE_UNAVAILABLE,
+                "detail": str(exc),
+            }
+            exclude_ids.add(conn_id)
+            continue
+
+        try:
             request_start_time: float = time.time()
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with create_upstream_client(
+                proxy=proxy,
+                timeout=120.0,
+            ) as client:
                 if has_handler_image and handler is not None:
                     url, method, headers, req_body = handler.build_image_request(
                         base_url=base_url,

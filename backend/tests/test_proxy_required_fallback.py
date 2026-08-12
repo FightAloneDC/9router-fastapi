@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
-from app.routers.v1_proxy import chat, messages
+from app.routers.v1_proxy import chat, embeddings, messages
 from app.services.outbound_proxy import ProxyRequiredError
 
 
@@ -52,7 +52,7 @@ def test_chat_retries_next_connection_after_strict_proxy_failure(monkeypatch):
         async def execute(self, _statement):
             return SimpleNamespace(scalar_one_or_none=lambda: connection)
 
-    async def resolve(_db, _model, _stream, **kwargs):
+    async def resolve(_db, _model, _stream=None, **kwargs):
         excludes = set(kwargs["exclude_ids"])
         seen_excludes.append(excludes)
         if not excludes:
@@ -181,3 +181,86 @@ def test_messages_retries_next_connection_after_strict_proxy_failure(
 
     assert result.status_code == 200
     assert seen_excludes == [set(), {"first"}]
+
+
+def test_embeddings_retries_next_connection_after_strict_proxy_failure(
+    monkeypatch,
+):
+    """A strict proxy failure excludes one embeddings connection and retries."""
+    first_id = "00000000-0000-0000-0000-000000000001"
+    second_id = "00000000-0000-0000-0000-000000000002"
+    first = _target(first_id)
+    second = _target(second_id)
+    seen_excludes: list[set[str]] = []
+    connection = SimpleNamespace(data="{}", proxy_pool_id=None)
+
+    class Db:
+        async def execute(self, _statement):
+            return SimpleNamespace(scalar_one_or_none=lambda: connection)
+
+        async def get(self, _model, _connection_id):
+            return connection
+
+    class UpstreamResponse:
+        status_code = 200
+
+        def json(self):
+            return {"data": [], "usage": {}}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            return UpstreamResponse()
+
+    async def resolve(_db, _model, _stream=None, **kwargs):
+        excludes = set(kwargs["exclude_ids"])
+        seen_excludes.append(excludes)
+        if not excludes:
+            return [first]
+        if excludes == {first_id}:
+            return [second]
+        return []
+
+    async def resolve_proxy(_db, _conn, _purpose):
+        if len(seen_excludes) == 1:
+            raise ProxyRequiredError("Proxy required")
+        return None
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    async def strategy(*_args, **_kwargs):
+        return "round-robin", 0
+
+    def client_factory(**_kwargs):
+        return Client()
+
+    monkeypatch.setattr(embeddings, "get_combo_strategy", strategy)
+    monkeypatch.setattr(embeddings, "resolve_model_to_targets", resolve)
+    monkeypatch.setattr(embeddings, "proxy_for_connection", resolve_proxy)
+    monkeypatch.setattr(embeddings, "create_upstream_client", client_factory)
+    monkeypatch.setattr(embeddings, "clear_connection_error", no_op)
+    monkeypatch.setattr(embeddings, "update_connection_usage", no_op)
+    monkeypatch.setattr(embeddings, "save_request_tracking", no_op)
+    monkeypatch.setattr(embeddings, "track_request_start", lambda *_args: "request")
+    monkeypatch.setattr(
+        embeddings,
+        "track_request_end",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = asyncio.run(
+        embeddings.embeddings(
+            _request({"model": "combo", "input": "hello"}),
+            Db(),
+            {},
+        )
+    )
+
+    assert result.status_code == 200
+    assert seen_excludes == [set(), {first_id}]

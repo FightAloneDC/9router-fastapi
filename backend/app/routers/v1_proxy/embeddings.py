@@ -19,6 +19,12 @@ from app.services.proxy import (
 )
 from app.services.usage_tracking import save_request_tracking
 from app.services.active_requests import track_request_start, track_request_end
+from app.models.provider import ProviderConnection
+from app.services.outbound_proxy import (
+    ProxyRequiredError,
+    create_upstream_client,
+    proxy_for_connection,
+)
 
 from .shared import (
     _build_embeddings_url,
@@ -84,11 +90,28 @@ async def embeddings(
         target = targets[0]
         upstream_url: str = _build_embeddings_url(target)
         forward_body: dict = _build_embeddings_body(target, body)
+        conn = None
+        if target.connection_id:
+            conn = await db.get(
+                ProviderConnection,
+                uuid.UUID(target.connection_id),
+            )
+        try:
+            proxy = await proxy_for_connection(db, conn, "upstream")
+        except ProxyRequiredError as exc:
+            last_error_detail = str(exc)
+            last_error_status = status.HTTP_503_SERVICE_UNAVAILABLE
+            if target.connection_id:
+                exclude_ids.add(target.connection_id)
+            continue
 
         try:
             request_start_time: float = time.time()
             active_request_id: str = track_request_start(target.provider, target.model)
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with create_upstream_client(
+                proxy=proxy,
+                timeout=60.0,
+            ) as client:
                 resp = await client.post(
                     upstream_url,
                     json=forward_body,

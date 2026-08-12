@@ -17,6 +17,11 @@ from app.services.search_adapters import execute_search
 from app.providers.provider import Provider
 from app.services.usage_tracking import save_request_tracking
 from app.models.provider import ProviderConnection
+from app.services.outbound_proxy import (
+    ProxyRequiredError,
+    create_upstream_client,
+    proxy_for_connection,
+)
 
 router = APIRouter()
 
@@ -118,9 +123,21 @@ async def search_endpoint(
     conn_data: dict = json.loads(conn.data) if conn and conn.data else {}
     api_key: str = conn_data.get("apiKey") or ""
 
+    try:
+        proxy = await proxy_for_connection(db, conn, "upstream")
+    except ProxyRequiredError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"error": {"message": str(exc)}},
+            headers={"X-Request-Id": request_id},
+        )
+
     start_time: float = time.time()
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with create_upstream_client(
+            proxy=proxy,
+            timeout=30.0,
+        ) as client:
             search_result: dict = await execute_search(
                 client, provider_id, search_params, api_key, conn_data,
             )

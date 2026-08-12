@@ -26,6 +26,11 @@ from app.services.responses_translator import (
 from app.services.usage_tracking import save_request_tracking
 from app.services.active_requests import track_request_start, track_request_end
 from app.models.provider import ProviderConnection
+from app.services.outbound_proxy import (
+    ProxyRequiredError,
+    create_upstream_client,
+    proxy_for_connection,
+)
 
 from .shared import (
     _should_fallback_on_error,
@@ -97,6 +102,20 @@ async def responses_endpoint(
             break
 
         target = targets[0]
+        conn = None
+        if target.connection_id:
+            conn = await db.get(
+                ProviderConnection,
+                uuid.UUID(target.connection_id),
+            )
+        try:
+            proxy = await proxy_for_connection(db, conn, "upstream")
+        except ProxyRequiredError as exc:
+            last_error_detail = str(exc)
+            last_error_status = status.HTTP_503_SERVICE_UNAVAILABLE
+            if target.connection_id:
+                exclude_ids.add(target.connection_id)
+            continue
 
         # ── FORMAT=openai-responses upstream (Grok CLI): passthrough ──
         is_responses_upstream: bool = False
@@ -114,57 +133,49 @@ async def responses_endpoint(
         if is_responses_upstream:
             # Client already speaks Responses API — forward natively
             forward_body: dict = {**body, "model": target.model}
-            if target.connection_id and provider_obj is not None:
-                conn = await db.get(
-                    ProviderConnection, uuid.UUID(target.connection_id),
-                )
-                if conn:
-                    conn_data = json.loads(conn.data) if conn.data else {}
-                    handler = provider_obj.handler()
-                    raw_body, signed_headers = (
-                        await handler.build_request_body(
-                            target.model, body, conn_data,
-                        )
+            if conn and provider_obj is not None:
+                conn_data = json.loads(conn.data) if conn.data else {}
+                handler = provider_obj.handler()
+                raw_body, signed_headers = (
+                    await handler.build_request_body(
+                        target.model, body, conn_data,
                     )
-                    if signed_headers:
-                        target.headers = signed_headers
+                )
+                if signed_headers:
+                    target.headers = signed_headers
         else:
             # Translate to Chat Completions for non-Responses upstreams
             forward_body = {
                 **chat_body, "model": target.model, "stream": stream,
             }
             # Provider-specific encoding (e.g. Qoder COSY) — same as chat
-            if target.connection_id:
-                conn = await db.get(
-                    ProviderConnection, uuid.UUID(target.connection_id),
-                )
-                if conn:
-                    conn_data = json.loads(conn.data) if conn.data else {}
-                    try:
-                        raw_body, signed_headers = (
-                            await _build_provider_request(
-                                target, forward_body, conn_data,
-                            )
+            if conn:
+                conn_data = json.loads(conn.data) if conn.data else {}
+                try:
+                    raw_body, signed_headers = (
+                        await _build_provider_request(
+                            target, forward_body, conn_data,
                         )
-                        if signed_headers:
-                            target.headers = signed_headers
-                    except Exception as e:
-                        conn_id = target.connection_id
-                        if (
-                            conn_id
-                            and conn_id not in refreshed_ids
-                            and await _maybe_refresh_on_auth_error(
-                                target, db,
-                            )
-                        ):
-                            refreshed_ids.add(conn_id)
-                            continue
-                        last_error_detail = (
-                            f"Provider request build failed: {str(e)}"
+                    )
+                    if signed_headers:
+                        target.headers = signed_headers
+                except Exception as e:
+                    conn_id = target.connection_id
+                    if (
+                        conn_id
+                        and conn_id not in refreshed_ids
+                        and await _maybe_refresh_on_auth_error(
+                            target, db,
                         )
-                        last_error_status = 500
-                        exclude_ids.add(conn_id)
+                    ):
+                        refreshed_ids.add(conn_id)
                         continue
+                    last_error_detail = (
+                        f"Provider request build failed: {str(e)}"
+                    )
+                    last_error_status = 500
+                    exclude_ids.add(conn_id)
+                    continue
 
         try:
             request_start_time: float = time.time()
@@ -179,6 +190,7 @@ async def responses_endpoint(
                         request_start_time=request_start_time,
                         raw_body=raw_body,
                         active_request_id=active_request_id,
+                        proxy=proxy,
                     )
                 else:
                     resp = await _stream_responses(
@@ -189,6 +201,7 @@ async def responses_endpoint(
                         request_start_time=request_start_time,
                         raw_body=raw_body,
                         active_request_id=active_request_id,
+                        proxy=proxy,
                     )
                 resp_data: dict = {}
             else:
@@ -197,12 +210,14 @@ async def responses_endpoint(
                         await _non_stream_responses_passthrough(
                             target, forward_body, request_id,
                             raw_body=raw_body,
+                            proxy=proxy,
                         )
                     )
                 else:
                     resp, resp_data = await _non_stream_responses(
                         target, forward_body, request_id, model,
                         raw_body=raw_body,
+                        proxy=proxy,
                     )
             total_latency_ms: int = int((time.time() - request_start_time) * 1000)
 
@@ -292,7 +307,7 @@ async def responses_endpoint(
 
 async def _non_stream_responses(
     target: object, body: dict, request_id: str, model: str,
-    *, raw_body: bytes | None = None,
+    *, raw_body: bytes | None = None, proxy: str | None = None,
 ) -> tuple[JSONResponse, dict]:
     """Non-streaming: translate response to Responses API format.
 
@@ -304,7 +319,7 @@ async def _non_stream_responses(
     else:
         send_kwargs["json"] = body
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with create_upstream_client(proxy=proxy, timeout=300.0) as client:
         resp = await client.post(target.url, **send_kwargs)
         resp.raise_for_status()
         data: dict = resp.json()
@@ -326,6 +341,7 @@ async def _stream_responses(
     request_start_time: float | None = None,
     raw_body: bytes | None = None,
     active_request_id: str | None = None,
+    proxy: str | None = None,
 ) -> StreamingResponse:
     """Streaming: translate Chat Completions SSE to Responses API SSE."""
     translator = ResponsesStreamTranslator(model=model)
@@ -367,7 +383,10 @@ async def _stream_responses(
                 )
             return out
 
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with create_upstream_client(
+            proxy=proxy,
+            timeout=300.0,
+        ) as client:
             try:
                 async with client.stream(
                     "POST", target.url, **send_kwargs,
@@ -466,6 +485,7 @@ async def _stream_responses(
 async def _non_stream_responses_passthrough(
     target: object, body: dict, request_id: str,
     raw_body: bytes | None = None,
+    proxy: str | None = None,
 ) -> tuple[JSONResponse, dict]:
     """Non-streaming passthrough to a native Responses-API upstream.
 
@@ -479,7 +499,7 @@ async def _non_stream_responses_passthrough(
         send_kwargs["json"] = body
 
     completed: dict = {}
-    async with httpx.AsyncClient(timeout=300.0) as client:
+    async with create_upstream_client(proxy=proxy, timeout=300.0) as client:
         async with client.stream(
             "POST", target.url, **send_kwargs,
         ) as resp:
@@ -543,6 +563,7 @@ async def _stream_responses_passthrough(
     request_start_time: float | None = None,
     raw_body: bytes | None = None,
     active_request_id: str | None = None,
+    proxy: str | None = None,
 ) -> StreamingResponse:
     """Streaming passthrough: forward Responses API SSE events as-is."""
     send_kwargs: dict = {"headers": target.headers}
@@ -601,7 +622,10 @@ async def _stream_responses_passthrough(
                 if resp_obj.get("id"):
                     response_id = resp_obj["id"]
 
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with create_upstream_client(
+            proxy=proxy,
+            timeout=300.0,
+        ) as client:
             try:
                 async with client.stream(
                     "POST", target.url, **send_kwargs,
