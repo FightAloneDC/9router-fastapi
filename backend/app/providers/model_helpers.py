@@ -8,10 +8,10 @@ This module provides reusable functions so per-provider models.py
 can be reduced to ~8 lines for standard providers.
 """
 
-import httpx
 from typing import Callable
 
 from app.providers.base import BaseProviderConfig
+from app.services.outbound_proxy import create_upstream_client
 from app.utils.url import url_path_join
 
 TIMEOUT: float = 15.0
@@ -41,8 +41,8 @@ async def fetch_models_header_auth(
     if config.EXTRA_HEADERS:
         headers.update(config.EXTRA_HEADERS)
 
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp: httpx.Response = await client.get(url, headers=headers)
+    async with create_upstream_client(timeout=TIMEOUT) as client:
+        resp = await client.get(url, headers=headers)
         resp.raise_for_status()
         return parse_fn(resp.json())
 
@@ -57,7 +57,7 @@ async def fetch_models_query_auth(
     headers: dict[str, str] = {"Content-Type": "application/json"}
     params: dict[str, str] = {config.AUTH_QUERY_PARAM: api_key}
 
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp: httpx.Response = await client.get(url, headers=headers, params=params)
+    async with create_upstream_client(timeout=TIMEOUT) as client:
+        resp = await client.get(url, headers=headers, params=params)
         resp.raise_for_status()
         return parse_fn(resp.json())

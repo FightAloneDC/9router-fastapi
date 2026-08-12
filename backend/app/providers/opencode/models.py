@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import logging
 
-import httpx
-
 from app.routers.providers.constants import SUGGESTED_MODELS_FILTERS
+from app.services.outbound_proxy import create_upstream_client
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +26,7 @@ async def fetch_models(api_key: str = "") -> list[dict]:
     Returns:
         Filtered list of free models with {id, name} fields.
     """
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with create_upstream_client(timeout=TIMEOUT) as client:
         resp = await client.get(MODELS_URL)
         resp.raise_for_status()
         raw_models: list[dict] = resp.json().get("data", [])

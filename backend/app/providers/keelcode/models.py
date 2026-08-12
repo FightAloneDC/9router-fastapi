@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
-
 from app.providers.keelcode.config import KeelcodeConfig
+from app.services.outbound_proxy import create_upstream_client
 from app.utils.url import url_path_join
 
 _config: KeelcodeConfig = KeelcodeConfig()
@@ -65,8 +64,8 @@ async def fetch_models(
     if _config.EXTRA_HEADERS:
         headers.update(_config.EXTRA_HEADERS)
 
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp: httpx.Response = await client.get(
+    async with create_upstream_client(timeout=TIMEOUT) as client:
+        resp = await client.get(
             url, headers=headers
         )
         resp.raise_for_status()

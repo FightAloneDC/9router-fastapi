@@ -258,6 +258,72 @@ def test_connection_test_uses_configured_proxy_pool(monkeypatch):
     assert created == [{"timeout": 30.0, "proxy": "http://proxy.test:8080"}]
 
 
+def test_model_tests_use_the_connection_test_model_proxy(monkeypatch):
+    """Model tests resolve testModel and use the scoped upstream client."""
+    created = []
+    resolved_purposes = []
+    connection = SimpleNamespace(
+        id="connection-id",
+        provider="test",
+        data=json.dumps({
+            "apiKey": "key",
+            "alias": "test",
+            "models": [{"id": "model-id"}],
+        }),
+    )
+
+    class Result:
+        def scalar_one_or_none(self):
+            return connection
+
+    class Db:
+        async def execute(self, _statement):
+            return Result()
+
+    class Response:
+        status_code = 200
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            return Response()
+
+    async def resolve_proxy(_db, conn, purpose):
+        assert conn is connection
+        resolved_purposes.append(purpose)
+        return "http://proxy.test:8080"
+
+    async def resolve_targets(_db, _model):
+        return [SimpleNamespace(
+            url="https://example.com/v1/chat/completions",
+            headers={},
+            model="model-id",
+        )]
+
+    def make_client(**kwargs):
+        created.append(kwargs)
+        return Client()
+
+    monkeypatch.setattr(testing, "proxy_for_connection", resolve_proxy)
+    monkeypatch.setattr(
+        "app.services.proxy.resolve_model_to_targets", resolve_targets,
+    )
+    monkeypatch.setattr(testing, "create_upstream_client", make_client)
+
+    result = asyncio.run(
+        testing.test_connection_models("connection-id", Db(), None)
+    )
+
+    assert result["summary"]["passed"] == 1
+    assert resolved_purposes == ["testModel"]
+    assert created == [{"timeout": 15.0, "proxy": "http://proxy.test:8080"}]
+
+
 def test_qoder_user_info_inherits_outbound_proxy(monkeypatch):
     """Qoder validation user-info requests inherit the active proxy."""
     from app.providers.qoder.auth import fetch_user_info

@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import UUID
 
 import httpx
@@ -29,6 +30,7 @@ from app.routers.providers.helpers import (
     _sanitize_connection,
 )
 from app.routers.providers.validation import _validate_provider
+from app.services.outbound_proxy import proxy_for_connection, use_outbound_proxy
 from app.services.proxy import invalidate_connection_cache
 from app.schemas.provider import (
     ProviderConnectionCreate,
@@ -581,7 +583,15 @@ async def create_provider(
         # Auto-validate on create using handler dispatch
         try:
             extra = body.providerSpecificData or {}
-            vr = await _validate_provider(body.provider, body.apiKey, extra)
+            pending_connection = SimpleNamespace(
+                proxy_pool_id=proxy_pool_id,
+                data=json.dumps(data),
+            )
+            proxy_url = await proxy_for_connection(
+                db, pending_connection, "testConnection",
+            )
+            async with use_outbound_proxy(proxy_url):
+                vr = await _validate_provider(body.provider, body.apiKey, extra)
             if vr:
                 test_status = "connected" if vr.valid else "error"
         except Exception:

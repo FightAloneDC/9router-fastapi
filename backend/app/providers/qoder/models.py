@@ -28,6 +28,7 @@ import httpx
 
 from .constants import QODER_MODEL_LIST_URL
 from .cosy import build_cosy_headers
+from app.services.outbound_proxy import create_upstream_client
 
 # Cache TTL: 1 hour
 CACHE_TTL_MS = 60 * 60 * 1000
@@ -82,7 +83,7 @@ async def fetch_qoder_catalog(
         machine_id=creds["machine_id"],
     )
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with create_upstream_client(timeout=timeout) as client:
         response = await client.get(QODER_MODEL_LIST_URL, headers=headers)
 
     if response.status_code != 200:

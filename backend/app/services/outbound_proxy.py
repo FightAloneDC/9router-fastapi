@@ -118,6 +118,10 @@ async def proxy_for_connection(
     except (json.JSONDecodeError, TypeError):
         data = {}
 
+    usage = parse_proxy_usage(data.get("proxyUsage"))
+    if not should_use_proxy(usage, purpose):
+        return None
+
     pool = None
     if conn.proxy_pool_id:
         result = await db.execute(
@@ -126,7 +130,7 @@ async def proxy_for_connection(
         pool = result.scalar_one_or_none()
 
     return resolve_proxy_url(
-        usage=parse_proxy_usage(data.get("proxyUsage")),
+        usage=usage,
         purpose=purpose,
         pool=pool,
     )

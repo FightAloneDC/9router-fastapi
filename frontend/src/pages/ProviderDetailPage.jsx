@@ -1233,7 +1233,11 @@ function ChatTestPlayground({ providerId, providerAlias, connections }) {
     try {
       const res = await fetch('/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token || ''}` },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || ''}`,
+          'X-9Router-Purpose': 'test-chat',
+        },
         body: JSON.stringify(buildBody()),
       })
       if (stream) {

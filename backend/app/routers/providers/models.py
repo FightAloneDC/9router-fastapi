@@ -16,6 +16,7 @@ from app.routers.providers._router import router
 from app.services.proxy import ID_TO_ALIAS
 from app.routers.providers.constants import normalize_models_list
 from app.routers.providers.nodes import _build_node_handler
+from app.services.outbound_proxy import proxy_for_connection, use_outbound_proxy
 
 
 # ── Node-based model fetching ─────────────────────────────────────────────
@@ -147,10 +148,12 @@ async def fetch_provider_models(
     )
     node: ProviderNode | None = node_result.scalar_one_or_none()
 
-    if node:
-        models: list[dict] = await _fetch_node_models(node, api_key)
-    else:
-        models = await _fetch_builtin_models(provider, api_key, data)
+    proxy_url = await proxy_for_connection(db, conn, "upstream")
+    async with use_outbound_proxy(proxy_url):
+        if node:
+            models: list[dict] = await _fetch_node_models(node, api_key)
+        else:
+            models = await _fetch_builtin_models(provider, api_key, data)
 
     # Persist and return
     data["models"] = [

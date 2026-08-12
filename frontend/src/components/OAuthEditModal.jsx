@@ -5,10 +5,80 @@ import Button from './ui/Button'
 import Input from './ui/Input'
 import Badge from './ui/Badge'
 
+const PROXY_USAGE_FLAGS = [
+  ['testConnection', 'Test connection'],
+  ['testModel', 'Test model'],
+  ['testChat', 'Test chat'],
+  ['oauthRefresh', 'OAuth refresh'],
+]
+
+const EMPTY_PROXY_USAGE = {
+  mode: 'off',
+  flags: Object.fromEntries(
+    PROXY_USAGE_FLAGS.map(([key]) => [key, false]),
+  ),
+}
+
+function normalizeProxyUsage(value) {
+  return {
+    mode: value?.mode || 'off',
+    flags: { ...EMPTY_PROXY_USAGE.flags, ...(value?.flags || {}) },
+  }
+}
+
+function ProxyUsageControls({ value, onChange }) {
+  const usage = normalizeProxyUsage(value)
+
+  return (
+    <div className="rounded-lg border border-zinc-700/40 bg-zinc-900/50 p-3">
+      <p className="mb-2 text-sm font-medium text-zinc-300">Proxy usage</p>
+      <div className="flex flex-wrap gap-3">
+        {['off', 'selective', 'all'].map((mode) => (
+          <label
+            key={mode}
+            className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-300"
+          >
+            <input
+              type="radio"
+              name="oauth-proxy-usage"
+              checked={usage.mode === mode}
+              onChange={() => onChange({ ...usage, mode })}
+              className="border-zinc-600 bg-zinc-800 text-primary-500"
+            />
+            {mode.charAt(0).toUpperCase() + mode.slice(1)}
+          </label>
+        ))}
+      </div>
+      {usage.mode === 'selective' && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {PROXY_USAGE_FLAGS.map(([key, label]) => (
+            <label
+              key={key}
+              className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400"
+            >
+              <input
+                type="checkbox"
+                checked={usage.flags[key] === true}
+                onChange={(event) => onChange({
+                  ...usage,
+                  flags: { ...usage.flags, [key]: event.target.checked },
+                })}
+                className="rounded border-zinc-600 bg-zinc-800 text-primary-500"
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function OAuthEditModal({ isOpen, connection, proxyPools = [], onClose, onSave }) {
   const [name, setName] = useState('')
   const [priority, setPriority] = useState(0)
   const [proxyPoolId, setProxyPoolId] = useState('')
+  const [proxyUsage, setProxyUsage] = useState(EMPTY_PROXY_USAGE)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -24,6 +94,7 @@ export default function OAuthEditModal({ isOpen, connection, proxyPools = [], on
       setName(connection.name || '')
       setPriority(connection.priority ?? 0)
       setProxyPoolId(connection.proxy_pool_id || '')
+      setProxyUsage(normalizeProxyUsage(connection.proxyUsage))
       setError('')
     }
   }, [isOpen, connection])
@@ -39,6 +110,7 @@ export default function OAuthEditModal({ isOpen, connection, proxyPools = [], on
         name: name.trim() || connection.name,
         priority,
         proxyPoolId: proxyPoolId || null,
+        proxyUsage,
       })
       onSave()
     } catch (err) {
@@ -107,6 +179,11 @@ export default function OAuthEditModal({ isOpen, connection, proxyPools = [], on
             ))}
           </select>
         </div>
+
+        <ProxyUsageControls
+          value={proxyUsage}
+          onChange={setProxyUsage}
+        />
 
         {/* Token info (read-only) */}
         <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-700/40">

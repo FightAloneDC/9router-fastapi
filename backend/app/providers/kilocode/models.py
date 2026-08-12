@@ -1,6 +1,6 @@
 """Kilocode model fetching — public gateway, no auth required."""
 
-import httpx
+from app.services.outbound_proxy import create_upstream_client
 
 KILO_GATEWAY_MODELS_URL = "https://api.kilo.ai/api/gateway/models"
 
@@ -11,7 +11,7 @@ def parse_response(data: dict) -> list[dict]:
 
 async def fetch_models(api_key: str) -> list[dict]:
     """Fetch free models from Kilo public gateway (no auth)."""
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with create_upstream_client(timeout=15.0) as client:
         resp = await client.get(KILO_GATEWAY_MODELS_URL, headers={"Accept": "application/json"})
         resp.raise_for_status()
         all_models = resp.json().get("data", [])

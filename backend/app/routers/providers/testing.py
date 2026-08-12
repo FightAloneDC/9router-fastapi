@@ -22,7 +22,9 @@ from app.routers.providers.nodes import _build_node_handler
 from app.routers.providers.validation import _validate_provider, _validate_custom_openai
 from app.services.outbound_proxy import (
     ProxyRequiredError,
+    create_upstream_client,
     parse_proxy_usage,
+    proxy_for_connection,
     resolve_proxy_url,
     use_outbound_proxy,
 )
@@ -114,6 +116,7 @@ async def validate_provider(
     from app.models.provider import ProviderNode
     from app.database import async_session
 
+    # This pre-save payload has no connection or proxy pool to resolve.
     extra = body.providerSpecificData or {}
 
     # Check if this is a compatible provider node
@@ -287,8 +290,13 @@ async def test_connection_models(
             target = targets[0]
             url = target.url
             headers = target.headers
+            proxy_url = await proxy_for_connection(
+                db, conn, "testModel",
+            )
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with create_upstream_client(
+                proxy=proxy_url, timeout=15.0,
+            ) as client:
                 resp = await client.post(
                     url,
                     headers=headers,
