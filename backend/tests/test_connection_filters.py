@@ -42,6 +42,22 @@ def test_q_adds_ilike_on_name_email_displayname():
     assert "ilike" in sql or " like " in sql
 
 
+def test_q_escapes_like_wildcards():
+    clause = build_connection_filter_clause(
+        "qoder",
+        ConnectionListFilters(q="%"),
+    )
+    compiled = select(ProviderConnection).where(clause).compile()
+    patterns = [
+        value
+        for value in compiled.params.values()
+        if isinstance(value, str) and value.startswith("%")
+    ]
+
+    assert patterns == [r"%\%%"] * 3
+    assert str(compiled).lower().count(" escape ") == 3
+
+
 def test_is_active_and_auth_type():
     clause = build_connection_filter_clause(
         "qoder",
@@ -82,6 +98,22 @@ def test_has_proxy_true_and_false():
             )
         ).lower()
         assert "proxy_pool_id" in sql
+
+
+def test_proxy_pool_id_and_has_proxy_are_both_applied():
+    clause = build_connection_filter_clause(
+        "qoder",
+        ConnectionListFilters(
+            proxy_pool_id="pool-1",
+            has_proxy=False,
+        ),
+    )
+    sql = str(
+        select(ProviderConnection).where(clause).compile()
+    ).lower()
+
+    assert "proxy_pool_id =" in sql
+    assert "proxy_pool_id is null" in sql
 
 
 def test_in_cooldown_false_compiles_not_exists():

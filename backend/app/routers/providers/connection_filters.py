@@ -70,13 +70,15 @@ def build_connection_filter_clause(
 
     q = (filters.q or "").strip()
     if q:
-        pattern = f"%{q}%"
+        escaped_q = q.replace("\\", "\\\\")
+        escaped_q = escaped_q.replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped_q}%"
         display = data["displayName"].as_string()
         clauses.append(
             or_(
-                ProviderConnection.name.ilike(pattern),
-                ProviderConnection.email.ilike(pattern),
-                display.ilike(pattern),
+                ProviderConnection.name.ilike(pattern, escape="\\"),
+                ProviderConnection.email.ilike(pattern, escape="\\"),
+                display.ilike(pattern, escape="\\"),
             )
         )
 
@@ -105,7 +107,7 @@ def build_connection_filter_clause(
             ProviderConnection.proxy_pool_id
             == filters.proxy_pool_id
         )
-    elif filters.has_proxy is True:
+    if filters.has_proxy is True:
         clauses.append(
             ProviderConnection.proxy_pool_id.is_not(None)
         )
