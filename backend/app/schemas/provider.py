@@ -36,6 +36,7 @@ class ProviderConnectionCreate(BaseModel):
     connectionProxyEnabled: Optional[bool] = None
     connectionProxyUrl: Optional[str] = None
     connectionNoProxy: Optional[str] = None
+    proxyUsage: Optional[dict] = None
     noAuth: Optional[bool] = False
 
 
@@ -61,6 +62,7 @@ class ProviderConnectionUpdate(BaseModel):
     connectionProxyEnabled: Optional[bool] = None
     connectionProxyUrl: Optional[str] = None
     connectionNoProxy: Optional[str] = None
+    proxyUsage: Optional[dict] = None
 
 
 class ProviderConnectionOut(BaseModel):
@@ -91,6 +93,7 @@ class ProviderConnectionOut(BaseModel):
     round_robin: bool = False
     base_url: Optional[str] = None
     proxy_pool_id: Optional[uuid.UUID] = None
+    proxyUsage: Optional[dict] = None
     providerSpecificData: Optional[dict] = None
     created_at: datetime
     updated_at: Optional[datetime] = None

@@ -37,6 +37,73 @@ import { useAuthStore } from '../stores/authStore'
 
 const COMPATIBLE_TYPES = new Set(['openai-compatible', 'anthropic-compatible'])
 
+const PROXY_USAGE_FLAGS = [
+  ['testConnection', 'Test connection'],
+  ['testModel', 'Test model'],
+  ['testChat', 'Test chat'],
+  ['oauthRefresh', 'OAuth refresh'],
+]
+
+const EMPTY_PROXY_USAGE = {
+  mode: 'off',
+  flags: Object.fromEntries(PROXY_USAGE_FLAGS.map(([key]) => [key, false])),
+}
+
+function proxyUsageWithMode(mode, current) {
+  return {
+    mode,
+    flags: { ...EMPTY_PROXY_USAGE.flags, ...(current?.flags || {}) },
+  }
+}
+
+function ProxyUsageControls({ value, onChange }) {
+  const usage = proxyUsageWithMode(value?.mode || 'off', value)
+
+  return (
+    <div className="rounded-lg border border-zinc-700/40 bg-zinc-900/50 p-3">
+      <p className="mb-2 text-sm font-medium text-zinc-300">Proxy usage</p>
+      <div className="flex flex-wrap gap-3">
+        {['off', 'selective', 'all'].map((mode) => (
+          <label
+            key={mode}
+            className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-300"
+          >
+            <input
+              type="radio"
+              name="proxy-usage"
+              checked={usage.mode === mode}
+              onChange={() => onChange(proxyUsageWithMode(mode, usage))}
+              className="border-zinc-600 bg-zinc-800 text-primary-500"
+            />
+            {mode.charAt(0).toUpperCase() + mode.slice(1)}
+          </label>
+        ))}
+      </div>
+      {usage.mode === 'selective' && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {PROXY_USAGE_FLAGS.map(([key, label]) => (
+            <label
+              key={key}
+              className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400"
+            >
+              <input
+                type="checkbox"
+                checked={usage.flags[key] === true}
+                onChange={(event) => onChange({
+                  ...usage,
+                  flags: { ...usage.flags, [key]: event.target.checked },
+                })}
+                className="rounded border-zinc-600 bg-zinc-800 text-primary-500"
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Per-connection OAuth detection (for providers that support both OAuth and PAT like qoder)
 function isConnectionOAuth(conn, providerId) {
   const catalog = useCatalogStore.getState().providers
@@ -377,6 +444,7 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
   const [name, setName] = useState('')
   const [priority, setPriority] = useState(0)
   const [proxyPoolId, setProxyPoolId] = useState('')
+  const [proxyUsage, setProxyUsage] = useState(null)
   const [apiKey, setApiKey] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [ollamaHostUrl, setOllamaHostUrl] = useState('')
@@ -397,6 +465,7 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
         setName(editConnection.name || '')
         setPriority(editConnection.priority ?? 0)
         setProxyPoolId(editConnection.proxy_pool_id || '')
+        setProxyUsage(editConnection.proxyUsage || null)
         setApiKey('')
         setBaseUrl(editConnection.base_url || '')
         const ps = editConnection.providerSpecificData || editConnection.provider_specific || {}
@@ -413,6 +482,7 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
         setName('')
         setPriority(0)
         setProxyPoolId('')
+        setProxyUsage(null)
         setApiKey('')
         setBaseUrl('')
         setOllamaHostUrl('')
@@ -476,6 +546,10 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
     setCreating(true)
     setError('')
     try {
+      const selectedPool = proxyPools.find((pool) => pool.id === proxyPoolId)
+      const savedProxyUsage = proxyUsage
+        || selectedPool?.default_proxy_usage
+        || EMPTY_PROXY_USAGE
       if (isEdit) {
         const updateData = {
           name: name.trim() || editConnection.name,
@@ -483,6 +557,7 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
           providerSpecificData: buildProviderSpecificData(),
           priority: priority,
           proxyPoolId: proxyPoolId || null,
+          proxyUsage: savedProxyUsage,
         }
         if (apiKey.trim()) {
           updateData.apiKey = apiKey.trim()
@@ -498,6 +573,7 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
           providerSpecificData: buildProviderSpecificData(),
           priority: priority,
           proxyPoolId: proxyPoolId || null,
+          proxyUsage: savedProxyUsage,
         })
       }
       await onCreated()
@@ -728,6 +804,10 @@ function AddKeyModal({ isOpen, providerId, info, editConnection, onClose, onCrea
             </select>
           </div>
         </div>
+        <ProxyUsageControls
+          value={proxyUsage}
+          onChange={setProxyUsage}
+        />
 
         {validationResult && !validationResult.valid && (
           <div className="flex items-center gap-2 pt-1">
@@ -1387,6 +1467,7 @@ export default function ProviderDetailPage() {
   // Bulk proxy
   const [selectedConnectionIds, setSelectedConnectionIds] = useState([])
   const [bulkProxyPoolId, setBulkProxyPoolId] = useState('__none__')
+  const [bulkProxyUsage, setBulkProxyUsage] = useState(null)
   const [bulkUpdatingProxy, setBulkUpdatingProxy] = useState(false)
 
   // Header image
@@ -2281,6 +2362,26 @@ export default function ProviderDetailPage() {
   const allSelected = connections.length > 0 && selectedConnectionIds.length === connections.length
   const allServiceKinds = [...new Set(connections.flatMap(c => c.serviceKinds || []))]
 
+  const updateConnectionProxy = async (connection, proxyPoolId) => {
+    const pool = proxyPools.find((item) => item.id === proxyPoolId)
+    const proxyUsage = !connection.proxyUsage
+      ? pool?.default_proxy_usage
+      : undefined
+    await providersApi.updateProvider(connection.id, {
+      proxyPoolId: proxyPoolId || null,
+      ...(proxyUsage ? { proxyUsage } : {}),
+    })
+    setConnections((previous) => previous.map((item) => (
+      item.id === connection.id
+        ? {
+            ...item,
+            proxy_pool_id: proxyPoolId || null,
+            ...(proxyUsage ? { proxyUsage } : {}),
+          }
+        : item
+    )))
+  }
+
   const toggleSelectConnection = (connectionId) => {
     setSelectedConnectionIds((prev) =>
       prev.includes(connectionId) ? prev.filter((id) => id !== connectionId) : [...prev, connectionId]
@@ -2296,6 +2397,7 @@ export default function ProviderDetailPage() {
     if (selectedConnections.length === 0) return
     const uniquePoolIds = [...new Set(selectedConnections.map((conn) => conn.proxy_pool_id || '__none__'))]
     setBulkProxyPoolId(uniquePoolIds.length === 1 ? uniquePoolIds[0] : '__none__')
+    setBulkProxyUsage(null)
     setShowBulkProxyModal(true)
   }
 
@@ -2305,7 +2407,18 @@ export default function ProviderDetailPage() {
       let failed = 0
       for (const { connectionId, proxyPoolId } of assignments) {
         try {
-          await providersApi.updateProvider(connectionId, { proxyPoolId: proxyPoolId })
+          const connection = connections.find(
+            (item) => item.id === connectionId
+          )
+          const pool = proxyPools.find((item) => item.id === proxyPoolId)
+          const proxyUsage = bulkProxyUsage
+            || (!connection?.proxyUsage
+              ? pool?.default_proxy_usage
+              : undefined)
+          await providersApi.updateProvider(connectionId, {
+            proxyPoolId,
+            ...(proxyUsage ? { proxyUsage } : {}),
+          })
         } catch { failed += 1 }
       }
       if (failed > 0) alert(`Updated with ${failed} failed request(s).`)
@@ -2936,10 +3049,7 @@ export default function ProviderDetailPage() {
                       onChange={async (e) => {
                         const poolId = e.target.value === '__none__' ? null : e.target.value
                         try {
-                          await providersApi.updateProvider(connections[0].id, { proxyPoolId: poolId })
-                          setConnections(prev => prev.map(c =>
-                            c.id === connections[0].id ? { ...c, proxy_pool_id: poolId } : c
-                          ))
+                          await updateConnectionProxy(connections[0], poolId)
                         } catch (err) {
                           console.error('Error updating proxy:', err)
                         }
@@ -3092,10 +3202,7 @@ export default function ProviderDetailPage() {
                           onToggleActive={(isActive) => handleToggleActive(conn.id, isActive)}
                           onUpdateProxy={async (proxyPoolId) => {
                             try {
-                              await providersApi.updateProvider(conn.id, { proxyPoolId: proxyPoolId || null })
-                              setConnections(prev => prev.map(c =>
-                                c.id === conn.id ? { ...c, proxy_pool_id: proxyPoolId || null } : c
-                              ))
+                              await updateConnectionProxy(conn, proxyPoolId)
                             } catch (error) {
                               console.error('Error updating proxy:', error)
                             }
@@ -3226,6 +3333,10 @@ export default function ProviderDetailPage() {
         title={`Apply Proxy (${connectionTotal} connections)`}
       >
         <div className="flex flex-col gap-3">
+          <ProxyUsageControls
+            value={bulkProxyUsage}
+            onChange={setBulkProxyUsage}
+          />
           <div className="flex flex-col">
             <button
               onClick={handleApplyOneToOne}

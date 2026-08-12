@@ -142,6 +142,7 @@ def _connection_to_out(conn: ProviderConnection) -> dict:
         "round_robin": data.get("roundRobin", False),
         "base_url": data.get("baseUrl"),
         "proxy_pool_id": conn.proxy_pool_id,
+        "proxyUsage": data.get("proxyUsage"),
         "providerSpecificData": provider_specific or None,
         "created_at": conn.created_at,
         "updated_at": conn.updated_at,
@@ -156,6 +157,7 @@ def _sanitize_connection(conn_dict: dict) -> dict:
         "priority", "globalPriority", "is_active", "defaultModel",
         "test_status", "lastError", "lastErrorAt", "errorCode",
         "expiresAt", "lastUsedAt", "consecutiveUseCount",
+        "proxyUsage",
         "created_at", "updated_at", "serviceKinds",
     ]
     SAFE_PSD_FIELDS = [

@@ -569,6 +569,8 @@ async def create_provider(
     data["connectionProxyEnabled"] = proxy_config["connectionProxyEnabled"]
     data["connectionProxyUrl"] = proxy_config["connectionProxyUrl"]
     data["connectionNoProxy"] = proxy_config["connectionNoProxy"]
+    if body.proxyUsage is not None:
+        data["proxyUsage"] = body.proxyUsage
 
     # Determine test status
     test_status = body.testStatus or "unknown"
@@ -725,6 +727,8 @@ async def update_provider(
         data["lastError"] = body.lastError
     if body.lastErrorAt is not None:
         data["lastErrorAt"] = body.lastErrorAt
+    if body.proxyUsage is not None:
+        data["proxyUsage"] = body.proxyUsage
 
     # Merge providerSpecificData
     if body.providerSpecificData is not None:
