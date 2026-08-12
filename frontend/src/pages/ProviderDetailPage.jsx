@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import {
   ArrowLeft, Plus, Trash2, Key, Eye, EyeOff,
@@ -1331,16 +1331,31 @@ export default function ProviderDetailPage() {
   const connectionPageRef = useRef(connectionPage)
   connectionPageRef.current = connectionPage
   const connFetchGen = useRef(0)
-  const connectionFilterSignature = JSON.stringify({
-    q: connSearchQ,
-    isActive: connFilterActive,
-    testStatus: connFilterStatus,
-    authType: connFilterAuth,
-    hasProxy: connFilterProxy,
-    proxyPoolId: connFilterPoolId,
-    tokenIssue: connFilterToken,
-    inCooldown: connFilterCooldown,
-  })
+  const connectionFilterParams = useMemo(() => {
+    const params = {}
+    if (connSearchQ) params.q = connSearchQ
+    if (connFilterActive === 'true') params.is_active = true
+    if (connFilterActive === 'false') params.is_active = false
+    if (connFilterStatus) params.test_status = connFilterStatus
+    if (connFilterAuth) params.auth_type = connFilterAuth
+    if (connFilterProxy === 'yes') params.has_proxy = true
+    if (connFilterProxy === 'no') params.has_proxy = false
+    if (connFilterPoolId) params.proxy_pool_id = connFilterPoolId
+    if (connFilterToken) params.token_issue = connFilterToken
+    if (connFilterCooldown === 'yes') params.in_cooldown = true
+    if (connFilterCooldown === 'no') params.in_cooldown = false
+    return params
+  }, [
+    connSearchQ,
+    connFilterActive,
+    connFilterStatus,
+    connFilterAuth,
+    connFilterProxy,
+    connFilterPoolId,
+    connFilterToken,
+    connFilterCooldown,
+  ])
+  const connectionFilterSignature = JSON.stringify(connectionFilterParams)
   const loadedFilterSignatureRef = useRef(connectionFilterSignature)
 
   useEffect(() => {
@@ -1446,18 +1461,8 @@ export default function ProviderDetailPage() {
       page,
       page_size: CONNECTIONS_PER_PAGE,
       include_models: true,
+      ...connectionFilterParams,
     }
-    if (connSearchQ) params.q = connSearchQ
-    if (connFilterActive === 'true') params.is_active = true
-    if (connFilterActive === 'false') params.is_active = false
-    if (connFilterStatus) params.test_status = connFilterStatus
-    if (connFilterAuth) params.auth_type = connFilterAuth
-    if (connFilterProxy === 'yes') params.has_proxy = true
-    if (connFilterProxy === 'no') params.has_proxy = false
-    if (connFilterPoolId) params.proxy_pool_id = connFilterPoolId
-    if (connFilterToken) params.token_issue = connFilterToken
-    if (connFilterCooldown === 'yes') params.in_cooldown = true
-    if (connFilterCooldown === 'no') params.in_cooldown = false
     try {
       const [connRes, proxyRes] = await Promise.all([
         providersApi.getProviderConnections(pid, params),
@@ -1547,14 +1552,7 @@ export default function ProviderDetailPage() {
     }
   }, [
     rawProviderId,
-    connSearchQ,
-    connFilterActive,
-    connFilterStatus,
-    connFilterAuth,
-    connFilterProxy,
-    connFilterPoolId,
-    connFilterToken,
-    connFilterCooldown,
+    connectionFilterParams,
   ])
 
   // Single initial/page load: wait for catalog entry, then fetch once.
@@ -2019,6 +2017,7 @@ export default function ProviderDetailPage() {
         page_size: 1,
         include_ids: true,
         include_models: false,
+        ...connectionFilterParams,
       })
       setSelectedConnIds(new Set(res.data?.connectionIds || []))
     } catch (err) {
@@ -2117,6 +2116,7 @@ export default function ProviderDetailPage() {
       page_size: 1,
       include_ids: true,
       include_models: false,
+      ...connectionFilterParams,
     })
     const ids = res.data?.connectionIds || connections.map((c) => c.id)
     const targets = ids.map((connectionId) => ({ connectionId, proxyPoolId }))
@@ -2131,6 +2131,7 @@ export default function ProviderDetailPage() {
       page_size: 1,
       include_ids: true,
       include_models: false,
+      ...connectionFilterParams,
     })
     const ids = res.data?.connectionIds || connections.map((c) => c.id)
     const targets = ids.map((connectionId, i) => ({
