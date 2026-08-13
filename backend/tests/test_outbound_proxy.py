@@ -16,12 +16,36 @@ from app.services.outbound_proxy import (
     ProxyRequiredError,
     create_upstream_client,
     merge_proxy_usage_into_data,
+    normalize_upstream_timeout,
     parse_proxy_usage,
     purpose_from_header,
     resolve_proxy_url,
     should_use_proxy,
     use_outbound_proxy,
 )
+
+
+def test_float_timeout_caps_connect_not_read() -> None:
+    client = create_upstream_client(timeout=300.0)
+    try:
+        assert client.timeout.connect == 10.0
+        assert client.timeout.read == 300.0
+        assert client.timeout.write == 300.0
+        assert client.timeout.pool == 10.0
+    finally:
+        asyncio.run(client.aclose())
+
+
+def test_explicit_timeout_object_is_kept() -> None:
+    custom = __import__("httpx").Timeout(
+        connect=2.0, read=9.0, write=9.0, pool=2.0,
+    )
+    client = create_upstream_client(timeout=custom)
+    try:
+        assert client.timeout.connect == 2.0
+        assert client.timeout.read == 9.0
+    finally:
+        asyncio.run(client.aclose())
 
 
 def test_parse_missing_defaults_to_off():
@@ -182,7 +206,10 @@ def test_base_validation_inherits_outbound_proxy(monkeypatch):
             return await handler.validate("key")
 
     assert asyncio.run(run()).valid is True
-    assert created == [{"timeout": 15.0, "proxy": "http://proxy.test:8080"}]
+    assert created == [{
+        "timeout": normalize_upstream_timeout(15.0),
+        "proxy": "http://proxy.test:8080",
+    }]
 
 
 def test_connection_test_uses_configured_proxy_pool(monkeypatch):
@@ -255,7 +282,10 @@ def test_connection_test_uses_configured_proxy_pool(monkeypatch):
     result = asyncio.run(testing._test_provider_connection(Connection(), Db()))
 
     assert result["valid"] is True
-    assert created == [{"timeout": 30.0, "proxy": "http://proxy.test:8080"}]
+    assert created == [{
+        "timeout": normalize_upstream_timeout(30.0),
+        "proxy": "http://proxy.test:8080",
+    }]
 
 
 def test_model_tests_use_the_connection_test_model_proxy(monkeypatch):
@@ -321,7 +351,10 @@ def test_model_tests_use_the_connection_test_model_proxy(monkeypatch):
 
     assert result["summary"]["passed"] == 1
     assert resolved_purposes == ["testModel"]
-    assert created == [{"timeout": 15.0, "proxy": "http://proxy.test:8080"}]
+    assert created == [{
+        "timeout": 15.0,
+        "proxy": "http://proxy.test:8080",
+    }]
 
 
 def test_qoder_user_info_inherits_outbound_proxy(monkeypatch):
@@ -357,7 +390,10 @@ def test_qoder_user_info_inherits_outbound_proxy(monkeypatch):
             return await fetch_user_info("token")
 
     assert asyncio.run(run()) == {"id": "user-id"}
-    assert created == [{"timeout": 15.0, "proxy": "http://proxy.test:8080"}]
+    assert created == [{
+        "timeout": normalize_upstream_timeout(15.0),
+        "proxy": "http://proxy.test:8080",
+    }]
 
 
 def test_grok_cli_model_fetching_inherits_outbound_proxy(monkeypatch):
@@ -394,7 +430,10 @@ def test_grok_cli_model_fetching_inherits_outbound_proxy(monkeypatch):
             return await fetch_models("token")
 
     assert asyncio.run(run()) == []
-    assert created == [{"timeout": 30.0, "proxy": "http://proxy.test:8080"}]
+    assert created == [{
+        "timeout": normalize_upstream_timeout(30.0),
+        "proxy": "http://proxy.test:8080",
+    }]
 
 
 def test_oauth_refresh_uses_connection_oauth_refresh_proxy(monkeypatch):
@@ -481,7 +520,10 @@ def test_oauth_refresh_uses_connection_oauth_refresh_proxy(monkeypatch):
 
     assert summary["refreshed"] == 1
     assert resolved_purposes == ["oauthRefresh"]
-    assert created == [{"timeout": 30.0, "proxy": "http://proxy.test:8080"}]
+    assert created == [{
+        "timeout": normalize_upstream_timeout(30.0),
+        "proxy": "http://proxy.test:8080",
+    }]
 
 
 def test_qoder_background_refresh_uses_connection_oauth_refresh_proxy(
@@ -557,4 +599,7 @@ def test_qoder_background_refresh_uses_connection_oauth_refresh_proxy(
 
     assert results == {"connection-id": True}
     assert resolved_purposes == ["oauthRefresh"]
-    assert created == [{"timeout": 30.0, "proxy": "http://proxy.test:8080"}]
+    assert created == [{
+        "timeout": normalize_upstream_timeout(30.0),
+        "proxy": "http://proxy.test:8080",
+    }]

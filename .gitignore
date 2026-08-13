@@ -48,6 +48,7 @@ data/
 # Logs
 #-------------------------
 *.log
+scripts/logs/
 
 #-------------------------
 # OS
@@ -136,3 +137,8 @@ backups/
 
 # Local stream sniff captures
 backend/tests/_stream_sniff/
+backend/tests/_qoder_large/
+
+# Aider session history
+.aider.chat.history.md
+.aider.input.history

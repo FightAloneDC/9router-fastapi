@@ -258,10 +258,46 @@ def test_unwrap_qoder_sse_line_formats():
     # [DONE] passthrough
     done = "data: " + json.dumps({"statusCodeValue": 200, "body": "[DONE]"})
     assert _unwrap_qoder_sse_line(done) == "data: [DONE]"
+    # Direct OpenAI chunk (no envelope)
+    direct = "data: " + json.dumps(chunk)
+    assert json.loads(_unwrap_qoder_sse_line(direct)[6:]) == chunk
     # Garbage / non-data lines are skipped
     assert _unwrap_qoder_sse_line("data: not-json") is None
     assert _unwrap_qoder_sse_line(": keepalive") is None
     assert _unwrap_qoder_sse_line("") is None
+
+
+def test_unwrap_qoder_code_112_quota_envelope():
+    """Bare code/message envelopes must become [qoder error ...] markers."""
+    from app.providers.qoder.transform import qoder_envelope_http_error
+
+    env = {
+        "code": "112",
+        "message": json.dumps({
+            "pricingUrl": "https://qoder.com/pricing?client=qoder",
+        }),
+    }
+    st, detail = qoder_envelope_http_error(env)
+    assert st == 402
+    assert "pricing" in detail.lower() or "112" in detail
+
+    line = "data: " + json.dumps(env)
+    unwrapped = _unwrap_qoder_sse_line(line)
+    assert unwrapped is not None
+    payload = json.loads(unwrapped[6:])
+    content = payload["choices"][0]["delta"]["content"]
+    assert "[qoder error 402:" in content.lstrip()
+    assert "112" in content or "pricing" in content.lower()
+
+    # Nested inside statusCodeValue/body (seen on live streams)
+    nested = "data: " + json.dumps({
+        "statusCodeValue": 200,
+        "body": json.dumps(env),
+    })
+    unwrapped2 = _unwrap_qoder_sse_line(nested)
+    assert unwrapped2 is not None
+    content2 = json.loads(unwrapped2[6:])["choices"][0]["delta"]["content"]
+    assert "[qoder error 402:" in content2.lstrip()
 
 
 def test_capture_qoder_usage():
@@ -271,3 +307,43 @@ def test_capture_qoder_usage():
     assert _capture_qoder_usage("data: [DONE]", cur) is cur
     assert _capture_qoder_usage("data: {}", cur) is cur
     assert _capture_qoder_usage("data: bad-json", cur) is cur
+
+
+def test_qoder_business_error_raises_before_stream():
+    """code:112 on first SSE event must raise HTTPStatusError (fallback)."""
+    payload = (
+        "data: "
+        + json.dumps({
+            "code": "112",
+            "message": json.dumps({
+                "pricingUrl": "https://qoder.com/pricing?client=qoder",
+            }),
+        })
+        + "\n\n"
+    ).encode()
+    server, url = _start_server(payload, piece_size=64)
+    try:
+        target = ProxyTarget()
+        target.url = url
+        target.headers = {}
+        target.model = "qoder/auto"
+        target.provider = "fake-provider"
+        target.connection_id = None
+
+        async def run() -> None:
+            await _stream_response(
+                target,
+                {"model": "qd/qoder/auto", "stream": True},
+                "req-quota",
+                provider="qoder",
+                model="qoder/auto",
+            )
+
+        import httpx
+        import pytest
+
+        with pytest.raises(httpx.HTTPStatusError) as ei:
+            asyncio.run(run())
+        assert ei.value.response.status_code == 402
+    finally:
+        server.shutdown()

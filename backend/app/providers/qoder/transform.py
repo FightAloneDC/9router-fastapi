@@ -192,12 +192,80 @@ def build_qoder_request_body(
     }
 
 
+def qoder_envelope_http_error(
+    envelope: dict,
+) -> tuple[int, str] | None:
+    """Map Qoder business-error JSON to (http_status, detail).
+
+    Upstream may send a bare envelope then drop the connection:
+      {"code":"112","message":"{\\"pricingUrl\\":\\"https://...\\"}"}
+    Hermes then surfaces IncompleteRead / empty Proxy error after a long
+    wait. Detecting this early enables cooldown + connection fallback.
+    """
+    if not isinstance(envelope, dict):
+        return None
+    if "choices" in envelope or "statusCodeValue" in envelope:
+        return None
+    if "headers" in envelope and "body" in envelope:
+        return None
+    if envelope.get("code") is None:
+        return None
+
+    code_s = str(envelope.get("code"))
+    msg = envelope.get("message", "")
+    msg_s = msg if isinstance(msg, str) else json.dumps(msg)
+    lower = msg_s.lower()
+
+    if (
+        code_s == "112"
+        or "pricingurl" in lower
+        or "pricing" in lower
+    ):
+        return (
+            402,
+            f"Qoder quota/pricing code={code_s}: {msg_s[:300]}",
+        )
+    if (
+        code_s in ("105", "TOKEN_EXPIRE")
+        or "login expired" in lower
+        or "token is not active" in lower
+    ):
+        return (
+            403,
+            f"Qoder auth code={code_s}: {msg_s[:300]}",
+        )
+    return 502, f"Qoder error code={code_s}: {msg_s[:300]}"
+
+
+def _qoder_error_sse_chunk(status: int, detail: str) -> str:
+    """Build OpenAI-style SSE chunk embedding a [qoder error ...] marker."""
+    now = int(__import__("time").time())
+    error_chunk = json.dumps({
+        "id": f"qoder-error-{now}",
+        "object": "chat.completion.chunk",
+        "created": now,
+        "model": "qoder",
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "content": (
+                    f"\n[qoder error {status}: "
+                    f"{_truncate(detail, 200)}]"
+                ),
+            },
+            "finish_reason": "stop",
+        }],
+    })
+    return f"data: {error_chunk}"
+
+
 def unwrap_qoder_sse_line(line: str) -> str | None:
     """Unwrap a single Qoder SSE line to OpenAI format.
 
     Qoder may send:
       - New: data: {"headers":{...},"body":"..."}
       - Old: data: {"statusCodeValue":200,"body":"..."}
+      - Business error: data: {"code":"112","message":"..."}
       - Direct: data: {"choices":[...],...}
 
     Returns:
@@ -216,43 +284,55 @@ def unwrap_qoder_sse_line(line: str) -> str | None:
     except json.JSONDecodeError:
         return None
 
-    # New format: {"headers":{...},"body":"..."}
-    if "headers" in envelope and "body" in envelope:
-        inner = envelope.get("body", "")
+    if not isinstance(envelope, dict):
+        return None
+
+    # Business error envelope (quota/auth) — before body formats
+    biz = qoder_envelope_http_error(envelope)
+    if biz is not None:
+        status, detail = biz
+        return _qoder_error_sse_chunk(status, detail)
+
+    # Direct OpenAI chunk (no envelope wrapper)
+    if "choices" in envelope or (
+        "error" in envelope and "body" not in envelope
+    ):
+        sanitized = data.replace("\r\n", "").replace("\n", "")
+        return f"data: {sanitized}"
+
+    def _from_inner(inner: str) -> str | None:
         if not inner:
             return None
         if inner == "[DONE]":
             return "data: [DONE]"
+        # Inner may itself be a business-error JSON object
+        try:
+            inner_obj = json.loads(inner)
+        except json.JSONDecodeError:
+            inner_obj = None
+        if isinstance(inner_obj, dict):
+            inner_biz = qoder_envelope_http_error(inner_obj)
+            if inner_biz is not None:
+                st, detail = inner_biz
+                return _qoder_error_sse_chunk(st, detail)
         sanitized = inner.replace("\r\n", "").replace("\n", "")
         return f"data: {sanitized}"
+
+    # New format: {"headers":{...},"body":"..."}
+    if "headers" in envelope and "body" in envelope:
+        return _from_inner(envelope.get("body", "") or "")
 
     # Old format: {"statusCodeValue":200,"body":"..."}
     status = envelope.get("statusCodeValue", 200)
     inner = envelope.get("body", "")
 
     if status != 200:
-        error_chunk = json.dumps({
-            "id": f"qoder-error-{int(__import__('time').time())}",
-            "object": "chat.completion.chunk",
-            "created": int(__import__("time").time()),
-            "model": "qoder",
-            "choices": [{
-                "index": 0,
-                "delta": {"content": f"\n[qoder error {status}: {_truncate(inner, 200)}]"},
-                "finish_reason": "stop",
-            }],
-        })
-        return f"data: {error_chunk}"
+        return _qoder_error_sse_chunk(
+            int(status) if str(status).isdigit() else 502,
+            str(inner),
+        )
 
-    if not inner:
-        return None
-
-    if inner == "[DONE]":
-        return "data: [DONE]"
-
-    # Sanitize inner - remove embedded newlines
-    sanitized = inner.replace("\r\n", "").replace("\n", "")
-    return f"data: {sanitized}"
+    return _from_inner(inner if isinstance(inner, str) else "")
 
 
 def unwrap_qoder_response(response_text: str) -> dict[str, Any]:
@@ -363,6 +443,17 @@ def unwrap_qoder_response(response_text: str) -> dict[str, Any]:
             "error": {
                 "message": f"Failed to parse Qoder response: {response_text[:200]}",
                 "type": "qoder_error",
+            }
+        }
+
+    biz = qoder_envelope_http_error(envelope)
+    if biz is not None:
+        status, detail = biz
+        return {
+            "error": {
+                "message": detail,
+                "type": "qoder_error",
+                "code": status,
             }
         }
 

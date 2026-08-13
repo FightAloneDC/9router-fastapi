@@ -136,10 +136,37 @@ async def proxy_for_connection(
     )
 
 
+# Dead / blackholed hosts must fail fast so fallback can pick
+# the next connection. Read/write stay long for generation.
+CONNECT_TIMEOUT_SECS = 10.0
+
+
+def normalize_upstream_timeout(
+    timeout: float | httpx.Timeout,
+) -> httpx.Timeout:
+    """Keep a long read timeout, but cap TCP connect.
+
+    Passing a bare float to httpx applies that value to connect as
+    well — a dead grok/qoder node then blocks fallback for minutes.
+    """
+    if isinstance(timeout, httpx.Timeout):
+        return timeout
+    total = float(timeout)
+    connect = CONNECT_TIMEOUT_SECS
+    if total > 0:
+        connect = min(CONNECT_TIMEOUT_SECS, total)
+    return httpx.Timeout(
+        connect=connect,
+        read=total,
+        write=total,
+        pool=connect,
+    )
+
+
 def create_upstream_client(
     *,
     proxy: str | None = None,
-    timeout: float = 30.0,
+    timeout: float | httpx.Timeout = 30.0,
     **kwargs: Any,
 ) -> httpx.AsyncClient:
     """Create httpx.AsyncClient with optional outbound proxy."""
@@ -148,7 +175,7 @@ def create_upstream_client(
         effective_proxy = _outbound_proxy_var.get()
 
     client_kwargs = dict(kwargs)
-    client_kwargs["timeout"] = timeout
+    client_kwargs["timeout"] = normalize_upstream_timeout(timeout)
     if effective_proxy:
         client_kwargs["proxy"] = effective_proxy
     return httpx.AsyncClient(**client_kwargs)

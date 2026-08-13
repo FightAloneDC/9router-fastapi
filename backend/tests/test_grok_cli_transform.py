@@ -9,6 +9,25 @@ from app.providers.grok_cli.stream import ResponsesUpstreamTranslator
 # ── Request translation: Chat Completions -> Responses API ───────────────
 
 
+def test_claude_messages_body_maps_max_tokens() -> None:
+    from app.services.message_translator import (
+        claude_to_openai_request,
+    )
+
+    claude_body = {
+        "model": "gcli/grok-4.5",
+        "max_tokens": 32000,
+        "messages": [{"role": "user", "content": "P1_OK"}],
+    }
+    chat = claude_to_openai_request(claude_body)
+    result, _ = transform.build_grok_cli_request(
+        "grok-4.5", chat, {},
+    )
+    assert result["max_output_tokens"] == 32000
+    assert "max_tokens" not in result
+    assert "messages" not in result
+
+
 def test_chat_to_responses_request_basic_messages():
     body = {
         "model": "grok-build",
@@ -103,6 +122,23 @@ def test_build_request_forces_stream_and_store_false():
     assert "effort" not in result["reasoning"]
     assert result["reasoning"]["summary"] == "concise"
     assert "reasoning.encrypted_content" in result["include"]
+    assert "max_tokens" not in result
+
+
+def test_build_request_maps_max_tokens_on_responses_body() -> None:
+    body = {
+        "input": [{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hi"}],
+        }],
+        "max_tokens": 256,
+    }
+    result, _ = transform.build_grok_cli_request(
+        "grok-4.5", body, {},
+    )
+    assert result["max_output_tokens"] == 256
+    assert "max_tokens" not in result
 
 
 def test_build_request_virtual_model_maps_effort():

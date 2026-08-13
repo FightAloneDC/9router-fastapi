@@ -38,6 +38,7 @@ from .shared import (
     _should_fallback_on_error,
     _maybe_refresh_on_auth_error,
     _mark_conn_failed,
+    _build_provider_request,
 )
 
 router = APIRouter()
@@ -134,21 +135,55 @@ async def messages_endpoint(
 
         # Determine if the upstream is Claude-format or OpenAI-format
         is_claude_upstream: bool = False
+        is_responses_upstream: bool = False
         try:
             from app.providers.provider import Provider
             p = Provider(target.provider)
             c = p.config()
             is_claude_upstream = c.FORMAT == "claude"
+            is_responses_upstream = (
+                c.FORMAT == "openai-responses"
+            )
         except (ValueError, ModuleNotFoundError):
             pass
 
         # Prepare the request body for the upstream
+        raw_body: bytes | None = None
         if is_claude_upstream:
             forward_body: dict = {**body, "model": target.model}
         else:
             forward_body = claude_to_openai_request(body)
             forward_body["model"] = target.model
             forward_body["stream"] = is_stream
+
+        if conn and not is_claude_upstream:
+            conn_data = json.loads(conn.data) if conn.data else {}
+            try:
+                raw_body, signed_headers = (
+                    await _build_provider_request(
+                        target, forward_body, conn_data,
+                    )
+                )
+                if signed_headers:
+                    target.headers = signed_headers
+            except Exception as e:
+                conn_id = target.connection_id
+                if (
+                    conn_id
+                    and conn_id not in refreshed_ids
+                    and await _maybe_refresh_on_auth_error(
+                        target, db,
+                    )
+                ):
+                    refreshed_ids.add(conn_id)
+                    continue
+                last_error_detail = (
+                    f"Provider request build failed: {str(e)}"
+                )
+                last_error_status = 500
+                if conn_id:
+                    exclude_ids.add(conn_id)
+                continue
 
         try:
             request_start_time: float = time.time()
@@ -157,23 +192,45 @@ async def messages_endpoint(
                 resp = await _messages_stream_response(
                     target, forward_body, request_id,
                     is_claude_upstream=is_claude_upstream,
+                    is_responses_upstream=is_responses_upstream,
                     model_str=model_str,
                     db=db, provider=target.provider, model=target.model,
                     connection_id=target.connection_id,
                     request_body=body, request_start_time=request_start_time,
                     active_request_id=active_request_id,
                     proxy=proxy,
+                    raw_body=raw_body,
                 )
                 resp_data: dict = {}
+            elif is_responses_upstream:
+                from .chat import _non_stream_grok_responses
+                _, resp_data = await _non_stream_grok_responses(
+                    target, forward_body, request_id,
+                    raw_body=raw_body, db=db, proxy=proxy,
+                )
+                claude_resp = openai_to_claude_response(
+                    resp_data,
+                    model=model_str,
+                    request_id=request_id,
+                )
+                resp = JSONResponse(
+                    status_code=200,
+                    content=claude_resp,
+                    headers={"X-Request-Id": request_id},
+                )
             else:
+                send_kwargs: dict = {"headers": target.headers}
+                if raw_body is not None:
+                    send_kwargs["content"] = raw_body
+                else:
+                    send_kwargs["json"] = forward_body
                 async with create_upstream_client(
                     proxy=proxy,
                     timeout=300.0,
                 ) as client:
                     http_resp = await client.post(
                         target.url,
-                        json=forward_body,
-                        headers=target.headers,
+                        **send_kwargs,
                     )
                     http_resp.raise_for_status()
                     resp_data = http_resp.json()
@@ -272,12 +329,14 @@ async def messages_endpoint(
                 last_error_detail, model_str, exclude_ids,
             )
             continue
-        except httpx.ConnectError as e:
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             track_request_end(active_request_id, status="error")
             last_error_detail = str(e)
             last_error_status = 503
-            if target.connection_id:
-                exclude_ids.add(target.connection_id)
+            await _mark_conn_failed(
+                db, target.connection_id, 503,
+                last_error_detail, model_str, exclude_ids,
+            )
             continue
         except Exception as e:
             track_request_end(active_request_id, status="error")
@@ -304,6 +363,7 @@ async def _messages_stream_response(
     request_id: str,
     *,
     is_claude_upstream: bool,
+    is_responses_upstream: bool = False,
     model_str: str,
     db: AsyncSession | None = None,
     provider: str | None = None,
@@ -313,6 +373,7 @@ async def _messages_stream_response(
     request_start_time: float | None = None,
     active_request_id: str | None = None,
     proxy: str | None = None,
+    raw_body: bytes | None = None,
 ) -> StreamingResponse:
     """Stream response for /v1/messages endpoint.
 
@@ -322,6 +383,11 @@ async def _messages_stream_response(
 
     # Shared mutable dict — generators populate it as stream is consumed
     usage_ref: dict[str, dict] = {"usage": {}}
+    send_kwargs: dict = {"headers": target.headers}
+    if raw_body is not None:
+        send_kwargs["content"] = raw_body
+    else:
+        send_kwargs["json"] = body
 
     async def generate_claude_passthrough():  # type: ignore[no-untyped-def]
         """Forward Claude SSE bytes directly."""
@@ -331,7 +397,7 @@ async def _messages_stream_response(
         ) as client:
             try:
                 async with client.stream(
-                    "POST", target.url, json=body, headers=target.headers,
+                    "POST", target.url, **send_kwargs,
                 ) as resp:
                     resp.raise_for_status()
                     async for chunk in resp.aiter_bytes():
@@ -368,7 +434,7 @@ async def _messages_stream_response(
         ) as client:
             try:
                 async with client.stream(
-                    "POST", target.url, json=body, headers=target.headers,
+                    "POST", target.url, **send_kwargs,
                 ) as resp:
                     resp.raise_for_status()
                     buffer = ""
@@ -412,8 +478,73 @@ async def _messages_stream_response(
                 })
                 yield f"event: error\ndata: {error_data}\n\n".encode()
 
+    async def generate_responses_to_claude():  # type: ignore[no-untyped-def]
+        """Responses SSE -> Chat SSE -> Claude SSE."""
+        from app.providers.grok_cli.stream import (
+            ResponsesUpstreamTranslator,
+        )
+
+        grok_tr = ResponsesUpstreamTranslator(
+            model=model_str,
+            request_id=f"chatcmpl-{request_id}",
+        )
+        claude_tr = ClaudeStreamTranslator(
+            model=model_str, request_id=request_id,
+        )
+        async with create_upstream_client(
+            proxy=proxy,
+            timeout=300.0,
+        ) as client:
+            try:
+                async with client.stream(
+                    "POST", target.url, **send_kwargs,
+                ) as resp:
+                    resp.raise_for_status()
+                    buffer = b""
+                    async for chunk in resp.aiter_bytes():
+                        buffer += chunk
+                        while b"\n" in buffer:
+                            line_b, buffer = buffer.split(b"\n", 1)
+                            line = line_b.decode(
+                                "utf-8", errors="ignore",
+                            )
+                            for chat_sse in grok_tr.feed(line):
+                                for ev in claude_tr.feed(
+                                    chat_sse.strip(),
+                                ):
+                                    yield ev.encode()
+                    for ev in claude_tr._finish():
+                        yield ev.encode()
+            except httpx.HTTPStatusError as e:
+                error_data = json.dumps({
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": (
+                            f"Upstream error: "
+                            f"{e.response.status_code}"
+                        ),
+                    },
+                })
+                yield (
+                    f"event: error\ndata: {error_data}\n\n".encode()
+                )
+            except Exception as e:
+                error_data = json.dumps({
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": f"Proxy error: {str(e)}",
+                    },
+                })
+                yield (
+                    f"event: error\ndata: {error_data}\n\n".encode()
+                )
+
     if is_claude_upstream:
         generator = generate_claude_passthrough()
+    elif is_responses_upstream:
+        generator = generate_responses_to_claude()
     else:
         generator = generate_openai_to_claude()
 

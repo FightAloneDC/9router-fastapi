@@ -187,64 +187,11 @@ async def _build_provider_request(
 def _unwrap_qoder_sse_line(line: str) -> str | None:
     """Unwrap a single Qoder SSE line to OpenAI format.
 
-    Qoder may send:
-      - New: data: {"headers":{...},"body":"..."}
-      - Old: data: {"statusCodeValue":200,"body":"..."}
-      - Direct: data: {"choices":[...],...}
-
-    Returns:
-        Unwrapped line or None if should be skipped
+    Delegates to providers/qoder/transform (PS rule).
     """
-    trimmed = line.strip()
-    if not trimmed or not trimmed.startswith("data:"):
-        return None
+    from app.providers.qoder.transform import unwrap_qoder_sse_line
 
-    data = trimmed[5:].strip()
-    if data == "[DONE]":
-        return "data: [DONE]"
-
-    try:
-        envelope = json.loads(data)
-    except json.JSONDecodeError:
-        return None
-
-    # New format: {"headers":{...},"body":"..."}
-    if "headers" in envelope and "body" in envelope:
-        inner = envelope.get("body", "")
-        if not inner:
-            return None
-        if inner == "[DONE]":
-            return "data: [DONE]"
-        sanitized = inner.replace("\r\n", "").replace("\n", "")
-        return f"data: {sanitized}"
-
-    # Old format: {"statusCodeValue":200,"body":"..."}
-    status = envelope.get("statusCodeValue", 200)
-    inner = envelope.get("body", "")
-
-    if status != 200:
-        error_chunk = json.dumps({
-            "id": f"qoder-error-{int(time.time())}",
-            "object": "chat.completion.chunk",
-            "created": int(time.time()),
-            "model": "qoder",
-            "choices": [{
-                "index": 0,
-                "delta": {"content": f"\n[qoder error {status}: {inner[:200]}]"},
-                "finish_reason": "stop",
-            }],
-        })
-        return f"data: {error_chunk}"
-
-    if not inner:
-        return None
-
-    if inner == "[DONE]":
-        return "data: [DONE]"
-
-    # Sanitize inner - remove embedded newlines
-    sanitized = inner.replace("\r\n", "").replace("\n", "")
-    return f"data: {sanitized}"
+    return unwrap_qoder_sse_line(line)
 
 
 def _capture_qoder_usage(line: str, current: dict) -> dict:
@@ -266,6 +213,124 @@ def _capture_qoder_usage(line: str, current: dict) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # Generic stream / non-stream helpers (used by chat + messages + responses)
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+# Long-context SSE: generous write (large bodies), idle read cap,
+# and no keepalive reuse (burned chunked connections).
+_STREAM_TIMEOUT = httpx.Timeout(
+    connect=30.0,
+    read=120.0,
+    write=180.0,
+    pool=30.0,
+)
+_STREAM_LIMITS = httpx.Limits(
+    max_keepalive_connections=0,
+    max_connections=50,
+)
+_QODER_FIRST_EVENT_SECS = 60.0
+
+
+def _format_proxy_stream_error(
+    exc: BaseException,
+    *,
+    chunk_count: int = 0,
+    provider: str | None = None,
+    model: str | None = None,
+) -> str:
+    """Build a non-empty Proxy error message for SSE clients (e.g. Hermes).
+
+    httpx TimeoutException / some protocol errors often have empty ``str(e)``,
+    which Hermes surfaces as the opaque ``Proxy error:`` after retries.
+    """
+    detail = str(exc).strip() or repr(exc)
+    bits = [f"Proxy error: {type(exc).__name__}: {detail}"]
+    if provider or model:
+        bits.append(
+            f"upstream={provider or '?'}/{model or '?'} "
+            f"chunks={chunk_count}"
+        )
+    return " | ".join(bits)
+
+
+def _http_status_error(
+    status_code: int,
+    detail: str,
+    request: httpx.Request | None = None,
+) -> httpx.HTTPStatusError:
+    """Build HTTPStatusError with a synthetic response for fallback."""
+    req = request or httpx.Request("POST", "https://invalid.local")
+    resp = httpx.Response(status_code, text=detail, request=req)
+    return httpx.HTTPStatusError(
+        f"HTTP {status_code}: {detail}",
+        request=req,
+        response=resp,
+    )
+
+
+def _qoder_error_from_unwrapped(
+    unwrapped: str,
+) -> tuple[int, str] | None:
+    """Parse ``[qoder error N: ...]`` marker from an unwrapped SSE line."""
+    import re
+
+    if not unwrapped.startswith("data: "):
+        return None
+    try:
+        json_data = json.loads(unwrapped[6:])
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    choices = json_data.get("choices") or []
+    if not choices or not isinstance(choices[0], dict):
+        return None
+    content = (choices[0].get("delta") or {}).get("content", "")
+    if not isinstance(content, str):
+        return None
+    # Marker is often prefixed with a leading newline
+    content_l = content.lstrip()
+    if not content_l.startswith("[qoder error"):
+        return None
+    match = re.search(
+        r"\[qoder error (\d+): (.+)\]",
+        content_l,
+    )
+    if not match:
+        return None
+    return int(match.group(1)), match.group(2)[:500]
+
+
+def _parse_qoder_line_business_error(
+    line: str,
+) -> tuple[int, str] | None:
+    """Detect Qoder business-error envelope on one SSE/raw line."""
+    from app.providers.qoder.transform import (
+        qoder_envelope_http_error,
+    )
+
+    stripped = line.strip()
+    if not stripped:
+        return None
+    payload = stripped
+    if payload.startswith("data:"):
+        payload = payload[5:].strip()
+    try:
+        env = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(env, dict):
+        return None
+    direct = qoder_envelope_http_error(env)
+    if direct is not None:
+        return direct
+    # Business error nested in statusCodeValue/headers body
+    inner = env.get("body")
+    if isinstance(inner, str) and inner and inner != "[DONE]":
+        try:
+            inner_obj = json.loads(inner)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(inner_obj, dict):
+            return qoder_envelope_http_error(inner_obj)
+    return None
 
 
 async def _stream_response(
@@ -327,6 +392,160 @@ async def _stream_response(
                     request=check_resp,
                     response=check_resp,
                 )
+
+    # Qoder peek: read first SSE event on the SAME signed request so
+    # quota/auth envelopes (code 112, etc.) raise here for chat.py
+    # fallback — instead of a 60s+ IncompleteRead mid-stream.
+    qoder_prime: dict = {
+        "client": None,
+        "response": None,
+        "buf": b"",
+        "lines": [],
+        "request": None,
+        "byte_iter": None,
+    }
+    if is_qoder:
+        peek_client = create_upstream_client(
+            proxy=proxy,
+            timeout=_STREAM_TIMEOUT,
+            limits=_STREAM_LIMITS,
+        )
+        peek_req = peek_client.build_request(
+            "POST", target.url, **send_kwargs,
+        )
+        try:
+            peek_resp = await peek_client.send(peek_req, stream=True)
+        except Exception:
+            await peek_client.aclose()
+            raise
+
+        buf = b""
+        primed: list[str] = []
+        # ONE aiter for peek + continue (calling aiter_bytes twice
+        # raises StreamConsumed).
+        byte_iter = peek_resp.aiter_bytes().__aiter__()
+        try:
+            await observe_upstream_response(
+                db, provider, connection_id, peek_resp.headers,
+            )
+            if peek_resp.status_code >= 400:
+                body_preview = (await peek_resp.aread())[:500]
+                detail = body_preview.decode(
+                    "utf-8", errors="ignore",
+                )
+                raise _http_status_error(
+                    peek_resp.status_code, detail, peek_req,
+                )
+
+            deadline = time.monotonic() + _QODER_FIRST_EVENT_SECS
+            stream_ended = False
+
+            def _ingest_line(line: str) -> bool:
+                """Return True when a non-error content line is primed."""
+                if not line.strip():
+                    return False
+                biz = _parse_qoder_line_business_error(line)
+                if biz is not None:
+                    st, detail = biz
+                    raise _http_status_error(st, detail, peek_req)
+                unwrapped = _unwrap_qoder_sse_line(line)
+                if not unwrapped:
+                    return False
+                marked = _qoder_error_from_unwrapped(unwrapped)
+                if marked is not None:
+                    st, detail = marked
+                    raise _http_status_error(st, detail, peek_req)
+                primed.append(unwrapped)
+                return True
+
+            while not primed and not stream_ended:
+                if time.monotonic() > deadline:
+                    raise httpx.TimeoutException(
+                        "Qoder first-event timeout "
+                        f"({int(_QODER_FIRST_EVENT_SECS)}s)"
+                    )
+                try:
+                    chunk = await byte_iter.__anext__()
+                except StopAsyncIteration:
+                    stream_ended = True
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    line_b, buf = buf.split(b"\n", 1)
+                    line = line_b.decode("utf-8", errors="ignore")
+                    if _ingest_line(line):
+                        break
+
+            if not primed and buf.strip():
+                _ingest_line(buf.decode("utf-8", errors="ignore"))
+                buf = b""
+
+            if not primed:
+                raise _http_status_error(
+                    503,
+                    "Qoder closed stream before first "
+                    "SSE event (incomplete/empty)",
+                    peek_req,
+                )
+        except (
+            httpx.HTTPStatusError,
+            httpx.TimeoutException,
+        ):
+            await peek_resp.aclose()
+            await peek_client.aclose()
+            raise
+        except (
+            httpx.RemoteProtocolError,
+            httpx.ReadError,
+            httpx.StreamError,
+        ) as exc:
+            if buf.strip():
+                try:
+                    line = buf.decode("utf-8", errors="ignore")
+                    biz = _parse_qoder_line_business_error(line)
+                    if biz is not None:
+                        await peek_resp.aclose()
+                        await peek_client.aclose()
+                        st, detail = biz
+                        raise _http_status_error(
+                            st, detail, peek_req,
+                        ) from exc
+                    unwrapped = _unwrap_qoder_sse_line(line)
+                    marked = (
+                        _qoder_error_from_unwrapped(unwrapped)
+                        if unwrapped else None
+                    )
+                    if marked is not None:
+                        await peek_resp.aclose()
+                        await peek_client.aclose()
+                        st, detail = marked
+                        raise _http_status_error(
+                            st, detail, peek_req,
+                        ) from exc
+                except httpx.HTTPStatusError:
+                    raise
+            await peek_resp.aclose()
+            await peek_client.aclose()
+            raise _http_status_error(
+                503,
+                "Qoder protocol error before first SSE "
+                f"event: {type(exc).__name__}: "
+                f"{str(exc).strip() or repr(exc)}",
+                peek_req,
+            ) from exc
+        except Exception:
+            await peek_resp.aclose()
+            await peek_client.aclose()
+            raise
+
+        qoder_prime = {
+            "client": peek_client,
+            "response": peek_resp,
+            "buf": buf,
+            "lines": primed,
+            "request": peek_req,
+            "byte_iter": byte_iter,
+        }
 
     async def generate():  # type: ignore[no-untyped-def]
         usage: dict = {}
@@ -394,109 +613,202 @@ async def _stream_response(
             except Exception as e:
                 print(f"[STREAM SNIFF ERROR] {e}", flush=True)
 
-        try:
-            async with create_upstream_client(
-                proxy=proxy,
-                timeout=300.0,
-            ) as client:
+        async def _consume_qoder_resp(
+            resp: httpx.Response,
+            initial_buf: bytes,
+            primed_lines: list[str],
+            byte_iter=None,
+        ):
+            nonlocal chunk_count, usage
+            for unwrapped in primed_lines:
+                chunk_count += 1
+                marked = _qoder_error_from_unwrapped(unwrapped)
+                if marked is not None:
+                    st, detail = marked
+                    await _mark_upstream_stream_error(
+                        provider, connection_id, model, st, detail,
+                    )
+                    raise _http_status_error(
+                        st, detail, resp.request,
+                    )
+                _sniff_openai_sse_line(unwrapped)
+                yield f"{unwrapped}\n\n".encode()
+                usage = _capture_qoder_usage(unwrapped, usage)
+            qoder_buf = initial_buf
+            # Continue the SAME aiter from peek when provided.
+            if byte_iter is None:
+                byte_iter = resp.aiter_bytes().__aiter__()
+            while True:
                 try:
-                    async with client.stream(
-                        "POST",
-                        target.url,
-                        **send_kwargs,
-                    ) as resp:
-                        # PS hook: snapshot upstream rate-limit headers
-                        await observe_upstream_response(
-                            db, provider, connection_id, resp.headers,
+                    chunk = await byte_iter.__anext__()
+                except StopAsyncIteration:
+                    break
+                chunk_count += 1
+                qoder_buf += chunk
+                while b"\n" in qoder_buf:
+                    line_b, qoder_buf = qoder_buf.split(b"\n", 1)
+                    line = line_b.decode("utf-8", errors="ignore")
+                    biz = _parse_qoder_line_business_error(line)
+                    if biz is not None:
+                        st, detail = biz
+                        await _mark_upstream_stream_error(
+                            provider, connection_id, model,
+                            st, detail,
                         )
-                        # Qoder SSE lines may be split across read boundaries;
-                        # buffer bytes until a full line is available, or the
-                        # fragments are dropped and deltas are lost (corrupted
-                        # tool-call arguments / mangled text).
-                        qoder_buf = b""
-                        async for chunk in resp.aiter_bytes():
-                            chunk_count += 1
-                            if is_qoder:
-                                # Qoder sends wrapped SSE:
-                                # {"statusCodeValue":200,"body":"..."}
-                                qoder_buf += chunk
-                                while b"\n" in qoder_buf:
-                                    line_b, qoder_buf = qoder_buf.split(
-                                        b"\n", 1,
-                                    )
-                                    line = line_b.decode(
-                                        "utf-8", errors="ignore",
-                                    )
-                                    unwrapped = _unwrap_qoder_sse_line(line)
-                                    if unwrapped:
-                                        _sniff_openai_sse_line(unwrapped)
-                                        yield f"{unwrapped}\n\n".encode()
-                                        usage = _capture_qoder_usage(
-                                            unwrapped, usage,
-                                        )
-                                        # CHECK FOR QODER STREAMING ERRORS
-                                        try:
-                                            json_data = json.loads(
-                                                unwrapped[6:],
-                                            )
-                                            choices = (
-                                                json_data.get("choices") or []
-                                            )
-                                            if (
-                                                choices
-                                                and isinstance(choices[0], dict)
-                                            ):
-                                                delta = choices[0].get(
-                                                    "delta", {},
-                                                )
-                                                content = delta.get(
-                                                    "content", "",
-                                                )
-                                                if (
-                                                    isinstance(content, str)
-                                                    and content.startswith(
-                                                        "[qoder error"
-                                                    )
-                                                ):
-                                                    import re
-                                                    match = re.search(
-                                                        r"\[qoder error "
-                                                        r"(\d+): (.+)\]",
-                                                        content,
-                                                    )
-                                                    if match:
-                                                        status_code = int(
-                                                            match.group(1)
-                                                        )
-                                                        error_detail = (
-                                                            match.group(2)[:500]
-                                                        )
-                                                        await (
-                                                            _mark_upstream_stream_error(
-                                                                provider,
-                                                                connection_id,
-                                                                model,
-                                                                status_code,
-                                                                error_detail,
-                                                            )
-                                                        )
-                                                        raise httpx.HTTPStatusError(
-                                                            f"HTTP {status_code}: "
-                                                            f"{error_detail}",
-                                                            request=resp.request,
-                                                            response=resp,
-                                                        )
-                                        except (
-                                            json.JSONDecodeError,
-                                            IndexError,
-                                            KeyError,
-                                            ValueError,
-                                            AttributeError,
-                                        ):
-                                            pass
-                            else:
+                        raise _http_status_error(
+                            st, detail, resp.request,
+                        )
+                    unwrapped = _unwrap_qoder_sse_line(line)
+                    if not unwrapped:
+                        continue
+                    if unwrapped.strip() == "data: [DONE]":
+                        continue
+                    marked = _qoder_error_from_unwrapped(unwrapped)
+                    if marked is not None:
+                        st, detail = marked
+                        await _mark_upstream_stream_error(
+                            provider, connection_id, model,
+                            st, detail,
+                        )
+                        raise _http_status_error(
+                            st, detail, resp.request,
+                        )
+                    _sniff_openai_sse_line(unwrapped)
+                    yield f"{unwrapped}\n\n".encode()
+                    usage = _capture_qoder_usage(unwrapped, usage)
+            if qoder_buf.strip():
+                line = qoder_buf.decode("utf-8", errors="ignore")
+                biz = _parse_qoder_line_business_error(line)
+                if biz is not None:
+                    st, detail = biz
+                    await _mark_upstream_stream_error(
+                        provider, connection_id, model, st, detail,
+                    )
+                    raise _http_status_error(
+                        st, detail, resp.request,
+                    )
+                unwrapped = _unwrap_qoder_sse_line(line)
+                if unwrapped:
+                    marked = _qoder_error_from_unwrapped(unwrapped)
+                    if marked is not None:
+                        st, detail = marked
+                        await _mark_upstream_stream_error(
+                            provider, connection_id, model,
+                            st, detail,
+                        )
+                        raise _http_status_error(
+                            st, detail, resp.request,
+                        )
+                    _sniff_openai_sse_line(unwrapped)
+                    yield f"{unwrapped}\n\n".encode()
+                    usage = _capture_qoder_usage(unwrapped, usage)
+
+        try:
+            if is_qoder and qoder_prime.get("response") is not None:
+                peek_client = qoder_prime["client"]
+                peek_resp = qoder_prime["response"]
+                try:
+                    try:
+                        async for item in _consume_qoder_resp(
+                            peek_resp,
+                            qoder_prime.get("buf") or b"",
+                            list(qoder_prime.get("lines") or []),
+                            byte_iter=qoder_prime.get("byte_iter"),
+                        ):
+                            yield item
+                    except asyncio.CancelledError:
+                        end_status = "error"
+                        _flush_sniff({"ended": "cancelled"})
+                        raise
+                    except GeneratorExit:
+                        end_status = "error"
+                        _flush_sniff({"ended": "client_disconnect"})
+                        raise
+                    except Exception as e:
+                        end_status = "error"
+                        # No same-body reconnect: Qoder returns code 103
+                        # "Duplicate request" for resent COSY payloads.
+                        err_msg = _format_proxy_stream_error(
+                            e,
+                            chunk_count=chunk_count,
+                            provider=provider,
+                            model=model,
+                        )
+                        if isinstance(e, httpx.HTTPStatusError):
+                            err_msg = (
+                                f"Proxy error: HTTP "
+                                f"{e.response.status_code}: "
+                                f"{(e.response.text or '')[:400]}"
+                                f" | upstream={provider}/{model} "
+                                f"chunks={chunk_count}"
+                            )
+                            try:
+                                await _mark_upstream_stream_error(
+                                    provider,
+                                    connection_id,
+                                    model,
+                                    e.response.status_code,
+                                    (e.response.text or "")[:500],
+                                )
+                            except Exception:
+                                pass
+                        _flush_sniff({
+                            "ended": "error",
+                            "error": err_msg[:300],
+                        })
+                        print(
+                            f"[STREAM PROXY ERROR] {err_msg}",
+                            flush=True,
+                        )
+                        error_data = json.dumps({
+                            "error": {
+                                "message": err_msg,
+                                "type": "proxy_error",
+                            }
+                        })
+                        yield f"data: {error_data}\n\n".encode()
+                        yield b"data: [DONE]\n\n"
+                    else:
+                        _flush_sniff({"ended": "ok"})
+                        yield b"data: [DONE]\n\n"
+                finally:
+                    try:
+                        await peek_resp.aclose()
+                    except Exception:
+                        pass
+                    try:
+                        await peek_client.aclose()
+                    except Exception:
+                        pass
+            else:
+                async with create_upstream_client(
+                    proxy=proxy,
+                    timeout=_STREAM_TIMEOUT,
+                    limits=_STREAM_LIMITS,
+                ) as client:
+                    try:
+                        async with client.stream(
+                            "POST",
+                            target.url,
+                            **send_kwargs,
+                        ) as resp:
+                            await observe_upstream_response(
+                                db, provider, connection_id,
+                                resp.headers,
+                            )
+                            if resp.status_code >= 400:
+                                body_preview = (
+                                    await resp.aread()
+                                )[:500]
+                                raise httpx.HTTPStatusError(
+                                    f"HTTP {resp.status_code}: "
+                                    f"{body_preview.decode('utf-8', errors='ignore')}",
+                                    request=resp.request,
+                                    response=resp,
+                                )
+                            async for chunk in resp.aiter_bytes():
+                                chunk_count += 1
                                 yield chunk
-                                # Parse SSE to capture usage from last chunk
                                 try:
                                     text = chunk.decode(
                                         "utf-8", errors="ignore",
@@ -505,7 +817,8 @@ async def _stream_response(
                                         _sniff_openai_sse_line(line)
                                         if (
                                             line.startswith("data: ")
-                                            and line.strip() != "data: [DONE]"
+                                            and line.strip()
+                                            != "data: [DONE]"
                                         ):
                                             data = json.loads(line[6:])
                                             if (
@@ -518,43 +831,41 @@ async def _stream_response(
                                     UnicodeDecodeError,
                                 ):
                                     pass
-                        # Flush a final Qoder line without trailing newline
-                        if is_qoder and qoder_buf:
-                            line = qoder_buf.decode(
-                                "utf-8", errors="ignore",
-                            )
-                            unwrapped = _unwrap_qoder_sse_line(line)
-                            if unwrapped:
-                                _sniff_openai_sse_line(unwrapped)
-                                yield f"{unwrapped}\n\n".encode()
-                                usage = _capture_qoder_usage(
-                                    unwrapped, usage,
-                                )
-                except asyncio.CancelledError:
-                    end_status = "error"
-                    _flush_sniff({"ended": "cancelled"})
-                    raise
-                except GeneratorExit:
-                    # Client disconnected mid-stream. Do not yield [DONE]:
-                    # yielding during GeneratorExit raises
-                    # "generator ignored GeneratorExit" and spams logs.
-                    end_status = "error"
-                    _flush_sniff({"ended": "client_disconnect"})
-                    raise
-                except Exception as e:
-                    end_status = "error"
-                    _flush_sniff({"ended": "error", "error": str(e)[:300]})
-                    error_data = json.dumps({
-                        "error": {
-                            "message": f"Proxy error: {str(e)}",
-                            "type": "proxy_error",
-                        }
-                    })
-                    yield f"data: {error_data}\n\n".encode()
-                    yield b"data: [DONE]\n\n"
-                else:
-                    _flush_sniff({"ended": "ok"})
-                    yield b"data: [DONE]\n\n"
+                    except asyncio.CancelledError:
+                        end_status = "error"
+                        _flush_sniff({"ended": "cancelled"})
+                        raise
+                    except GeneratorExit:
+                        end_status = "error"
+                        _flush_sniff({"ended": "client_disconnect"})
+                        raise
+                    except Exception as e:
+                        end_status = "error"
+                        err_msg = _format_proxy_stream_error(
+                            e,
+                            chunk_count=chunk_count,
+                            provider=provider,
+                            model=model,
+                        )
+                        _flush_sniff({
+                            "ended": "error",
+                            "error": err_msg[:300],
+                        })
+                        print(
+                            f"[STREAM PROXY ERROR] {err_msg}",
+                            flush=True,
+                        )
+                        error_data = json.dumps({
+                            "error": {
+                                "message": err_msg,
+                                "type": "proxy_error",
+                            }
+                        })
+                        yield f"data: {error_data}\n\n".encode()
+                        yield b"data: [DONE]\n\n"
+                    else:
+                        _flush_sniff({"ended": "ok"})
+                        yield b"data: [DONE]\n\n"
 
             # Save usage tracking AFTER stream is consumed
             if (

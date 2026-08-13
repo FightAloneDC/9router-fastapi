@@ -269,6 +269,8 @@ ERROR_RULES = [
     {"text": "rate limit", "backoff": True},
     {"text": "too many requests", "backoff": True},
     {"text": "quota exceeded", "backoff": True},
+    {"text": "pricingurl", "backoff": True},
+    {"text": "qoder quota/pricing", "backoff": True},
     {"text": "capacity", "backoff": True},
     {"text": "overloaded", "backoff": True},
     # Status-based (fallback when text doesn't match)
@@ -492,27 +494,41 @@ def select_connection_for_provider(
     """Select ONE connection for a provider based on strategy.
 
     Strategies:
-    - fill-first: priority highest (default)
-    - round-robin: rotate with random jitter (anti-ban)
-    - random: random selection each request
+    - fill-first: healthy first, then priority
+    - round-robin: rotate among the healthiest available
+    - random: random among the healthiest available
     """
-    available = []
+    from app.services.connection_health import (
+        health_rank,
+        parse_connection_data,
+    )
+
+    available: list[tuple[object, dict]] = []
     for c in connections:
         cid = str(c.id)
         if exclude_ids and cid in exclude_ids:
             continue
-        conn_data = json.loads(c.data) if c.data else {}
+        conn_data = parse_connection_data(c)
         if is_rate_limited(conn_data):
             continue
         if model and is_model_lock_active(conn_data, model):
             continue
-        available.append(c)
+        available.append((c, conn_data))
 
     if not available:
         return None
 
-    # Sort by priority for fill-first fallback
-    available.sort(key=lambda c: c.priority or 999)
+    available.sort(
+        key=lambda item: (
+            health_rank(item[1]),
+            item[0].priority or 999,
+        )
+    )
+    best_rank = health_rank(available[0][1])
+    pool = [
+        c for c, data in available
+        if health_rank(data) == best_rank
+    ]
 
     if strategy == "round-robin":
         state = get_connection_rotation(provider_id)
@@ -521,17 +537,16 @@ def select_connection_for_provider(
             state["count"] += 1
         else:
             state["count"] = 0
-            state["index"] = random.randint(0, len(available) - 1)
+            state["index"] = random.randint(0, len(pool) - 1)
 
-        state["index"] = state["index"] % len(available)
+        state["index"] = state["index"] % len(pool)
         _connection_rotation[provider_id] = state
-        return available[state["index"]]
+        return pool[state["index"]]
 
-    elif strategy == "random":
-        return random.choice(available)
+    if strategy == "random":
+        return random.choice(pool)
 
-    else:  # fill-first
-        return available[0]
+    return pool[0]
 
 
 async def get_provider_strategy(db: AsyncSession, provider_id: str) -> tuple[str, int]:
@@ -700,6 +715,7 @@ async def _resolve_single_model(
     # Match by registered model id only. Do NOT fall back to "first
     # active connection" — that misroutes combo leftovers (e.g. grok-4.5
     # onto alims-intl / voyage / nvidia) and poisons modelLock_*.
+    matches: list = []
     for conn in connections:
         cid = str(conn.id)
         if exclude_ids and cid in exclude_ids:
@@ -709,6 +725,27 @@ async def _resolve_single_model(
             data.get("models", []), conn.provider, model,
         ):
             continue
+        matches.append(conn)
+
+    from app.services.connection_health import (
+        health_rank,
+        parse_connection_data,
+    )
+    ranked: list = []
+    for conn in matches:
+        data = parse_connection_data(conn)
+        if is_rate_limited(data):
+            continue
+        if is_model_lock_active(data, model):
+            continue
+        ranked.append(conn)
+    ranked.sort(key=lambda c: (
+        health_rank(parse_connection_data(c)),
+        c.priority or 999,
+    ))
+
+    for conn in ranked:
+        data = json.loads(conn.data) if conn.data else {}
         conn_api_key = data.get("apiKey", "") or data.get(
             "accessToken", "",
         )

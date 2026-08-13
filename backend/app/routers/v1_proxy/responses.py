@@ -283,12 +283,14 @@ async def responses_endpoint(
                 last_error_detail, model, exclude_ids,
             )
             continue
-        except httpx.ConnectError as e:
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             track_request_end(active_request_id, status="error")
             last_error_detail = str(e)
             last_error_status = 503
-            if target.connection_id:
-                exclude_ids.add(target.connection_id)
+            await _mark_conn_failed(
+                db, target.connection_id, 503,
+                last_error_detail, model, exclude_ids,
+            )
             continue
         except Exception as e:
             track_request_end(active_request_id, status="error")

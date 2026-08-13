@@ -38,7 +38,14 @@ class AlimsIntlHandler(BaseProviderHandler):
             for message in messages
         ]
 
-        return {**headers}, {**body, "messages": normalized_messages}
+        cleaned = {**body, "messages": normalized_messages}
+        cleaned.pop("think", None)
+        cleaned.pop("thinking", None)
+        effort = cleaned.get("reasoning_effort")
+        if effort not in ("low", "medium", "high", "xhigh", "max"):
+            cleaned.pop("reasoning_effort", None)
+            cleaned.pop("reasoning", None)
+        return {**headers}, cleaned
 
     async def execute_rerank(
         self,

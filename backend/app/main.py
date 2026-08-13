@@ -33,19 +33,25 @@ from app.routers import usage_stream as usage_stream_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: startup / shutdown hooks."""
-    # Start background token refresh task
+    # Start background token refresh + connection health
+    from app.services.connection_health import (
+        connection_health_loop,
+    )
     from app.services.token_refresh import token_refresh_loop
 
     refresh_task = asyncio.create_task(token_refresh_loop())
+    health_task = asyncio.create_task(connection_health_loop())
 
     yield
 
-    # Shutdown: cancel token refresh and dispose engine
+    # Shutdown: cancel background tasks and dispose engine
     refresh_task.cancel()
-    try:
-        await refresh_task
-    except asyncio.CancelledError:
-        pass
+    health_task.cancel()
+    for task in (refresh_task, health_task):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     from app.database import engine
 

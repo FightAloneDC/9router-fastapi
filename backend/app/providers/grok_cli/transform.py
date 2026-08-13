@@ -586,6 +586,12 @@ def build_grok_cli_request(
             include.append("reasoning.encrypted_content")
         result["include"] = include
 
+    if (
+        result.get("max_tokens")
+        and "max_output_tokens" not in result
+    ):
+        result["max_output_tokens"] = result["max_tokens"]
+
     # Drop Chat Completions leftovers the Responses API rejects
     for key in _CHAT_LEFTOVERS:
         result.pop(key, None)

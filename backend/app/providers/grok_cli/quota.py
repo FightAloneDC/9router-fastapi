@@ -58,6 +58,14 @@ from typing import Any
 
 from sqlalchemy import func, select
 
+from app.services.connection_health import (
+    COOLDOWN as COOLDOWN,
+    DEAD as DEAD,
+    EXHAUSTED as EXHAUSTED,
+    HEALTHY as HEALTHY,
+    RATE_LIMITED as RATE_LIMITED,
+    classify_health as classify_health,
+)
 from app.services.quota.base import (
     BaseUsageHandler,
     QuotaItem,
@@ -87,20 +95,6 @@ _TIER_PLANS = {
     6: "SuperGrok Lite",
 }
 
-# Farm resort-contract keywords marking quota exhaustion
-_EXHAUST_KEYWORDS = (
-    "spending", "balance", "exhausted", "quota",
-)
-_DEAD_KEYWORDS = ("invalid_grant", "revoked")
-
-# Health states
-HEALTHY = "healthy"
-RATE_LIMITED = "rate_limited"
-EXHAUSTED = "exhausted"
-DEAD = "dead"
-COOLDOWN = "cooldown"
-
-
 def _plan_from_access_token(access_token: str) -> str:
     """Display-only plan from the JWT tier claim."""
     try:
@@ -112,41 +106,6 @@ def _plan_from_access_token(access_token: str) -> str:
         return _TIER_PLANS.get(payload.get("tier"), "")
     except Exception:
         return ""
-
-
-def classify_health(data: dict) -> tuple[str, str | None]:
-    """Classify connection health from recorded error state.
-
-    Mirrors grok-farm-modular cli/nine_router/health.py tiers.
-    Returns (status, message).
-    """
-    error_code = str(data.get("errorCode") or "")
-    last_error = str(data.get("lastError") or "").lower()
-
-    if error_code == "401" or any(
-        kw in last_error for kw in _DEAD_KEYWORDS
-    ):
-        return DEAD, (
-            "Token expired or revoked — re-authorize the "
-            "connection."
-        )
-    if error_code in ("402", "403") or any(
-        kw in last_error for kw in _EXHAUST_KEYWORDS
-    ):
-        return EXHAUSTED, (
-            "Upstream reports no remaining quota "
-            "(spending limit)."
-        )
-    if error_code == "429":
-        return RATE_LIMITED, (
-            "Rate limited by upstream — in cooldown."
-        )
-    if error_code or data.get("testStatus") == "unavailable":
-        return COOLDOWN, (
-            "In cooldown after an upstream error "
-            f"(HTTP {error_code or 'unknown'})."
-        )
-    return HEALTHY, None
 
 
 def _today_utc_midnight() -> datetime:
