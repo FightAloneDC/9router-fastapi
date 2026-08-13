@@ -13,6 +13,7 @@ from typing import Any
 
 HOME = Path.home()
 DEFAULT_BASE_URL = "http://localhost:8013/v1"
+DEFAULT_OUT_DIR = Path(".scratch/farm")
 PROVIDER_ID = "fastapi-9router"
 PROVIDER_NAME = "FastAPI 9Router"
 KEY_ENV = "HERMES_CUSTOM_LOCALHOST_8013_API_KEY"

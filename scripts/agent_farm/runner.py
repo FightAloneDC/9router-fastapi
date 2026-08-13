@@ -17,6 +17,7 @@ from .agents import list_agents, runnable_agents
 from .agents._base import AgentPlugin
 from .common import (
     DEFAULT_BASE_URL,
+    DEFAULT_OUT_DIR,
     DEFAULT_PROMPTS,
     KEY_ENV,
     JobResult,
@@ -297,7 +298,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--out-dir",
         type=Path,
-        default=Path("tests/agent_farm_runs"),
+        default=DEFAULT_OUT_DIR,
     )
     p.add_argument("--agents", default="")
     p.add_argument(

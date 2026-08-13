@@ -12,6 +12,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from agent_farm.common import (  # noqa: E402
+    DEFAULT_OUT_DIR,
     KEY_ENV,
     classify_error,
     farm_models,
@@ -94,6 +95,10 @@ def test_classify_error_and_retryable() -> None:
     assert classify_error("boom", 1) == "exit"
     assert is_retryable("Rate limit exceeded")
     assert not is_retryable("directory not found")
+
+
+def test_farm_output_stays_under_scratch() -> None:
+    assert DEFAULT_OUT_DIR == Path(".scratch/farm")
 
 
 def test_strip_v1() -> None:

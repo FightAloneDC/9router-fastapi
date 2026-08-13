@@ -56,7 +56,7 @@ python3 scripts/agent_farm_chat_test.py --probe --max-workers 2
 
 # Full farm (180s per turn by default)
 python3 scripts/agent_farm_chat_test.py --max-workers 2 \
-  --out-dir tests/agent_farm_runs
+  --out-dir .scratch/farm
 ```
 
 ## CLI flags
@@ -75,7 +75,7 @@ python3 scripts/agent_farm_chat_test.py --max-workers 2 \
 | `--retries N` | Extra attempts per turn on HTTP 429 (default `2`) |
 | `--one-per-farm` | First model only from each farm |
 | `--probe` | Smoke test: 1 prompt + `--one-per-farm` |
-| `--out-dir PATH` | Output root (default `tests/agent_farm_runs`) |
+| `--out-dir PATH` | Output root (default `.scratch/farm`) |
 | `--prompt-file PATH` | JSON list of prompt strings |
 | `--base-url URL` | OpenAI base (default `http://localhost:8013/v1`) |
 
@@ -89,12 +89,12 @@ python3 scripts/agent_farm_chat_test.py --max-workers 2 \
 4. **Session** — unique workspace dir + `session_id` so concurrent
    `--continue` / `--last` do not cross-talk.
 5. **3 turns** — default prompts check same-session continuity (`P1_OK` → `P3_OK`).
-6. **Save outputs** under `tests/agent_farm_runs/<run_id>/…`.
+6. **Save outputs** under `.scratch/farm/<run_id>/…`.
 
 ### Output tree
 
 ```text
-tests/agent_farm_runs/<run_id>/
+.scratch/farm/<run_id>/
   report.json
   <agent>/<farm>/<model>/
     meta.json
@@ -214,7 +214,7 @@ Use `--timeout 0` only when you intentionally want no kill.
 
 ## Safety
 
-- Do not commit API keys or `tests/agent_farm_runs/` artifacts.
+- Do not commit API keys or `.scratch/` artifacts.
 - `ensure` may write under `~/.hermes`, `~/.pi`, `~/.codex`, etc.
   Prefer `--dry-run` / `--ensure-only` when validating changes.
 - Farm runs can generate many upstream requests; start with

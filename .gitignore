@@ -103,6 +103,7 @@ tmp/
 dist/
 build/
 .worktrees/
+.scratch/
 
 #-------------------------
 # AGENT / AI TOOL FOLDERS
@@ -135,10 +136,9 @@ superpowers/
 #-------------------------
 backups/
 
-# Local stream sniff captures
+# Local stream sniff captures (legacy; new dumps go in .scratch/)
 backend/tests/_stream_sniff/
 backend/tests/_qoder_large/
 
-# Aider session history
-.aider.chat.history.md
-.aider.input.history
+# Aider session files (history + local conf). Keep the repo root clean.
+.aider*
