@@ -8,7 +8,7 @@ import Input from '../components/ui/Input'
 import Toggle from '../components/ui/Toggle'
 import { endpointsApi } from '../api/endpoints'
 
-const ENDPOINT_URL = `${window.location.protocol}//${window.location.host}/v1/chat/completions`
+const ENDPOINT_URL = `${window.location.protocol}//${window.location.host}/v1`
 
 function maskKey(key) {
   if (!key || key.length < 12) return key
@@ -190,14 +190,20 @@ export default function EndpointPage() {
           </div>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center gap-3">
-            <div className="flex-1 min-w-0 bg-zinc-800/60 rounded-lg px-4 py-3 border border-zinc-700/50">
-              <code className="text-sm text-zinc-200 break-all">{ENDPOINT_URL}</code>
-            </div>
-            <Button variant="secondary" size="sm" onClick={handleCopyUrl} className="shrink-0">
-              {copiedUrl ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
-              {copiedUrl ? 'Copied' : 'Copy'}
-            </Button>
+          <div className="flex items-center gap-1.5">
+            <code className="text-sm text-zinc-200 break-all">
+              {ENDPOINT_URL}
+            </code>
+            <button
+              type="button"
+              onClick={handleCopyUrl}
+              className="p-0.5 rounded text-zinc-600 hover:text-zinc-400 transition-colors cursor-pointer"
+              title={copiedUrl ? 'Copied' : 'Copy URL'}
+            >
+              {copiedUrl
+                ? <Check size={12} className="text-emerald-400" />
+                : <Copy size={12} />}
+            </button>
           </div>
         </CardContent>
       </Card>
@@ -247,27 +253,37 @@ export default function EndpointPage() {
                       </div>
                       <div className="flex items-center gap-1.5 mt-1">
                         <code className="text-xs text-zinc-500">
-                          {visibleKeys.has(apiKey.key) ? apiKey.key : maskKey(apiKey.key)}
+                          {visibleKeys.has(apiKey.key)
+                            ? apiKey.key
+                            : maskKey(apiKey.key)}
                         </code>
                         <button
+                          type="button"
                           onClick={() => toggleKeyVisibility(apiKey.key)}
                           className="p-0.5 rounded text-zinc-600 hover:text-zinc-400 transition-colors cursor-pointer"
-                          title={visibleKeys.has(apiKey.key) ? 'Hide key' : 'Show key'}
+                          title={visibleKeys.has(apiKey.key)
+                            ? 'Hide key'
+                            : 'Show key'}
                         >
-                          {visibleKeys.has(apiKey.key) ? <EyeOff size={12} /> : <Eye size={12} />}
+                          {visibleKeys.has(apiKey.key)
+                            ? <EyeOff size={12} />
+                            : <Eye size={12} />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyKey(apiKey.key)}
+                          className="p-0.5 rounded text-zinc-600 hover:text-zinc-400 transition-colors cursor-pointer"
+                          title="Copy key"
+                        >
+                          {copiedId === apiKey.key
+                            ? <Check size={12} className="text-emerald-400" />
+                            : <Copy size={12} />}
                         </button>
                       </div>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0 ml-4">
-                    <button
-                      onClick={() => handleCopyKey(apiKey.key)}
-                      className="p-2 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
-                      title="Copy key"
-                    >
-                      {copiedId === apiKey.key ? <Check size={16} className="text-emerald-400" /> : <Copy size={16} />}
-                    </button>
                     <Toggle
                       checked={apiKey.is_active}
                       onChange={() => handleToggleKey(apiKey.id)}
