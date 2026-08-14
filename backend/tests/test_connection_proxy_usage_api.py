@@ -27,6 +27,15 @@ PROXY_USAGE = {
 }
 
 
+def test_update_explicit_null_proxy_pool_is_unbind():
+    omitted = ProviderConnectionUpdate()
+    assert "proxyPoolId" not in omitted.model_fields_set
+
+    unbound = ProviderConnectionUpdate(proxyPoolId=None)
+    assert "proxyPoolId" in unbound.model_fields_set
+    assert unbound.proxyPoolId is None
+
+
 def test_connection_schemas_accept_proxy_usage():
     created = ProviderConnectionCreate(
         provider="test",

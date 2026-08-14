@@ -695,11 +695,18 @@ async def update_provider(
         if proxy_config.get("error"):
             raise HTTPException(status_code=400, detail=proxy_config["error"])
 
-    # Validate proxy pool if provided
-    if body.proxyPoolId is not None:
-        proxy_pool_result = await _normalize_proxy_pool_id(db, body.proxyPoolId)
+    # Apply proxy pool when the field is present, including explicit
+    # null / "__none__" which means unbind. Do not use `is not None`
+    # here — that treats unbind as "omit" and leaves the old pool.
+    if "proxyPoolId" in body.model_fields_set:
+        proxy_pool_result = await _normalize_proxy_pool_id(
+            db, body.proxyPoolId,
+        )
         if proxy_pool_result.get("error"):
-            raise HTTPException(status_code=400, detail=proxy_pool_result["error"])
+            raise HTTPException(
+                status_code=400,
+                detail=proxy_pool_result["error"],
+            )
         conn.proxy_pool_id = proxy_pool_result.get("proxyPoolId")
 
     # Update simple model fields
