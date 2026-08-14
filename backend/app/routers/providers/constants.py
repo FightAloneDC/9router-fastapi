@@ -11,6 +11,8 @@ _DATA_INTERNAL_KEYS = {
     "models", "roundRobin", "baseUrl", "testStatus",
     "displayName", "globalPriority", "defaultModel",
     "lastError", "lastErrorAt", "errorCode",
+    "anomaly", "anomalyReason", "anomalyAt",
+    "anomalyRequestId",
     "expiresAt", "lastUsedAt", "consecutiveUseCount",
 }
 

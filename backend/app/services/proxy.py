@@ -348,6 +348,15 @@ def is_rate_limited(conn_data: dict) -> bool:
         return False
 
 
+def is_anomalous(conn_data: dict) -> bool:
+    """True when the connection is sticky-skipped for routing.
+
+    ``is_active`` stays true so OAuth refresh still runs. Do not
+    store this as testStatus=disabled / is_active=False.
+    """
+    return bool(conn_data.get("anomaly"))
+
+
 def is_model_lock_active(conn_data: dict, model: str) -> bool:
     """Check if model lock on connection is still active."""
     if not model:
@@ -433,6 +442,52 @@ async def mark_connection_unavailable(
     reset_connection_rotation(conn.provider)
 
 
+async def mark_connection_anomaly(
+    db: AsyncSession,
+    connection_id: str,
+    reason: str,
+    request_id: str = "",
+) -> bool:
+    """Sticky-skip a connection without disabling it.
+
+    Leaves ``is_active`` true and does not set testStatus so the
+    OAuth refresh loop still picks the row up. Returns False if
+    the connection is missing or already marked.
+    """
+    result = await db.execute(
+        select(ProviderConnection).where(
+            ProviderConnection.id == connection_id,
+        )
+    )
+    conn = result.scalar_one_or_none()
+    if not conn:
+        return False
+
+    data = json.loads(conn.data) if conn.data else {}
+    if data.get("anomaly"):
+        return False
+
+    now = datetime.now(timezone.utc).isoformat()
+    data["anomaly"] = True
+    data["anomalyReason"] = (reason or "")[:500]
+    data["anomalyAt"] = now
+    if request_id:
+        data["anomalyRequestId"] = request_id
+    # Visible in the UI without flipping is_active / testStatus.
+    data["lastError"] = data["anomalyReason"]
+    data["lastErrorAt"] = now
+    conn.data = json.dumps(data)
+
+    from app.services.connection_health import (
+        resort_provider_priorities,
+    )
+    await resort_provider_priorities(db, conn.provider)
+    await db.commit()
+    invalidate_connection_cache(conn.provider)
+    reset_connection_rotation(conn.provider)
+    return True
+
+
 async def clear_connection_error(db: AsyncSession, connection_id: str, model: str = None):
     """Clear connection error state (write to DB on success)."""
     result = await db.execute(
@@ -450,6 +505,10 @@ async def clear_connection_error(db: AsyncSession, connection_id: str, model: st
     update["errorCode"] = None
     update["lastError"] = None
     update["lastErrorAt"] = None
+    # Sticky anomaly must survive a later successful probe / route.
+    if data.get("anomaly"):
+        update.pop("lastError", None)
+        update.pop("lastErrorAt", None)
 
     # Clear the model lock for the succeeded model
     if model:
@@ -502,6 +561,7 @@ def select_connection_for_provider(
     sticky_limit: int = 5,
     exclude_ids: set[str] = None,
     model: str = None,
+    skip_anomalous: bool = True,
 ) -> ProviderConnection | None:
     """Select ONE connection for a provider based on strategy.
 
@@ -522,6 +582,8 @@ def select_connection_for_provider(
             continue
         conn_data = parse_connection_data(c)
         if is_rate_limited(conn_data):
+            continue
+        if skip_anomalous and is_anomalous(conn_data):
             continue
         if model and is_model_lock_active(conn_data, model):
             continue
@@ -633,6 +695,7 @@ async def resolve_model_to_targets(
     exclude_ids: set[str] = None,
     combo_strategy: str = None,
     combo_sticky_limit: int = 3,
+    skip_anomalous: bool = True,
 ) -> list[ResolvedTarget]:
     """Resolve a model string to one or more upstream targets.
 
@@ -655,6 +718,7 @@ async def resolve_model_to_targets(
         for combo_model in combo_models:
             sub_targets = await _resolve_single_model(
                 db, combo_model, stream, exclude_ids,
+                skip_anomalous=skip_anomalous,
             )
             targets.extend(sub_targets)
         if targets and combo_strategy:
@@ -666,7 +730,10 @@ async def resolve_model_to_targets(
         return targets
 
     # 2. Resolve single model
-    return await _resolve_single_model(db, model, stream, exclude_ids)
+    return await _resolve_single_model(
+        db, model, stream, exclude_ids,
+        skip_anomalous=skip_anomalous,
+    )
 
 
 def _conn_model_ids(conn_models: object) -> set[str]:
@@ -706,6 +773,7 @@ async def _resolve_single_model(
     model: str,
     stream: bool,
     exclude_ids: set[str] = None,
+    skip_anomalous: bool = True,
 ) -> list[ResolvedTarget]:
     """Resolve a single model string to upstream targets."""
 
@@ -714,6 +782,7 @@ async def _resolve_single_model(
         provider_name, model_name = model.split("/", 1)
         return await _build_target_for_provider(
             db, provider_name, model_name, stream, exclude_ids,
+            skip_anomalous=skip_anomalous,
         )
 
     # Look through active provider connections for a match
@@ -747,6 +816,8 @@ async def _resolve_single_model(
     for conn in matches:
         data = parse_connection_data(conn)
         if is_rate_limited(data):
+            continue
+        if skip_anomalous and is_anomalous(data):
             continue
         if is_model_lock_active(data, model):
             continue
@@ -788,6 +859,7 @@ async def _build_target_for_provider(
     model_name: str,
     stream: bool,
     exclude_ids: set[str] = None,
+    skip_anomalous: bool = True,
 ) -> list[ResolvedTarget]:
     """Build target for explicit provider/model format.
 
@@ -827,6 +899,7 @@ async def _build_target_for_provider(
             sticky_limit=sticky_limit,
             exclude_ids=exclude_ids,
             model=model_name,
+            skip_anomalous=skip_anomalous,
         )
 
         if not conn:

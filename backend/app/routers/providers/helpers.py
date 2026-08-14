@@ -120,6 +120,15 @@ def _connection_to_out(conn: ProviderConnection) -> dict:
 
     defaults = _get_provider_config(conn.provider)
 
+    last_error = data.get("lastError")
+    last_error_at = data.get("lastErrorAt")
+    error_code = data.get("errorCode")
+    if data.get("anomaly"):
+        last_error = data.get("anomalyReason") or last_error
+        last_error_at = data.get("anomalyAt") or last_error_at
+        if not error_code:
+            error_code = "anomaly"
+
     return {
         "id": conn.id,
         "provider": conn.provider,
@@ -132,9 +141,9 @@ def _connection_to_out(conn: ProviderConnection) -> dict:
         "is_active": conn.is_active,
         "defaultModel": data.get("defaultModel"),
         "test_status": data.get("testStatus"),
-        "lastError": data.get("lastError"),
-        "lastErrorAt": data.get("lastErrorAt"),
-        "errorCode": data.get("errorCode"),
+        "lastError": last_error,
+        "lastErrorAt": last_error_at,
+        "errorCode": error_code,
         "expiresAt": data.get("expiresAt"),
         "lastUsedAt": data.get("lastUsedAt"),
         "consecutiveUseCount": data.get("consecutiveUseCount"),

@@ -207,6 +207,7 @@ async def messages_endpoint(
                 _, resp_data = await _non_stream_grok_responses(
                     target, forward_body, request_id,
                     raw_body=raw_body, db=db, proxy=proxy,
+                    request_body=body,
                 )
                 claude_resp = openai_to_claude_response(
                     resp_data,
@@ -480,6 +481,12 @@ async def _messages_stream_response(
 
     async def generate_responses_to_claude():  # type: ignore[no-untyped-def]
         """Responses SSE -> Chat SSE -> Claude SSE."""
+        from app.providers.grok_cli.debug_dump import (
+            ChatSseAssembler,
+            begin_dump,
+            finish_dump,
+            parse_upstream_body,
+        )
         from app.providers.grok_cli.stream import (
             ResponsesUpstreamTranslator,
         )
@@ -491,6 +498,20 @@ async def _messages_stream_response(
         claude_tr = ClaudeStreamTranslator(
             model=model_str, request_id=request_id,
         )
+        assembler = ChatSseAssembler()
+        dump = begin_dump(
+            request_id=request_id,
+            endpoint="/v1/messages",
+            stream=True,
+            client_request=request_body or body,
+            upstream_request=parse_upstream_body(
+                raw_body, body,
+            ),
+            model=model_str,
+            connection_id=connection_id,
+        )
+        dump_status = "ok"
+        dump_error: str | None = None
         async with create_upstream_client(
             proxy=proxy,
             timeout=300.0,
@@ -509,6 +530,7 @@ async def _messages_stream_response(
                                 "utf-8", errors="ignore",
                             )
                             for chat_sse in grok_tr.feed(line):
+                                assembler.feed(chat_sse)
                                 for ev in claude_tr.feed(
                                     chat_sse.strip(),
                                 ):
@@ -516,6 +538,8 @@ async def _messages_stream_response(
                     for ev in claude_tr._finish():
                         yield ev.encode()
             except httpx.HTTPStatusError as e:
+                dump_status = "error"
+                dump_error = f"HTTP {e.response.status_code}"
                 error_data = json.dumps({
                     "type": "error",
                     "error": {
@@ -530,6 +554,8 @@ async def _messages_stream_response(
                     f"event: error\ndata: {error_data}\n\n".encode()
                 )
             except Exception as e:
+                dump_status = "error"
+                dump_error = str(e)
                 error_data = json.dumps({
                     "type": "error",
                     "error": {
@@ -540,6 +566,25 @@ async def _messages_stream_response(
                 yield (
                     f"event: error\ndata: {error_data}\n\n".encode()
                 )
+            finally:
+                assembled = assembler.to_dict()
+                finish_dump(
+                    dump,
+                    assembled,
+                    status=dump_status,
+                    error=dump_error,
+                )
+                if dump_status == "ok":
+                    from app.providers.grok_cli.anomaly import (
+                        maybe_mark_phantom_write,
+                    )
+                    await maybe_mark_phantom_write(
+                        db,
+                        connection_id,
+                        request_body or body,
+                        assembled,
+                        request_id,
+                    )
 
     if is_claude_upstream:
         generator = generate_claude_passthrough()

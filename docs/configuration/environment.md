@@ -14,6 +14,8 @@ Important keys:
 | `ADMIN_PASSWORD` | Seed / login password |
 | `CORS_ORIGINS` | `*` or comma-separated origins |
 | OAuth client IDs/secrets | Per-provider OAuth |
+| `GROK_CLI_DUMP` | `true` → write grok-cli request/response JSON under `.scratch/grok-cli/`. Default off. Commented lines are ignored; uvicorn `--reload` does not watch `.env` (the dump gate re-reads the file). |
+| `GROK_CLI_DUMP_DIR` | Optional dump directory override |
 
 In **production compose**, `DATABASE_URL` is overridden to reach the host
 Postgres via `host.docker.internal` (see `docker-compose.prod.yml`).

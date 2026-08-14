@@ -19,7 +19,8 @@ Completed designs/plans and old investigations:
 
 - `archives/plans-2026/` — recent feature plans (bulk actions, proxy usage, prod single-service, …)
 - `archives/completed-plans/` — earlier porting/feature plans
-- `archives/investigations/`, `archives/provider-audits/`, `archives/qa-reports/`, …
+- `archives/investigations/` — e.g. [Grok CLI phantom write](archives/investigations/2026-08-14-grok-cli-phantom-write.md)
+- `archives/provider-audits/`, `archives/qa-reports/`, …
 - `archives/qoder-docs/`, `archives/reference/`, `archives/misc/`
 
 Do not put new day-to-day runbooks in `archives/`. Prefer the sections above.

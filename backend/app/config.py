@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     # Paths
     BACKUP_DIR: str = "backups"
 
+    # Grok CLI request/response dumps under .scratch/grok-cli/.
+    # Off unless set true in .env (or GROK_CLI_DUMP=1 in the environment).
+    GROK_CLI_DUMP: bool = False
+    GROK_CLI_DUMP_DIR: str = ""
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 
