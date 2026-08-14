@@ -17,7 +17,10 @@ from app.routers.providers.constants import _get_model_type_overrides, infer_mod
 
 router = APIRouter()
 
-_VALID_MODEL_KINDS: set[str] = {"llm", "embedding", "tts", "stt", "image", "imageToText", "webSearch", "webFetch"}
+_VALID_MODEL_KINDS: set[str] = {
+    "llm", "embedding", "rerank", "tts", "stt", "image",
+    "imageToText", "webSearch", "webFetch",
+}
 
 
 async def _get_disabled_models(db: AsyncSession) -> dict[str, list[str]]:

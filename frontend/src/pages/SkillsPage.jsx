@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { Copy, Check, ExternalLink, Boxes, MessageSquare, Image, Volume2, Mic, Binary, Search, Globe } from 'lucide-react'
-import { SKILLS, SKILLS_REPO_URL, getSkillRawUrl, getSkillBlobUrl } from '../constants/skills'
-import Card from '../components/ui/Card'
+import { Copy, Check, ExternalLink, Boxes, MessageSquare, Image, Volume2, Mic, Binary, Search, Globe, ArrowUpDown } from 'lucide-react'
+import { SKILLS, SKILLS_TREE_URL, getSkillRawUrl, getSkillBlobUrl } from '../constants/skills'
+import Card, { CardContent } from '../components/ui/Card'
 import Badge from '../components/ui/Badge'
 
 const ICON_MAP = {
   Hub: Boxes, MessageSquare, Image, Volume2, Mic, Binary, Search, Globe,
+  ArrowUpDown,
 }
 
 function CopyButton({ value, label = 'Copy' }) {
@@ -81,10 +82,14 @@ export default function SkillsPage() {
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Quick start card */}
       <Card>
-        <div className="text-xs text-zinc-500 mb-2">Paste this to your AI agent:</div>
-        <div className="px-3 py-2 rounded-lg bg-zinc-800 font-mono text-[12px] text-zinc-200">
-          Read this skill and use it: {getSkillRawUrl('9router')}
-        </div>
+        <CardContent>
+          <div className="text-xs text-zinc-500 mb-2">
+            Paste this to your AI agent:
+          </div>
+          <div className="px-3 py-2 rounded-lg bg-zinc-800 font-mono text-[12px] text-zinc-200 break-all">
+            Read this skill and use it: {getSkillRawUrl('9router')}
+          </div>
+        </CardContent>
       </Card>
 
       {/* Skill list */}
@@ -96,23 +101,27 @@ export default function SkillsPage() {
 
       {/* GitHub link */}
       <Card>
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <h2 className="text-sm font-semibold text-zinc-100">More on GitHub</h2>
-            <p className="text-xs text-zinc-400 mt-0.5">
-              Browse source, README, and examples.
-            </p>
+        <CardContent>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-100">
+                More on GitHub
+              </h2>
+              <p className="text-xs text-zinc-400 mt-0.5">
+                Browse source, README, and examples.
+              </p>
+            </div>
+            <a
+              href={SKILLS_TREE_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="text-sm text-blue-400 hover:underline inline-flex items-center gap-1"
+            >
+              View on GitHub
+              <ExternalLink size={14} />
+            </a>
           </div>
-          <a
-            href={`${SKILLS_REPO_URL}/tree/master/skills`}
-            target="_blank"
-            rel="noreferrer"
-            className="text-sm text-blue-400 hover:underline inline-flex items-center gap-1"
-          >
-            View on GitHub
-            <ExternalLink size={14} />
-          </a>
-        </div>
+        </CardContent>
       </Card>
     </div>
   )
