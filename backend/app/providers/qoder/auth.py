@@ -18,10 +18,10 @@ PAT Import:
   4. Store regular token for COSY signing
 
 Token Refresh:
-  PAT-exchanged job tokens (jt-xxx) expire in ~24 hours.
-  qodercli uses /api/v1/jobToken/refresh (on openapi.qoder.sh) to get a new
-  access token using the refresh_token.  The old endpoint on center.qoder.sh
-  returns 403 — this one works.
+  PAT-exchanged job tokens (jt-xxx) expire in ~24 hours and come with
+  a jrt-* refresh token. OAuth / device flow comes with a drt-* refresh
+  token. Both prefixes work on POST /api/v1/jobToken/refresh
+  (openapi.qoder.sh). The old endpoint on center.qoder.sh returns 403.
 """
 
 import base64
@@ -378,25 +378,55 @@ async def exchange_personal_token(
     }
 
 
-async def refresh_job_token(
+# Client errors that mean this refresh token will not work again.
+_DEAD_REFRESH_HTTP = frozenset({400, 401, 403})
+
+
+def refresh_token_unusable(data: dict[str, Any]) -> bool:
+    """True when this exact refresh token already got a terminal reject."""
+    token = data.get("refreshToken")
+    if not token:
+        return True
+    return data.get("invalidRefreshToken") == token
+
+
+def mark_refresh_rejected(
+    data: dict[str, Any],
+    status_code: int | None,
+) -> None:
+    """Persist a dead refresh token so background refresh skips it."""
+    token = data.get("refreshToken")
+    if token:
+        data["invalidRefreshToken"] = token
+    data["testStatus"] = "unavailable"
+    if status_code is not None:
+        data["errorCode"] = str(status_code)
+    data["lastError"] = "jobToken/refresh rejected"
+    data["lastErrorAt"] = datetime.now(timezone.utc).isoformat()
+
+
+def apply_refreshed_qoder_tokens(
+    data: dict[str, Any],
+    new_tokens: dict[str, Any],
+) -> None:
+    """Write a successful refresh and clear any dead-token mark."""
+    data["accessToken"] = new_tokens["access_token"]
+    data["refreshToken"] = new_tokens["refresh_token"]
+    apply_qoder_token_expiry(data, new_tokens)
+    data["testStatus"] = "connected"
+    data.pop("invalidRefreshToken", None)
+    data.pop("lastError", None)
+    data.pop("lastErrorAt", None)
+    data.pop("errorCode", None)
+
+
+async def refresh_job_token_result(
     refresh_token: str,
     timeout: float = 15.0,
-) -> dict[str, Any] | None:
-    """Refresh a Qoder job token using the refresh token.
-
-    Uses POST /api/v1/jobToken/refresh on openapi.qoder.sh
-    (same endpoint qodercli uses). Returns None if the refresh
-    token itself is expired/invalid.
-
-    Args:
-        refresh_token: The refresh_token (jrt-xxx) from the original exchange
-        timeout: Request timeout in seconds
-
-    Returns:
-        Dict with access_token, refresh_token, expires_in — or None on failure
-    """
+) -> tuple[dict[str, Any] | None, int | None]:
+    """POST jobToken/refresh. Returns (tokens, http_status)."""
     if not refresh_token:
-        return None
+        return None, None
 
     async with create_upstream_client(timeout=timeout) as client:
         response = await client.post(
@@ -414,7 +444,7 @@ async def refresh_job_token(
             response.status_code,
             (response.text or "")[:200],
         )
-        return None
+        return None, response.status_code
 
     data = response.json()
 
@@ -424,7 +454,7 @@ async def refresh_job_token(
         or data.get("access_token")
     )
     if not access_token:
-        return None
+        return None, response.status_code
 
     expires_in = data.get("expires_in") or data.get("expireTimeS")
     refresh_token_expires_in = (
@@ -443,7 +473,30 @@ async def refresh_job_token(
             data.get("refresh_token_expires_at")
             or data.get("refreshTokenExpiresAt")
         ),
-    }
+    }, response.status_code
+
+
+async def refresh_job_token(
+    refresh_token: str,
+    timeout: float = 15.0,
+) -> dict[str, Any] | None:
+    """Refresh a Qoder job token using the refresh token.
+
+    Uses POST /api/v1/jobToken/refresh on openapi.qoder.sh
+    (same endpoint qodercli uses). Returns None if the refresh
+    token itself is expired/invalid.
+
+    Args:
+        refresh_token: jrt-* (PAT exchange) or drt-* (OAuth / device)
+        timeout: Request timeout in seconds
+
+    Returns:
+        Dict with access_token, refresh_token, expires_in — or None on failure
+    """
+    tokens, _status = await refresh_job_token_result(
+        refresh_token, timeout=timeout,
+    )
+    return tokens
 
 
 async def import_pat(
@@ -532,36 +585,34 @@ async def try_refresh_connection(db, connection_id: str) -> bool:
         logger.warning(f"Qoder refresh: no refresh_token for connection {connection_id}")
         return False
 
-    # jobToken/refresh only accepts jrt-* (job refresh). Device-style
-    # drt-* tokens need a different flow and must not be mis-logged as
-    # "refresh_token expired".
-    if isinstance(refresh_token, str) and refresh_token.startswith("drt-"):
+    if refresh_token_unusable(data):
         logger.warning(
-            "Qoder refresh: unsupported refresh token type drt-* "
-            "for connection %s — re-import via PAT/device flow",
+            "Qoder refresh: skipped dead refresh token for %s",
             connection_id,
         )
         return False
 
     proxy = await proxy_for_connection(db, conn, "oauthRefresh")
     async with use_outbound_proxy(proxy):
-        new_tokens = await refresh_job_token(refresh_token)
+        new_tokens, status = await refresh_job_token_result(
+            refresh_token,
+        )
     if not new_tokens:
+        if status in _DEAD_REFRESH_HTTP:
+            mark_refresh_rejected(data, status)
+            conn.data = json.dumps(data)
+            await db.flush()
+            from app.services.proxy import (
+                invalidate_connection_cache,
+            )
+            invalidate_connection_cache("qoder")
         logger.warning(
             "Qoder refresh: jobToken/refresh failed for connection %s",
             connection_id,
         )
         return False
 
-    # Update tokens + expiry in DB (expiresAt was previously omitted,
-    # so UI/DB looked expired while refresh still succeeded).
-    data["accessToken"] = new_tokens["access_token"]
-    data["refreshToken"] = new_tokens["refresh_token"]
-    apply_qoder_token_expiry(data, new_tokens)
-    data["testStatus"] = "connected"
-    data.pop("lastError", None)
-    data.pop("lastErrorAt", None)
-    data.pop("errorCode", None)
+    apply_refreshed_qoder_tokens(data, new_tokens)
     conn.data = json.dumps(data)
 
     await db.flush()
@@ -601,6 +652,7 @@ async def refresh_all_qoder_connections() -> dict[str, bool]:
         rows = await db.execute(stmt)
         connections = rows.scalars().all()
 
+        skipped_dead = 0
         for conn in connections:
             data = json.loads(conn.data) if conn.data else {}
             refresh_token = data.get("refreshToken")
@@ -608,21 +660,20 @@ async def refresh_all_qoder_connections() -> dict[str, bool]:
                 continue
 
             conn_id = str(conn.id)
-            if isinstance(refresh_token, str) and refresh_token.startswith(
-                "drt-",
-            ):
-                logger.warning(
-                    "Qoder background refresh SKIP: %s... "
-                    "(drt-* unsupported by jobToken/refresh)",
-                    conn_id[:8],
-                )
-                results[conn_id] = False
+            if refresh_token_unusable(data):
+                skipped_dead += 1
                 continue
 
             proxy = await proxy_for_connection(db, conn, "oauthRefresh")
             async with use_outbound_proxy(proxy):
-                new_tokens = await refresh_job_token(refresh_token)
+                new_tokens, status = await refresh_job_token_result(
+                    refresh_token,
+                )
             if not new_tokens:
+                if status in _DEAD_REFRESH_HTTP:
+                    mark_refresh_rejected(data, status)
+                    conn.data = json.dumps(data)
+                    db.add(conn)
                 logger.warning(
                     "Qoder background refresh FAILED: %s... "
                     "(jobToken/refresh rejected)",
@@ -631,18 +682,19 @@ async def refresh_all_qoder_connections() -> dict[str, bool]:
                 results[conn_id] = False
                 continue
 
-            data["accessToken"] = new_tokens["access_token"]
-            data["refreshToken"] = new_tokens["refresh_token"]
-            apply_qoder_token_expiry(data, new_tokens)
-            data["testStatus"] = "connected"
-            data.pop("lastError", None)
-            data.pop("lastErrorAt", None)
-            data.pop("errorCode", None)
+            apply_refreshed_qoder_tokens(data, new_tokens)
             conn.data = json.dumps(data)
             db.add(conn)
 
             logger.info(f"Qoder background refresh OK: {conn_id[:8]}...")
             results[conn_id] = True
+
+        if skipped_dead:
+            logger.info(
+                "Qoder background refresh SKIP: %d connection(s) "
+                "with invalid refresh token",
+                skipped_dead,
+            )
 
         await db.commit()
 

@@ -420,6 +420,12 @@ async def mark_connection_unavailable(
 
     data.update(update)
     conn.data = json.dumps(data)
+
+    from app.services.connection_health import (
+        resort_provider_priorities,
+    )
+    await resort_provider_priorities(db, conn.provider)
+
     await db.commit()
 
     # Invalidate cache for this provider
@@ -463,6 +469,12 @@ async def clear_connection_error(db: AsyncSession, connection_id: str, model: st
 
     data.update(update)
     conn.data = json.dumps(data)
+
+    from app.services.connection_health import (
+        resort_provider_priorities,
+    )
+    await resort_provider_priorities(db, conn.provider)
+
     await db.commit()
 
     invalidate_connection_cache(conn.provider)

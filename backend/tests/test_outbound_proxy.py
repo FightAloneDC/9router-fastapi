@@ -581,7 +581,10 @@ def test_qoder_background_refresh_uses_connection_oauth_refresh_proxy(
     async def refresh(_refresh_token):
         async with create_upstream_client() as client:
             await client.post("https://example.com/refresh")
-        return {"access_token": "access", "refresh_token": "refresh"}
+        return (
+            {"access_token": "access", "refresh_token": "refresh"},
+            200,
+        )
 
     def make_client(**kwargs):
         created.append(kwargs)
@@ -592,7 +595,9 @@ def test_qoder_background_refresh_uses_connection_oauth_refresh_proxy(
         lambda *_args, **_kwargs: lambda: SessionContext(),
     )
     monkeypatch.setattr(qoder_auth, "proxy_for_connection", resolve_proxy)
-    monkeypatch.setattr(qoder_auth, "refresh_job_token", refresh)
+    monkeypatch.setattr(
+        qoder_auth, "refresh_job_token_result", refresh,
+    )
     monkeypatch.setattr("httpx.AsyncClient", make_client)
 
     results = asyncio.run(qoder_auth.refresh_all_qoder_connections())

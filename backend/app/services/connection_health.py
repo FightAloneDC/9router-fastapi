@@ -1,8 +1,9 @@
 """Connection health ranking and periodic reachability refresh.
 
 Used by proxy selection (healthy-first) and a background loop that
-re-probes connectivity failures so dead hosts stay skipped without
-waiting for the next user request.
+re-probes connectivity failures and re-indexes each provider's
+priority column so fill-first / next-index fallback already starts
+on a healthy connection.
 """
 
 from __future__ import annotations
@@ -100,6 +101,67 @@ def health_rank(data: dict) -> int:
     return HEALTH_RANK.get(status, HEALTH_RANK[COOLDOWN])
 
 
+def _cooldown_active(data: dict) -> bool:
+    """True while rateLimitedUntil is still in the future."""
+    until = data.get("rateLimitedUntil")
+    if not until:
+        return False
+    try:
+        return datetime.fromisoformat(until) > datetime.now(
+            timezone.utc,
+        )
+    except (ValueError, TypeError):
+        return False
+
+
+def resort_rank(data: dict) -> int:
+    """Rank used when rewriting the priority index.
+
+    Same tiers as health_rank, but an active cooldown is at least
+    rate-limited so a cooling connection cannot stay at index 0.
+    """
+    rank = health_rank(data)
+    if _cooldown_active(data):
+        return max(rank, HEALTH_RANK[RATE_LIMITED])
+    return rank
+
+
+def _priority_sort_key(conn: Any) -> tuple:
+    """Sort key: active + healthy first, then current priority."""
+    data = parse_connection_data(conn)
+    inactive = 0 if getattr(conn, "is_active", True) else 1
+    priority = conn.priority
+    if priority is None:
+        priority = 999
+    return (
+        inactive,
+        resort_rank(data),
+        priority,
+        str(getattr(conn, "id", "")),
+    )
+
+
+def resort_connections_by_health(
+    connections: list,
+) -> list[tuple[Any, int, int]]:
+    """Rewrite priority to 0..n-1 in healthy-first order.
+
+    Returns (conn, old_priority, new_priority) for rows that moved.
+    Inactive connections are placed after every active one. Among
+    the same health tier the previous priority is kept as a
+    tie-breaker so relative order stays stable.
+    """
+    ordered = sorted(connections, key=_priority_sort_key)
+    moved: list[tuple[Any, int, int]] = []
+    for index, conn in enumerate(ordered):
+        old = conn.priority
+        if old == index:
+            continue
+        conn.priority = index
+        moved.append((conn, old if old is not None else -1, index))
+    return moved
+
+
 def parse_connection_data(conn: Any) -> dict:
     """Parse a connection JSON blob; empty dict on error."""
     raw = getattr(conn, "data", None)
@@ -191,27 +253,65 @@ def _mark_still_down(data: dict) -> None:
     data["testStatus"] = "unavailable"
 
 
+async def resort_provider_priorities(
+    session: Any,
+    provider: str,
+) -> int:
+    """Re-index one provider in the current session. No commit."""
+    from sqlalchemy import select
+
+    from app.models.provider import ProviderConnection
+
+    result = await session.execute(
+        select(ProviderConnection).where(
+            ProviderConnection.provider == provider,
+        )
+    )
+    moved = resort_connections_by_health(
+        list(result.scalars().all()),
+    )
+    for conn, _old, _new in moved:
+        session.add(conn)
+    return len(moved)
+
+
+def _group_by_provider(connections: list) -> dict[str, list]:
+    groups: dict[str, list] = {}
+    for conn in connections:
+        provider = getattr(conn, "provider", "") or ""
+        groups.setdefault(provider, []).append(conn)
+    return groups
+
+
 async def refresh_connection_health() -> dict:
-    """Re-probe connectivity-failed connections and update blobs."""
+    """Re-probe dead hosts and re-index priority by health.
+
+    Every active connection is classified. Only connectivity
+    failures are probed. After that, every provider's priority
+    column is rewritten 0..n-1 (healthy first) so the next
+    client request and the next exhausted fallback already
+    walk a healthy-first index.
+    """
     probed = 0
     recovered = 0
     still_down = 0
     skipped = 0
+    reindexed = 0
+    resorted = 0
 
     from sqlalchemy import select
 
     from app.models.provider import ProviderConnection
 
     async with async_session() as session:
-        result = await session.execute(
-            select(ProviderConnection).where(
-                ProviderConnection.is_active == True,  # noqa: E712
-            )
-        )
+        result = await session.execute(select(ProviderConnection))
         connections = list(result.scalars().all())
         dirty_providers: set[str] = set()
 
         for conn in connections:
+            if not getattr(conn, "is_active", True):
+                skipped += 1
+                continue
             data = parse_connection_data(conn)
             if not is_connectivity_failure(data):
                 skipped += 1
@@ -228,7 +328,19 @@ async def refresh_connection_health() -> dict:
             session.add(conn)
             dirty_providers.add(conn.provider)
 
-        if probed:
+        for provider_id, group in _group_by_provider(
+            connections,
+        ).items():
+            moved = resort_connections_by_health(group)
+            if not moved:
+                continue
+            resorted += 1
+            reindexed += len(moved)
+            for conn, _old, _new in moved:
+                session.add(conn)
+            dirty_providers.add(provider_id)
+
+        if probed or reindexed:
             await session.commit()
             from app.services.proxy import (
                 invalidate_connection_cache,
@@ -242,11 +354,13 @@ async def refresh_connection_health() -> dict:
         "still_down": still_down,
         "skipped": skipped,
         "total": probed + skipped,
+        "resorted": resorted,
+        "reindexed": reindexed,
     }
 
 
 async def connection_health_loop() -> None:
-    """Background loop: probe dead hosts every HEALTH_CHECK_INTERVAL."""
+    """Background loop: probe + re-index every HEALTH_CHECK_INTERVAL."""
     logger.info(
         "Connection health refresh started (interval=%ds)",
         HEALTH_CHECK_INTERVAL,
@@ -254,13 +368,16 @@ async def connection_health_loop() -> None:
     while True:
         try:
             summary = await refresh_connection_health()
-            if summary["probed"]:
+            if summary["probed"] or summary["reindexed"]:
                 logger.info(
                     "Connection health cycle: "
-                    "probed=%d recovered=%d still_down=%d",
+                    "probed=%d recovered=%d still_down=%d "
+                    "resorted=%d reindexed=%d",
                     summary["probed"],
                     summary["recovered"],
                     summary["still_down"],
+                    summary["resorted"],
+                    summary["reindexed"],
                 )
         except Exception:
             logger.exception(

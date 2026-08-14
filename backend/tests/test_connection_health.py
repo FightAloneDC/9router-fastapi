@@ -18,6 +18,8 @@ from app.services.connection_health import (
     health_rank,
     is_connectivity_failure,
     refresh_connection_health,
+    resort_connections_by_health,
+    resort_rank,
 )
 from app.services.proxy import select_connection_for_provider
 
@@ -26,11 +28,14 @@ def _conn(
     cid: str,
     priority: int,
     data: dict,
+    provider: str = "grok-cli",
+    is_active: bool = True,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         id=cid,
         priority=priority,
-        provider="grok-cli",
+        provider=provider,
+        is_active=is_active,
         data=json.dumps(data),
     )
 
@@ -269,9 +274,9 @@ def test_refresh_skips_healthy_and_auth_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     healthy = _conn("ok", 0, {"testStatus": "active"})
-    dead = _conn("auth", 1, {"errorCode": "401"})
-    exhausted = _conn("ex", 2, {"errorCode": "402"})
-    session = _Session([healthy, dead, exhausted])
+    exhausted = _conn("ex", 1, {"errorCode": "402"})
+    dead = _conn("auth", 2, {"errorCode": "401"})
+    session = _Session([healthy, exhausted, dead])
 
     import app.services.connection_health as health
 
@@ -290,8 +295,13 @@ def test_refresh_skips_healthy_and_auth_failures(
 
     summary = asyncio.run(refresh_connection_health())
     assert summary["probed"] == 0
+    assert summary["reindexed"] == 0
     assert probed == []
+    assert session.committed is False
     assert json.loads(healthy.data)["testStatus"] == "active"
+    assert [c.priority for c in (healthy, exhausted, dead)] == [
+        0, 1, 2,
+    ]
 
 
 def test_probe_treats_http_response_as_up(
@@ -371,3 +381,208 @@ def test_probe_treats_connect_error_as_down(
 
     ok = asyncio.run(probe_connection(None, conn, {}))
     assert ok is False
+
+
+def test_resort_moves_healthy_to_index_zero() -> None:
+    dead = _conn("dead", 0, {"errorCode": "401"})
+    exhausted = _conn("ex", 1, {"errorCode": "402"})
+    limited = _conn("lim", 2, {"errorCode": "429"})
+    healthy = _conn("ok", 9, {"testStatus": "active"})
+
+    moved = resort_connections_by_health(
+        [dead, exhausted, limited, healthy],
+    )
+
+    assert healthy.priority == 0
+    assert limited.priority == 1
+    assert exhausted.priority == 2
+    assert dead.priority == 3
+    ids = {str(conn.id) for conn, _old, _new in moved}
+    assert "ok" in ids
+    assert "dead" in ids
+
+
+def test_resort_keeps_order_among_healthy() -> None:
+    high = _conn("high", 1, {"testStatus": "active"})
+    low = _conn("low", 5, {"testStatus": "active"})
+    dead = _conn("dead", 0, {"errorCode": "401"})
+
+    moved = resort_connections_by_health([low, high, dead])
+
+    assert high.priority == 0
+    assert low.priority == 1
+    assert dead.priority == 2
+    assert {str(c.id) for c, _o, _n in moved} == {
+        "high", "low", "dead",
+    }
+
+
+def test_resort_pushes_active_cooldown_behind_healthy() -> None:
+    until = (
+        datetime.now(timezone.utc) + timedelta(minutes=5)
+    ).isoformat()
+    cooling = _conn("cool", 0, {
+        "testStatus": "active",
+        "rateLimitedUntil": until,
+    })
+    healthy = _conn("ok", 1, {"testStatus": "active"})
+
+    assert resort_rank(json.loads(cooling.data)) == 1
+    resort_connections_by_health([cooling, healthy])
+    assert healthy.priority == 0
+    assert cooling.priority == 1
+
+
+def test_resort_places_inactive_last() -> None:
+    inactive_ok = _conn(
+        "off", 0, {"testStatus": "active"}, is_active=False,
+    )
+    dead = _conn("dead", 1, {"errorCode": "401"})
+    healthy = _conn("ok", 2, {"testStatus": "active"})
+
+    resort_connections_by_health([inactive_ok, dead, healthy])
+    assert healthy.priority == 0
+    assert dead.priority == 1
+    assert inactive_ok.priority == 2
+
+
+def test_refresh_resorts_when_nothing_probed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dead = _conn("dead", 0, {"errorCode": "401"})
+    healthy = _conn("ok", 4, {"testStatus": "active"})
+    session = _Session([dead, healthy])
+
+    import app.services.connection_health as health
+
+    monkeypatch.setattr(
+        health, "async_session", lambda: _SessionCtx(session),
+    )
+
+    async def _probe(*_a: object, **_k: object) -> bool:
+        raise AssertionError("must not probe auth/healthy")
+
+    monkeypatch.setattr(health, "probe_connection", _probe)
+
+    summary = asyncio.run(refresh_connection_health())
+    assert summary["probed"] == 0
+    assert summary["resorted"] == 1
+    assert summary["reindexed"] == 2
+    assert healthy.priority == 0
+    assert dead.priority == 1
+    assert session.committed is True
+
+
+def test_refresh_resorts_each_provider_independently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    g_dead = _conn("g-dead", 0, {"errorCode": "402"})
+    g_ok = _conn("g-ok", 3, {"testStatus": "active"})
+    q_ok = _conn(
+        "q-ok", 0, {"testStatus": "active"}, provider="qoder",
+    )
+    q_dead = _conn(
+        "q-dead", 1, {"errorCode": "401"}, provider="qoder",
+    )
+    session = _Session([g_dead, g_ok, q_ok, q_dead])
+
+    import app.services.connection_health as health
+
+    monkeypatch.setattr(
+        health, "async_session", lambda: _SessionCtx(session),
+    )
+
+    async def _probe(*_a: object, **_k: object) -> bool:
+        return False
+
+    monkeypatch.setattr(health, "probe_connection", _probe)
+
+    summary = asyncio.run(refresh_connection_health())
+    assert summary["resorted"] == 1
+    assert g_ok.priority == 0
+    assert g_dead.priority == 1
+    assert q_ok.priority == 0
+    assert q_dead.priority == 1
+
+
+def test_refresh_recovers_then_promotes_to_index_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    down = _conn("was-down", 0, {
+        "errorCode": "503",
+        "testStatus": "unavailable",
+        "lastError": "connection refused",
+    })
+    healthy = _conn("ok", 1, {"testStatus": "active"})
+    session = _Session([down, healthy])
+
+    import app.services.connection_health as health
+
+    monkeypatch.setattr(
+        health, "async_session", lambda: _SessionCtx(session),
+    )
+
+    async def _up(_db: object, _conn: object, _data: dict) -> bool:
+        return True
+
+    monkeypatch.setattr(health, "probe_connection", _up)
+
+    summary = asyncio.run(refresh_connection_health())
+    assert summary["recovered"] == 1
+    data = json.loads(down.data)
+    assert data.get("errorCode") is None
+    assert down.priority == 0
+    assert healthy.priority == 1
+
+
+class _MarkSession:
+    """Session mock for mark_connection_unavailable + resort."""
+
+    def __init__(self, rows: list) -> None:
+        self.rows = rows
+        self.committed = False
+
+    async def execute(self, _statement: object) -> "_MarkResult":
+        return _MarkResult(self.rows)
+
+    def add(self, _row: object) -> None:
+        return None
+
+    async def commit(self) -> None:
+        self.committed = True
+
+
+class _MarkResult:
+    def __init__(self, rows: list) -> None:
+        self._rows = rows
+
+    def scalar_one_or_none(self) -> object | None:
+        return self._rows[0] if self._rows else None
+
+    def scalars(self) -> "_MarkResult":
+        return self
+
+    def all(self) -> list:
+        return self._rows
+
+
+def test_mark_unavailable_reindexes_exhausted_behind_healthy() -> None:
+    from app.services.proxy import mark_connection_unavailable
+
+    exhausted = _conn("ex", 0, {"testStatus": "active"})
+    healthy = _conn("ok", 1, {"testStatus": "active"})
+    session = _MarkSession([exhausted, healthy])
+
+    asyncio.run(mark_connection_unavailable(
+        session,  # type: ignore[arg-type]
+        "ex",
+        cooldown_ms=5_000,
+        status_code=402,
+        error_detail="spending limit",
+    ))
+
+    assert session.committed is True
+    blob = json.loads(exhausted.data)
+    assert blob["errorCode"] == "402"
+    assert healthy.priority == 0
+    assert exhausted.priority == 1
