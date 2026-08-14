@@ -6,6 +6,7 @@ import {
   Play,
   Square,
   FileKey,
+  Download,
   Trash2,
   AlertTriangle,
   Globe,
@@ -14,6 +15,7 @@ import {
   Clock,
   Filter,
   RefreshCw,
+  BookOpen,
 } from 'lucide-react'
 import Card, { CardContent, CardHeader } from '../components/ui/Card'
 import Button from '../components/ui/Button'
@@ -33,6 +35,7 @@ export default function MitmPage() {
   const [filterTool, setFilterTool] = useState('')
   const [filterDirection, setFilterDirection] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
+  const [actionError, setActionError] = useState('')
 
   // Fetch config, status, and logs
   const fetchData = useCallback(async () => {
@@ -75,13 +78,19 @@ export default function MitmPage() {
   }, [fetchLogs])
 
   // Start MITM proxy
+  const apiError = (err) => (
+    err?.response?.data?.detail || err?.message || 'Request failed'
+  )
+
   const handleStart = async () => {
     setActionLoading('start')
+    setActionError('')
     try {
       await mitmApi.startMitm()
       await fetchData()
     } catch (err) {
       console.error('Failed to start MITM:', err)
+      setActionError(apiError(err))
     } finally {
       setActionLoading(null)
     }
@@ -90,24 +99,50 @@ export default function MitmPage() {
   // Stop MITM proxy
   const handleStop = async () => {
     setActionLoading('stop')
+    setActionError('')
     try {
       await mitmApi.stopMitm()
       await fetchData()
     } catch (err) {
       console.error('Failed to stop MITM:', err)
+      setActionError(apiError(err))
     } finally {
       setActionLoading(null)
     }
   }
 
   // Generate SSL certificate
+  const handleDownloadCert = async () => {
+    setActionError('')
+    try {
+      const res = await mitmApi.downloadCert()
+      const url = URL.createObjectURL(res.data)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = '9router-mitm-rootCA.crt'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Failed to download cert:', err)
+      setActionError(
+        err?.response?.status === 404
+          ? 'Generate the certificate first'
+          : apiError(err),
+      )
+    }
+  }
+
   const handleGenerateCert = async () => {
     setActionLoading('cert')
+    setActionError('')
     try {
       await mitmApi.generateCert()
       await fetchData()
     } catch (err) {
       console.error('Failed to generate cert:', err)
+      setActionError(apiError(err))
     } finally {
       setActionLoading(null)
     }
@@ -192,6 +227,13 @@ export default function MitmPage() {
         </div>
       </div>
 
+      {actionError && (
+        <div className="flex items-start gap-3 rounded-lg border border-red-500/30 bg-red-600/10 px-4 py-3">
+          <AlertTriangle size={18} className="text-red-400 shrink-0 mt-0.5" />
+          <p className="text-sm text-red-200 break-all">{actionError}</p>
+        </div>
+      )}
+
       {/* Warning Banner */}
       <div className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-600/10 px-4 py-3">
         <AlertTriangle size={18} className="text-amber-400 shrink-0 mt-0.5" />
@@ -240,21 +282,38 @@ export default function MitmPage() {
                 )}
                 <span className="text-sm text-zinc-300">SSL Certificate</span>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleGenerateCert}
-                disabled={actionLoading === 'cert'}
-              >
-                <FileKey size={14} />
-                {actionLoading === 'cert'
-                  ? 'Generating...'
-                  : config?.cert_generated
-                    ? 'Regenerate Certificate'
-                    : 'Generate Certificate'}
-              </Button>
-              {config?.cert_generated && (
-                <p className="text-xs text-emerald-400">Certificate ready</p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleGenerateCert}
+                  disabled={actionLoading === 'cert'}
+                >
+                  <FileKey size={14} />
+                  {actionLoading === 'cert'
+                    ? 'Generating...'
+                    : config?.cert_generated
+                      ? 'Regenerate Certificate'
+                      : 'Generate Certificate'}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDownloadCert}
+                  disabled={
+                    !(config?.cert_generated || status?.certExists)
+                  }
+                >
+                  <Download size={14} />
+                  Download CA
+                </Button>
+              </div>
+              {(config?.cert_generated || status?.certExists) && (
+                <p className="text-xs text-emerald-400 break-all">
+                  {status?.certPath
+                    ? `CA: ${status.certPath}`
+                    : 'Certificate ready'}
+                </p>
               )}
             </div>
 
@@ -265,7 +324,7 @@ export default function MitmPage() {
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
                 onBlur={handleUpdateBaseUrl}
-                placeholder="http://localhost:20128"
+                placeholder="http://127.0.0.1:8013"
               />
             </div>
 
@@ -283,16 +342,100 @@ export default function MitmPage() {
             </div>
           </div>
 
-          {/* How it works */}
-          <div className="mt-4 rounded-lg bg-zinc-800/40 border border-zinc-800 px-4 py-3">
-            <p className="text-xs text-zinc-400 leading-relaxed">
-              <span className="font-semibold text-zinc-300">How it works:</span>{' '}
-              The MITM proxy acts as a local HTTPS proxy that intercepts traffic from IDE tools.
-              Install the generated CA certificate in your system trust store, then configure
-              your IDE to use this proxy. All intercepted requests are logged below with full
-              headers and body previews for debugging.
-            </p>
+        </CardContent>
+      </Card>
+
+      {/* How to */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <BookOpen size={16} className="text-zinc-400" />
+            <h2 className="text-base font-semibold text-zinc-100">
+              How to
+            </h2>
           </div>
+        </CardHeader>
+        <CardContent>
+          <ol className="space-y-3 text-sm text-zinc-300 list-decimal pl-5">
+            <li>
+              Set <span className="text-zinc-100">Router Base URL</span> to
+              this 9Router instance
+              {' '}(<code className="text-xs text-zinc-400">http://127.0.0.1:8013</code>
+              {' '}or <code className="text-xs text-zinc-400">:9000</code>).
+            </li>
+            <li>
+              <span className="text-zinc-100">Generate Certificate</span>,
+              then <span className="text-zinc-100">Download CA</span>.
+              If 9Router runs in Docker, download to the machine that
+              runs the IDE.
+            </li>
+            <li>
+              <span className="text-zinc-100">Start</span> the proxy.
+              It listens on port 443. On the host that needs
+              {' '}<code className="text-xs text-zinc-400">setcap</code>
+              {' '}or root; in Docker, publish
+              {' '}<code className="text-xs text-zinc-400">443:443</code>.
+              Wait until the badge says Running.
+            </li>
+            <li>
+              Trust the CA on the IDE machine, then start the IDE.
+              Easiest (no sudo):
+              <pre className="mt-1.5 px-3 py-2 rounded-lg bg-zinc-800 text-[12px] text-zinc-200 overflow-x-auto">
+                {`export NODE_EXTRA_CA_CERTS="$PWD/9router-mitm-rootCA.crt"`}
+              </pre>
+              Launch Antigravity (or the IDE) from that same
+              terminal, after the proxy is already Running.
+            </li>
+            <li>
+              Point the IDE hosts at this machine. Toggle
+              {' '}<span className="text-zinc-100">DNS Intercept</span>
+              {' '}if 9Router can write
+              {' '}<code className="text-xs text-zinc-400">/etc/hosts</code>
+              {' '}(needs sudo). If the toggle stays Inactive, add the
+              lines yourself on the computer that runs the IDE
+              (not only inside a Docker container).
+              <p className="mt-2 text-xs text-zinc-400">
+                Linux: open a terminal and run
+                {' '}<code className="text-zinc-300">sudo nano /etc/hosts</code>,
+                paste the block for your tool at the bottom, save
+                (Ctrl+O, Enter, Ctrl+X). Then check with
+                {' '}<code className="text-zinc-300">getent hosts cloudcode-pa.googleapis.com</code>
+                — it must print <code className="text-zinc-300">127.0.0.1</code>.
+              </p>
+              <div className="mt-2 space-y-2">
+                {Object.entries(MITM_TOOLS).map(([key, tool]) => (
+                  <div key={key}>
+                    <p className="text-xs text-zinc-400 mb-1">
+                      {tool.name}
+                    </p>
+                    <pre className="px-3 py-2 rounded-lg bg-zinc-800 text-[12px] text-zinc-200 overflow-x-auto">
+                      {tool.hosts
+                        .map((h) => `127.0.0.1 ${h}  # 9router-mitm`)
+                        .join('\n')}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            </li>
+            <li>
+              Send a chat from the IDE. Matching requests appear in
+              Traffic Logs. This build intercepts and logs, then
+              forwards to the real upstream (model remap to 9Router
+              is not wired yet).
+            </li>
+            <li>
+              When finished:
+              {' '}<span className="text-zinc-100">Stop</span> and turn
+              DNS Intercept off. If you edited
+              {' '}<code className="text-xs text-zinc-400">/etc/hosts</code>
+              {' '}by hand, open it again
+              {' '}(<code className="text-xs text-zinc-300">sudo nano /etc/hosts</code>)
+              and delete every line that contains
+              {' '}<code className="text-xs text-zinc-300"># 9router-mitm</code>.
+              Leave those lines in and Google / Copilot will keep
+              going to 127.0.0.1.
+            </li>
+          </ol>
         </CardContent>
       </Card>
 

@@ -9,6 +9,7 @@ export const mitmApi = {
   startMitm: () => client.post('/mitm/start'),
   stopMitm: () => client.post('/mitm/stop'),
   generateCert: () => client.post('/mitm/generate-cert'),
+  downloadCert: () => client.get('/mitm/cert', { responseType: 'blob' }),
   getStatus: () => client.get('/mitm/status'),
 
   // Logs

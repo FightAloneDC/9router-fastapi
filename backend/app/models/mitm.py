@@ -17,7 +17,7 @@ class MitmConfig(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     port: Mapped[int] = mapped_column(Integer, default=443, nullable=False)
     router_base_url: Mapped[str] = mapped_column(
-        String(500), default="http://localhost:20128", nullable=False
+        String(500), default="http://127.0.0.1:8013", nullable=False
     )
     cert_generated: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
