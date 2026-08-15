@@ -18,7 +18,12 @@ from app.routers.providers.connection_filters import (
     ConnectionListFilters,
     build_connection_filter_clause,
 )
-from app.routers.providers.constants import SUGGESTED_MODELS_FILTERS, normalize_models_list
+from app.routers.providers.constants import (
+    DEFAULT_ACCOUNT_TYPE,
+    SUGGESTED_MODELS_FILTERS,
+    normalize_account_type,
+    normalize_models_list,
+)
 from app.routers.providers.helpers import _get_provider_config
 from app.routers.providers.helpers import (
     _connection_to_out,
@@ -188,12 +193,19 @@ async def list_provider_connections(
 
     models: list = []
     if include_models and total_all > 0:
-        blobs = await db.execute(
-            select(ProviderConnection.data).where(provider_only)
+        from app.services.provider_models_store import (
+            list_provider_models as list_catalog,
+            uses_model_catalog_table,
         )
-        models = _models_union_from_data_blobs(
-            list(blobs.scalars().all())
-        )
+        if uses_model_catalog_table(provider_id):
+            models = await list_catalog(db, provider_id)
+        else:
+            blobs = await db.execute(
+                select(ProviderConnection.data).where(provider_only)
+            )
+            models = _models_union_from_data_blobs(
+                list(blobs.scalars().all()),
+            )
 
     payload: dict = {
         "provider": provider_id,
@@ -224,20 +236,70 @@ async def set_provider_models(
     db: AsyncSession = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    """Set models JSON on all connections of a provider (one round-trip)."""
+    """Set models: catalog table (flagged providers) or all blobs."""
     if "models" not in body:
         raise HTTPException(status_code=400, detail="models is required")
+    from app.providers.provider import Provider
+    from app.services.provider_models_store import (
+        replace_provider_models,
+        uses_model_catalog_table,
+    )
+
     models = normalize_models_list(body.get("models") or [])
+    if uses_model_catalog_table(provider_id):
+        force = False
+        try:
+            force = bool(
+                Provider(provider_id).config().SYNC_DISABLED_WITH_MODEL_LIST
+            )
+        except (ValueError, ModuleNotFoundError):
+            force = False
+        models = await replace_provider_models(
+            db, provider_id, models, force_enable=force,
+        )
+        await db.commit()
+        return {
+            "provider": provider_id,
+            "updated": 1,
+            "models": models,
+        }
+
+
+@router.post("/providers/by-provider/{provider_id}/models/custom")
+async def add_custom_provider_model(
+    provider_id: str,
+    body: dict = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Add a user model to the catalog (survives fetch prune)."""
+    from app.services.provider_models_store import (
+        upsert_custom_model,
+        uses_model_catalog_table,
+    )
+    if not uses_model_catalog_table(provider_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Custom catalog models need MODEL_CATALOG_TABLE",
+        )
+    model_id = str(body.get("id") or "").strip()
+    try:
+        row = await upsert_custom_model(db, provider_id, model_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await db.commit()
+    return {"provider": provider_id, "model": row}
 
     result = await db.execute(
         select(ProviderConnection).where(
-            ProviderConnection.provider == provider_id
+            ProviderConnection.provider == provider_id,
         )
     )
     connections = result.scalars().all()
     if not connections:
-        raise HTTPException(status_code=404, detail="No connections for provider")
-
+        raise HTTPException(
+            status_code=404, detail="No connections for provider",
+        )
     for conn in connections:
         try:
             data = json.loads(conn.data) if conn.data else {}
@@ -246,12 +308,37 @@ async def set_provider_models(
         data["models"] = models
         conn.data = json.dumps(data)
         invalidate_connection_cache(str(conn.id))
-
     await db.commit()
     return {
         "provider": provider_id,
         "updated": len(connections),
         "models": models,
+    }
+
+
+@router.put("/providers/by-provider/{provider_id}/prefix")
+async def set_provider_prefix(
+    provider_id: str,
+    body: dict = Body(...),
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    """Set public model prefix. Empty restores config.ALIAS."""
+    from app.services.provider_aliases import upsert_alias
+    from app.services.proxy import display_alias
+
+    raw = body.get("prefix")
+    if raw is None:
+        raw = body.get("alias")
+    if raw is not None and not isinstance(raw, str):
+        raise HTTPException(
+            status_code=400, detail="prefix must be a string",
+        )
+    await upsert_alias(db, provider_id, raw)
+    await db.commit()
+    return {
+        "provider": provider_id,
+        "prefix": display_alias(provider_id),
     }
 
 
@@ -261,16 +348,29 @@ async def clear_provider_models_bulk(
     db: AsyncSession = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    """Clear models on all connections of a provider."""
+    """Clear catalog table or all connection blobs."""
+    from app.services.provider_models_store import (
+        clear_provider_models,
+        uses_model_catalog_table,
+    )
     result = await db.execute(
         select(ProviderConnection).where(
-            ProviderConnection.provider == provider_id
+            ProviderConnection.provider == provider_id,
         )
     )
     connections = result.scalars().all()
     if not connections:
-        raise HTTPException(status_code=404, detail="No connections for provider")
-
+        raise HTTPException(
+            status_code=404, detail="No connections for provider",
+        )
+    if uses_model_catalog_table(provider_id):
+        n = await clear_provider_models(db, provider_id)
+        await db.commit()
+        return {
+            "provider": provider_id,
+            "updated": n,
+            "models": [],
+        }
     for conn in connections:
         try:
             data = json.loads(conn.data) if conn.data else {}
@@ -279,9 +379,12 @@ async def clear_provider_models_bulk(
         data["models"] = []
         conn.data = json.dumps(data)
         invalidate_connection_cache(str(conn.id))
-
     await db.commit()
-    return {"provider": provider_id, "updated": len(connections), "models": []}
+    return {
+        "provider": provider_id,
+        "updated": len(connections),
+        "models": [],
+    }
 
 
 @router.post("/providers/{conn_id}/reorder")
@@ -533,6 +636,13 @@ async def create_provider(
         data["globalPriority"] = body.globalPriority
     if body.defaultModel:
         data["defaultModel"] = body.defaultModel
+    try:
+        account_type = normalize_account_type(
+            body.accountType or DEFAULT_ACCOUNT_TYPE,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    data["accountType"] = account_type or DEFAULT_ACCOUNT_TYPE
 
     # Store base URL if provided or use default
     if body.baseUrl:
@@ -740,6 +850,14 @@ async def update_provider(
         data["defaultModel"] = body.defaultModel
     if body.testStatus is not None:
         data["testStatus"] = body.testStatus
+    if body.accountType is not None:
+        try:
+            account_type = normalize_account_type(body.accountType)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        data["accountType"] = (
+            account_type or DEFAULT_ACCOUNT_TYPE
+        )
     if body.lastError is not None:
         data["lastError"] = body.lastError
     if body.lastErrorAt is not None:

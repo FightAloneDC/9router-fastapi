@@ -17,6 +17,7 @@ class OpenrouterConfig(BaseProviderConfig):
     BASE_URL: str = "https://openrouter.ai/api/v1"
     SERVICE_KINDS: list[str] = ["llm", "embedding", "imageToText", "tts"]
     CATEGORY: str = "freeTier"
+    MODEL_CATALOG_TABLE: bool = True
 
 
 class OpenrouterMetadata(BaseMetadata):

@@ -111,7 +111,7 @@ class QoderHandler(BaseProviderHandler):
         from app.providers.qoder.constants import QODER_CHAT_URL_ENCODED
         from app.providers.qoder.models import get_qoder_model_config, resolve_qoder_models
         from app.providers.qoder.encoding import qoder_encode_body
-        from app.services.proxy import ALIAS_TO_ID
+        from app.services.proxy import _resolve_provider_alias
 
         data = data or {}
         user_id = data.get("userId", "")
@@ -121,7 +121,7 @@ class QoderHandler(BaseProviderHandler):
         # Resolve model ID: "qd/qoder/auto" -> "auto"
         if "/" in model:
             parts = model.split("/", 1)
-            resolved = ALIAS_TO_ID.get(parts[0], parts[0])
+            resolved = _resolve_provider_alias(parts[0])
             remainder = parts[1]
             qoder_key = remainder[len(resolved) + 1:] if remainder.startswith(resolved + "/") else remainder
         else:

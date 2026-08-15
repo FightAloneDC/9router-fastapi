@@ -14,7 +14,26 @@ _DATA_INTERNAL_KEYS = {
     "anomaly", "anomalyReason", "anomalyAt",
     "anomalyRequestId",
     "expiresAt", "lastUsedAt", "consecutiveUseCount",
+    "accountType",
 }
+
+# Per-connection billing kind (JSON blob, not a DB column).
+ACCOUNT_TYPES = ("free", "payg", "subscribe")
+DEFAULT_ACCOUNT_TYPE = "free"
+
+
+def normalize_account_type(value: str | None) -> str | None:
+    """Return a known account type. Blank becomes free. None = omitted."""
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if raw == "":
+        return DEFAULT_ACCOUNT_TYPE
+    if raw in ACCOUNT_TYPES:
+        return raw
+    raise ValueError(
+        "accountType must be one of: free, payg, subscribe"
+    )
 
 # Sensitive fields to strip from output
 _SENSITIVE_KEYS = {"apiKey", "accessToken", "refreshToken", "idToken"}

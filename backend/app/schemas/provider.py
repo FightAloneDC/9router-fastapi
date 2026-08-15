@@ -31,6 +31,7 @@ class ProviderConnectionCreate(BaseModel):
     baseUrl: Optional[str] = None
     proxyPoolId: Optional[uuid.UUID] = None
     testStatus: Optional[str] = None
+    accountType: Optional[str] = None
     providerSpecificData: Optional[dict] = None
     # Proxy config fields (also accepted inline)
     connectionProxyEnabled: Optional[bool] = None
@@ -55,6 +56,7 @@ class ProviderConnectionUpdate(BaseModel):
     baseUrl: Optional[str] = None
     proxyPoolId: Optional[uuid.UUID] = None
     testStatus: Optional[str] = None
+    accountType: Optional[str] = None
     lastError: Optional[str] = None
     lastErrorAt: Optional[str] = None
     providerSpecificData: Optional[dict] = None
@@ -83,6 +85,7 @@ class ProviderConnectionOut(BaseModel):
     is_active: bool
     defaultModel: Optional[str] = None
     test_status: Optional[str] = None
+    accountType: Optional[str] = None
     lastError: Optional[str] = None
     lastErrorAt: Optional[str] = None
     errorCode: Optional[str] = None

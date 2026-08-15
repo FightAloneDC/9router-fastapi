@@ -9,7 +9,11 @@ from sqlalchemy import func, select
 from app.models.provider import ProviderConnection, ProviderNode
 from app.models.proxy_pool import ProxyPool
 from app.providers.provider import Provider
-from app.routers.providers.constants import _DATA_INTERNAL_KEYS, normalize_models_list
+from app.routers.providers.constants import (
+    DEFAULT_ACCOUNT_TYPE,
+    _DATA_INTERNAL_KEYS,
+    normalize_models_list,
+)
 
 
 async def _next_provider_priority(
@@ -141,6 +145,7 @@ def _connection_to_out(conn: ProviderConnection) -> dict:
         "is_active": conn.is_active,
         "defaultModel": data.get("defaultModel"),
         "test_status": data.get("testStatus"),
+        "accountType": data.get("accountType") or DEFAULT_ACCOUNT_TYPE,
         "lastError": last_error,
         "lastErrorAt": last_error_at,
         "errorCode": error_code,
@@ -163,8 +168,9 @@ def _sanitize_connection(conn_dict: dict) -> dict:
     """Sanitize connection for client-facing output (whitelist only)."""
     SAFE_FIELDS = [
         "id", "provider", "auth_type", "name", "email", "displayName",
-        "priority", "globalPriority", "is_active", "defaultModel",
-        "test_status", "lastError", "lastErrorAt", "errorCode",
+        "priority", "globalPriority",         "is_active", "defaultModel",
+        "test_status", "accountType", "lastError", "lastErrorAt",
+        "errorCode",
         "expiresAt", "lastUsedAt", "consecutiveUseCount",
         "proxyUsage",
         "created_at", "updated_at", "serviceKinds",

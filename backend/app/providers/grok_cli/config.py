@@ -33,6 +33,7 @@ class GrokCliConfig(BaseProviderConfig):
     }
     # Accepts bulk JSON account import (grok-farm-modular export)
     SUPPORTS_BULK_IMPORT: bool = True
+    SYNC_DISABLED_WITH_MODEL_LIST: bool = True
 
     # ── Static client fingerprint headers ──────────────────────────────
     EXTRA_HEADERS: dict[str, str] = {

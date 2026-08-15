@@ -162,6 +162,12 @@ def _build_provider_entry(
         "modelsFetcher": config.MODELS_FETCHER,
         "supportsPAT": config.SUPPORTS_PAT,
         "supportsBulkImport": config.SUPPORTS_BULK_IMPORT,
+        "syncDisabledWithModelList": (
+            config.SYNC_DISABLED_WITH_MODEL_LIST
+        ),
+        "modelCatalogTable": bool(
+            getattr(config, "MODEL_CATALOG_TABLE", False)
+        ),
         "bulkImportFormat": config.BULK_IMPORT_FORMAT,
         "requiresProxy": config.REQUIRES_PROXY,
         "customModal": config.CUSTOM_MODAL or None,

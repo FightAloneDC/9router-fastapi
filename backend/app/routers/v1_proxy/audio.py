@@ -531,7 +531,7 @@ async def audio_voices(
     Plan: docs/plans/v1-audio-voices.md (Phase 4).
     """
     from app.services.voice_fetchers import fetch_voices_cached
-    from app.services.proxy import ID_TO_ALIAS
+    from app.services.proxy import display_alias
     from app.providers.provider import Provider
 
     # Check if provider supports voice listing via handler
@@ -598,7 +598,7 @@ async def audio_voices(
             },
         )
 
-    alias: str = ID_TO_ALIAS.get(provider, provider)
+    alias: str = display_alias(provider)
     data_out: list[dict] = [
         {
             "id": v["id"],

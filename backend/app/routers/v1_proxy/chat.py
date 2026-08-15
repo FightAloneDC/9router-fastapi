@@ -39,6 +39,7 @@ from .shared import (
     _non_stream_response,
     _should_fallback_on_error,
     _build_provider_request,
+    _before_user_forward,
     _maybe_refresh_on_auth_error,
     _mark_conn_failed,
 )
@@ -148,6 +149,15 @@ async def chat_completions(
                     last_error_detail = f"Provider request build failed: {str(e)}"
                     last_error_status = 500
                     exclude_ids.add(conn_id)
+                    continue
+                if not await _before_user_forward(
+                    target, conn_data, proxy,
+                ):
+                    last_error_detail = (
+                        "quality-gate: probe did not return 407"
+                    )
+                    last_error_status = 503
+                    exclude_ids.add(target.connection_id)
                     continue
 
         try:
@@ -859,7 +869,13 @@ async def _non_stream_grok_responses(
         assembled = response_from_chat_completion(translated)
         finish_dump(dump, assembled, status="ok")
         from app.providers.grok_cli.anomaly import is_phantom_write
-        if is_phantom_write(request_body or body, assembled):
+        from app.providers.grok_cli.constants import (
+            PHANTOM_WRITE_RETRY,
+        )
+        if (
+            PHANTOM_WRITE_RETRY
+            and is_phantom_write(request_body or body, assembled)
+        ):
             print(
                 "[grok-cli retry] phantom write, retrying",
                 flush=True,
@@ -1013,11 +1029,19 @@ async def _stream_grok_responses(
             from app.providers.grok_cli.anomaly import (
                 is_phantom_write,
             )
+            from app.providers.grok_cli.constants import (
+                PHANTOM_WRITE_RETRY,
+            )
             assembled = assembler.to_dict()
             finish_dump(
                 dump, assembled, status="ok",
             )
-            if is_phantom_write(request_body or body, assembled):
+            if (
+                PHANTOM_WRITE_RETRY
+                and is_phantom_write(
+                    request_body or body, assembled,
+                )
+            ):
                 print(
                     "[grok-cli retry] phantom write, retrying",
                     flush=True,

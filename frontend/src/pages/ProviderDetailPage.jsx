@@ -186,7 +186,13 @@ function ConfirmModal({ isOpen, onClose, onConfirm, title, message, variant = 'd
 /* ════════════════════════════════════════════════════════════════
    ConnectionRow — single connection row with proxy, cooldown, etc.
    ════════════════════════════════════════════════════════════════ */
-function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onEdit, onDelete, onTest, testing, testResult, isOAuth = false, isSelected = false, onSelect = null }) {
+const ACCOUNT_TYPE_OPTIONS = [
+  { value: 'free', label: 'Free' },
+  { value: 'payg', label: 'PAYG' },
+  { value: 'subscribe', label: 'Subscribe' },
+]
+
+function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onUpdateAccountType, onEdit, onDelete, onTest, testing, testResult, isOAuth = false, isSelected = false, onSelect = null }) {
   const [showProxyDropdown, setShowProxyDropdown] = useState(false)
   const [updatingProxy, setUpdatingProxy] = useState(false)
   const [showLastError, setShowLastError] = useState(false)
@@ -305,6 +311,21 @@ function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMo
               <span className="text-xs text-zinc-500">
                 #{Number(connection.priority) + 1}
               </span>
+            )}
+            {onUpdateAccountType && (
+              <select
+                value={connection.accountType || 'free'}
+                onChange={(e) => onUpdateAccountType(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                className="h-5 max-w-[110px] rounded border border-zinc-700 bg-zinc-900 px-1 text-[10px] text-zinc-300"
+                title="Account type"
+              >
+                {ACCOUNT_TYPE_OPTIONS.map((opt) => (
+                  <option key={opt.value || 'unset'} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
             )}
           </div>
           {hasAnyProxy && (
@@ -1392,7 +1413,7 @@ function ChatTestPlayground({ providerId, providerAlias, connections }) {
 // Dedupe identical in-flight loads (React StrictMode double-mount in dev).
 const _inflightLoads = new Map()
 
-export default function ProviderDetailPage() {
+function ProviderDetailPage() {
   const { providerId: rawProviderId } = useParams()
   const catalogStore = useCatalogStore()
   const [catalogReady, setCatalogReady] = useState(false)
@@ -1476,6 +1497,8 @@ export default function ProviderDetailPage() {
 
   // Header image
   const [headerImgError, setHeaderImgError] = useState(false)
+  const [prefixDraft, setPrefixDraft] = useState('')
+  const [savingPrefix, setSavingPrefix] = useState(false)
 
   // Determine if this is a compatible provider
   const isCompatible = providerNode && COMPATIBLE_TYPES.has(providerNode.type)
@@ -1646,14 +1669,7 @@ export default function ProviderDetailPage() {
       const mergedModels = (payload.models || []).map((m) =>
         typeof m === 'string' ? m : m.id
       )
-      const allModels = new Set(mergedModels)
-      Object.entries(modelAliasesRef.current).forEach(([, fullModel]) => {
-        const prefix = `${storageAlias}/`
-        if (fullModel.startsWith(prefix)) {
-          allModels.add(fullModel.slice(prefix.length))
-        }
-      })
-      const modelsList = [...allModels]
+      const modelsList = [...new Set(mergedModels)]
       setModels(modelsList)
 
       if (filtered.length > 0 || modelsList.length > 0) {
@@ -1845,11 +1861,23 @@ export default function ProviderDetailPage() {
     }
   }
 
-  const addModel = (model) => {
+  const addModel = async (model) => {
     const trimmed = (model || newModel).trim()
     if (!trimmed) return
     const prefixed = trimmed.includes('/') ? trimmed : `${providerId}/${trimmed}`
-    if (models.includes(prefixed)) return
+    if (models.includes(prefixed) || models.includes(trimmed)) return
+    if (info?.modelCatalogTable) {
+      setNewModel('')
+      try {
+        await providersApi.addCatalogCustomModel(providerId, {
+          id: trimmed.includes('/') ? trimmed : prefixed,
+        })
+        await fetchConnections()
+      } catch (err) {
+        console.error('Failed to add custom model:', err)
+      }
+      return
+    }
     const updated = [...models, prefixed]
     setNewModel('')
     setEnabledModelIds((prev) => new Set([...prev, prefixed]))
@@ -1885,14 +1913,34 @@ export default function ProviderDetailPage() {
       // Sync models to every connection in one request
       await providersApi.setProviderModels(providerId, fetchedArray)
 
-      // First fetch: disable all models by default (user requested behavior)
       try {
-        const { default: client } = await import('../api/client')
-        const disabledRes = await client.get('/models/disabled', { params: { providerAlias: providerStorageAlias } })
-        // Only auto-disable if this provider has no disabled-models history yet
-        if (!disabledRes.data?.initialized && fetchedArray.length > 0) {
-          await client.post('/models/disabled', { providerAlias: providerStorageAlias, ids: fetchedArray })
+        if (info?.syncDisabledWithModelList) {
+          await Promise.all(
+            fetchedArray.map((id) =>
+              providersApi.enableModel({
+                providerAlias: providerStorageAlias,
+                id,
+              }),
+            ),
+          )
+        } else if (!info?.modelCatalogTable) {
+          const disabledRes = await providersApi.getDisabledModels(
+            providerStorageAlias,
+          )
+          if (
+            !disabledRes.data?.initialized &&
+            fetchedArray.length > 0
+          ) {
+            await providersApi.disableModels({
+              providerAlias: providerStorageAlias,
+              ids: fetchedArray,
+            })
+          }
         }
+        const enabledRes = await providersApi.getDisabledModels(
+          providerStorageAlias,
+        )
+        setDisabledModelIds(enabledRes.data?.ids || [])
       } catch {
         // Best effort - non-critical if disabled-models endpoint fails
       }
@@ -1922,6 +1970,11 @@ export default function ProviderDetailPage() {
     setClearingModels(true)
     try {
       await providersApi.clearProviderModelsByProvider(providerId)
+
+      if (info?.syncDisabledWithModelList) {
+        await providersApi.enableAllModels(providerStorageAlias)
+        setDisabledModelIds([])
+      }
 
       // For compatible providers, also clear aliases
       if (isCompatible) {
@@ -2094,6 +2147,47 @@ export default function ProviderDetailPage() {
     } catch (err) {
       console.error('Failed to toggle:', err)
       await fetchConnections()
+    }
+  }
+
+  const handleUpdateAccountType = async (id, accountType) => {
+    setConnections((prev) => prev.map((c) => (
+      c.id === id ? { ...c, accountType } : c
+    )))
+    try {
+      await providersApi.updateProvider(id, { accountType })
+    } catch (err) {
+      console.error('Failed to set account type:', err)
+      await fetchConnections()
+    }
+  }
+
+  const handleSavePrefix = async () => {
+    if (isCompatible) return
+    const next = (prefixDraft || '').trim()
+    setSavingPrefix(true)
+    try {
+      const res = await providersApi.setProviderPrefix(
+        providerId,
+        next,
+      )
+      const prefix = res.data?.prefix || next
+      setPrefixDraft(prefix)
+      useCatalogStore.setState((s) => {
+        const cur = s.providers[providerId]
+        if (!cur) return {}
+        return {
+          providers: {
+            ...s.providers,
+            [providerId]: { ...cur, alias: prefix },
+          },
+        }
+      })
+    } catch (err) {
+      console.error('Failed to set prefix:', err)
+      setPrefixDraft(providerDisplayAlias || '')
+    } finally {
+      setSavingPrefix(false)
     }
   }
 
@@ -2467,6 +2561,10 @@ export default function ProviderDetailPage() {
   // ── Effects ──
   // (initial load is handled above with in-flight dedupe)
 
+  useEffect(() => {
+    setPrefixDraft(providerDisplayAlias || '')
+  }, [providerDisplayAlias])
+
   // Reset connection pagination when switching providers
   useEffect(() => {
     setConnectionPage(1)
@@ -2824,6 +2922,36 @@ export default function ProviderDetailPage() {
                   (connectionTotalAll || connectionTotal) === 1 ? '' : 's'
                 } configured`}
             </p>
+            {!isCompatible && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="text-xs text-zinc-500">Prefix</span>
+                <input
+                  value={prefixDraft}
+                  onChange={(e) => setPrefixDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSavePrefix()
+                  }}
+                  disabled={savingPrefix}
+                  className="w-28 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200"
+                  placeholder={providerAlias || providerId}
+                />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={handleSavePrefix}
+                  disabled={
+                    savingPrefix
+                    || (prefixDraft || '').trim()
+                      === (providerDisplayAlias || '')
+                  }
+                >
+                  {savingPrefix ? 'Saving…' : 'Apply'}
+                </Button>
+                <span className="text-xs text-zinc-600">
+                  {(prefixDraft || providerDisplayAlias)}/model-id
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -3204,6 +3332,7 @@ export default function ProviderDetailPage() {
                           onMoveUp={() => handleSwapPriority(conn.id, 'up')}
                           onMoveDown={() => handleSwapPriority(conn.id, 'down')}
                           onToggleActive={(isActive) => handleToggleActive(conn.id, isActive)}
+                          onUpdateAccountType={(accountType) => handleUpdateAccountType(conn.id, accountType)}
                           onUpdateProxy={async (proxyPoolId) => {
                             try {
                               await updateConnectionProxy(conn, proxyPoolId)
@@ -3484,3 +3613,5 @@ export default function ProviderDetailPage() {
     </div>
   )
 }
+
+export default ProviderDetailPage

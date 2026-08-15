@@ -179,6 +179,32 @@ async def _build_provider_request(
     return None, None
 
 
+async def _before_user_forward(
+    target: ProxyTarget,
+    conn_data: dict | None,
+    proxy: str | None,
+) -> bool:
+    """Provider hook before forwarding a user chat.
+
+    False means skip this connection (try the next candidate).
+    """
+    try:
+        from app.providers.provider import Provider
+        handler = Provider(target.provider).handler()
+    except (ValueError, ModuleNotFoundError):
+        return True
+    hook = getattr(handler, "before_user_forward", None)
+    if hook is None:
+        return True
+    return await hook(
+        url=target.url,
+        model=target.model,
+        conn_data=conn_data or {},
+        proxy=proxy,
+        connection_id=target.connection_id,
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Qoder SSE unwrapper
 # ─────────────────────────────────────────────────────────────────────────────

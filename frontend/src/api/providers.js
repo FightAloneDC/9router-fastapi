@@ -16,6 +16,13 @@ export const providersApi = {
     }),
   setProviderModels: (providerId, models) =>
     client.patch(`/providers/by-provider/${providerId}/models`, { models }),
+  setProviderPrefix: (providerId, prefix) =>
+    client.put(`/providers/by-provider/${providerId}/prefix`, { prefix }),
+  addCatalogCustomModel: (providerId, data) =>
+    client.post(
+      `/providers/by-provider/${providerId}/models/custom`,
+      data,
+    ),
   clearProviderModelsByProvider: (providerId) =>
     client.delete(`/providers/by-provider/${providerId}/models`),
   reorderProviderConnection: (connId, direction) =>

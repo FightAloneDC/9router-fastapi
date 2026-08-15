@@ -42,6 +42,15 @@ async def lifespan(app: FastAPI):
     refresh_task = asyncio.create_task(token_refresh_loop())
     health_task = asyncio.create_task(connection_health_loop())
 
+    from app.database import async_session
+    from app.services.provider_aliases import refresh_from_db
+
+    try:
+        async with async_session() as session:
+            await refresh_from_db(session)
+    except Exception:
+        pass
+
     yield
 
     # Shutdown: cancel background tasks and dispose engine

@@ -127,3 +127,26 @@ class GrokCliHandler(BaseProviderHandler):
         headers["Accept"] = "text/event-stream"
 
         return json.dumps(transformed).encode("utf-8"), headers
+
+    async def before_user_forward(
+        self,
+        *,
+        url: str,
+        model: str,
+        conn_data: dict,
+        proxy: str | None = None,
+        connection_id: str | None = None,
+    ) -> bool:
+        """Probe this connection only; pass iff output is exactly 407."""
+        from app.providers.grok_cli.constants import QUALITY_GATE_407
+        from app.providers.grok_cli import quality_gate
+
+        if not QUALITY_GATE_407:
+            return True
+        return await quality_gate.probe_literal_407(
+            handler=self,
+            url=url,
+            conn_data=conn_data,
+            proxy=proxy,
+            connection_id=connection_id,
+        )

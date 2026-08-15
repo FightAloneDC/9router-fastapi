@@ -12,6 +12,7 @@ import httpx
 from app.providers.grok_cli.constants import (
     GROK_CLI_BASE_URL,
     GROK_CLI_CLIENT_IDENTIFIER,
+    GROK_CLI_DROP_MODEL_IDS,
     GROK_CLI_MODEL,
     GROK_CLI_TOKEN_AUTH,
     GROK_CLI_USER_AGENT,
@@ -56,7 +57,11 @@ def parse_response(data: Any) -> list[dict]:
             or item.get("name")
             or ""
         ).strip()
-        if not model_id or model_id in seen:
+        if (
+            not model_id
+            or model_id in seen
+            or model_id in GROK_CLI_DROP_MODEL_IDS
+        ):
             continue
         seen.add(model_id)
 

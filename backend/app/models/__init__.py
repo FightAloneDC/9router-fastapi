@@ -7,6 +7,8 @@ from app.models.combo import Combo
 from app.models.base import Base
 from app.models.mitm import MitmConfig, MitmLog
 from app.models.provider import ProviderConnection, ProviderNode
+from app.models.provider_model import ProviderModel
+from app.models.provider_alias import ProviderAlias
 from app.models.proxy_pool import ProxyPool
 from app.models.quota_cache import QuotaCache
 from app.models.settings import KV, SettingsModel
@@ -27,6 +29,8 @@ __all__ = [
     "KV",
     "ProviderConnection",
     "ProviderNode",
+    "ProviderModel",
+    "ProviderAlias",
     "ProxyPool",
     "QuotaCache",
     "Combo",

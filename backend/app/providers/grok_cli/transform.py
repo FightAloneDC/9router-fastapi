@@ -504,7 +504,7 @@ def build_grok_cli_request(
     """Build the Responses API request body + per-request header metadata.
 
     Args:
-        model: Resolved model id (e.g. "grok-build", "grok-4.5-high").
+        model: Resolved model id (e.g. "grok-4.6", "grok-4.5-high").
         body: Client request body (Chat Completions or Responses format).
         data: Connection data blob (accessToken, providerSpecificData...).
 

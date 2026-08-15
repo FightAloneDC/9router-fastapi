@@ -39,6 +39,7 @@ from .shared import (
     _maybe_refresh_on_auth_error,
     _mark_conn_failed,
     _build_provider_request,
+    _before_user_forward,
 )
 
 router = APIRouter()
@@ -183,6 +184,16 @@ async def messages_endpoint(
                 last_error_status = 500
                 if conn_id:
                     exclude_ids.add(conn_id)
+                continue
+            if not await _before_user_forward(
+                target, conn_data, proxy,
+            ):
+                last_error_detail = (
+                    "quality-gate: probe did not return 407"
+                )
+                last_error_status = 503
+                if target.connection_id:
+                    exclude_ids.add(target.connection_id)
                 continue
 
         try:
@@ -575,16 +586,20 @@ async def _messages_stream_response(
                     error=dump_error,
                 )
                 if dump_status == "ok":
+                    from app.providers.grok_cli.constants import (
+                        PHANTOM_WRITE_RETRY,
+                    )
                     from app.providers.grok_cli.anomaly import (
                         maybe_mark_phantom_write,
                     )
-                    await maybe_mark_phantom_write(
-                        db,
-                        connection_id,
-                        request_body or body,
-                        assembled,
-                        request_id,
-                    )
+                    if PHANTOM_WRITE_RETRY:
+                        await maybe_mark_phantom_write(
+                            db,
+                            connection_id,
+                            request_body or body,
+                            assembled,
+                            request_id,
+                        )
 
     if is_claude_upstream:
         generator = generate_claude_passthrough()

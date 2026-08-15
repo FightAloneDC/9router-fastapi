@@ -13,7 +13,7 @@ from app.models.settings import SettingsModel
 from app.providers.provider import Provider
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
-from app.services.proxy import ID_TO_ALIAS
+from app.services.proxy import _resolve_provider_alias
 from app.routers.providers.constants import normalize_models_list
 from app.routers.providers.nodes import _build_node_handler
 from app.services.outbound_proxy import proxy_for_connection, use_outbound_proxy
@@ -88,35 +88,44 @@ async def list_provider_models(
 
     provider_id can be a provider ID or alias.
     """
-    from app.services.proxy import ALIAS_TO_ID
-    resolved = ALIAS_TO_ID.get(provider_id, provider_id)
-
+    from app.services.proxy import _resolve_provider_alias
+    from app.services.provider_models_store import (
+        list_provider_models as list_catalog,
+        uses_model_catalog_table,
+    )
+    resolved = _resolve_provider_alias(provider_id)
+    if uses_model_catalog_table(resolved):
+        all_models = await list_catalog(db, resolved)
+        return {
+            "provider": resolved,
+            "count": len(all_models),
+            "models": all_models,
+        }
     result = await db.execute(
         select(ProviderConnection)
-        .where(
-            ProviderConnection.provider == resolved,
-            ProviderConnection.is_active == True,
-        )
+        .where(ProviderConnection.provider == resolved)
         .order_by(ProviderConnection.priority)
     )
     connections = result.scalars().all()
-
     all_models: list[dict] = []
     seen: set[str] = set()
     for conn in connections:
-        data = json.loads(conn.data) if conn.data else {}
-        for m in data.get("models", []):
+        blob = json.loads(conn.data) if conn.data else {}
+        for m in blob.get("models", []):
             mid = m if isinstance(m, str) else m.get("id", "")
             if mid and mid not in seen:
                 seen.add(mid)
                 mtype = "llm"
                 if isinstance(m, dict) and "type" in m:
                     mtype = m["type"]
-                elif mid in data.get("modelTypes", {}):
-                    mtype = data["modelTypes"][mid]
+                elif mid in blob.get("modelTypes", {}):
+                    mtype = blob["modelTypes"][mid]
                 all_models.append({"id": mid, "type": mtype})
-
-    return {"provider": resolved, "count": len(all_models), "models": all_models}
+    return {
+        "provider": resolved,
+        "count": len(all_models),
+        "models": all_models,
+    }
 
 
 @router.get("/providers/{conn_id}/models")
@@ -155,12 +164,30 @@ async def fetch_provider_models(
         else:
             models = await _fetch_builtin_models(provider, api_key, data)
 
-    # Persist and return
-    data["models"] = [
+    # Persist catalog (per provider), not on this connection blob.
+    stored = [
         {"id": m.get("id"), "type": m.get("type", "llm")}
         for m in models if m.get("id")
     ]
-    conn.data = json.dumps(data)
+    from app.providers.provider import Provider as P
+    from app.services.provider_models_store import (
+        replace_provider_models,
+        uses_model_catalog_table,
+    )
+    if uses_model_catalog_table(provider):
+        force = False
+        try:
+            force = bool(
+                P(provider).config().SYNC_DISABLED_WITH_MODEL_LIST
+            )
+        except (ValueError, ModuleNotFoundError):
+            force = False
+        await replace_provider_models(
+            db, provider, stored, force_enable=force,
+        )
+    else:
+        data["models"] = stored
+        conn.data = json.dumps(data)
     await db.flush()
     return {
         "provider": provider,

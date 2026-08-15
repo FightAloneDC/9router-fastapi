@@ -210,17 +210,25 @@ async def get_disabled_models(
     _user=Depends(get_current_user),
 ):
     """Get disabled models, optionally filtered by provider alias."""
-    data = await _get_settings_data(db)
-    all_disabled = data.get("disabledModels", {})
+    from app.services.proxy import _resolve_provider_alias
+    from app.services.provider_models_store import (
+        catalog_initialized,
+        list_disabled_ids,
+    )
     if providerAlias:
-        # Key presence = provider was initialized before, even if the list
-        # is empty (all models enabled). Frontend uses this to detect
-        # first fetch.
-        return {
-            "ids": all_disabled.get(providerAlias, []),
-            "initialized": providerAlias in all_disabled,
-        }
-    return {"disabled": all_disabled}
+        provider = _resolve_provider_alias(providerAlias)
+        ids = await list_disabled_ids(db, provider)
+        inited = await catalog_initialized(db, provider)
+        if not inited:
+            data = await _get_settings_data(db)
+            all_disabled = data.get("disabledModels", {})
+            return {
+                "ids": all_disabled.get(providerAlias, []),
+                "initialized": providerAlias in all_disabled,
+            }
+        return {"ids": ids, "initialized": True}
+    data = await _get_settings_data(db)
+    return {"disabled": data.get("disabledModels", {})}
 
 
 class DisableModelsRequest(BaseModel):
@@ -244,6 +252,11 @@ async def disable_models(
     disabled[body.providerAlias] = list(existing)
     data["disabledModels"] = disabled
     await _save_settings_data(db, data)
+    from app.services.proxy import _resolve_provider_alias
+    from app.services.provider_models_store import set_models_enabled
+    provider = _resolve_provider_alias(body.providerAlias)
+    await set_models_enabled(db, provider, body.ids, False)
+    await db.commit()
     return {"success": True}
 
 
@@ -273,6 +286,17 @@ async def enable_models(
         disabled[providerAlias] = []
     data["disabledModels"] = disabled
     await _save_settings_data(db, data)
+    from app.services.proxy import _resolve_provider_alias
+    from app.services.provider_models_store import (
+        enable_all_models,
+        set_models_enabled,
+    )
+    provider = _resolve_provider_alias(providerAlias)
+    if id:
+        await set_models_enabled(db, provider, [id], True)
+    else:
+        await enable_all_models(db, provider)
+    await db.commit()
     return {"success": True}
 
 

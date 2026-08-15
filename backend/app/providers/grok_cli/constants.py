@@ -10,7 +10,11 @@ Distinct from:
 
 # ── Client fingerprint ───────────────────────────────────────────────────
 GROK_CLI_VERSION = "0.2.99"
-GROK_CLI_MODEL = "grok-build"
+# API model id (xAI pricing). Not "grok-build" — that is only
+# the OAuth referrer / CLI product name, not a model.
+GROK_CLI_MODEL = "grok-4.6"
+# CLI product / OAuth referrer — not an API model id (xAI pricing).
+GROK_CLI_DROP_MODEL_IDS = frozenset({"grok-build"})
 GROK_CLI_BASE_URL = "https://cli-chat-proxy.grok.com/v1"
 GROK_CLI_CLIENT_IDENTIFIER = "grok-shell"
 GROK_CLI_USER_AGENT = (
@@ -44,6 +48,11 @@ GROK_CLI_REFRESH_LEAD_SECONDS = 5 * 60
 # ── Reasoning effort ─────────────────────────────────────────────────────
 GROK_CLI_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
 GROK_CLI_DEFAULT_EFFORT = "high"
+
+# Off while isolating the literal-407 quality gate.
+PHANTOM_WRITE_RETRY = False
+# Off: probe-before-chat caused client timeouts.
+QUALITY_GATE_407 = False
 
 # ── Responses API request shaping ────────────────────────────────────────
 # Fields accepted by cli-chat-proxy Responses API (Codex allowlist +

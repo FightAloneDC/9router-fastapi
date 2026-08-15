@@ -86,22 +86,30 @@ ALIAS_TO_IDS: dict[str, list[str]] = _build_alias_to_ids()
 
 
 def _resolve_provider_alias(provider_name: str) -> str:
-    """Resolve a frontend provider alias to the backend provider ID.
+    """Resolve model prefix to provider ID. DB prefix else config."""
+    from app.services.provider_aliases import overlay_alias_to_id
 
-    The frontend sends model strings like "an/claude-3-5-sonnet" where "an"
-    is the storage alias for "anthropic". This function resolves the alias
-    to the actual provider ID used in ProviderConnection.provider.
-    """
-    return ALIAS_TO_ID.get(provider_name, provider_name)
+    return overlay_alias_to_id(ALIAS_TO_ID).get(
+        provider_name, provider_name,
+    )
 
 
 def _resolve_provider_aliases(provider_name: str) -> list[str]:
-    """Resolve alias to ALL matching provider IDs (for shared aliases).
+    """Resolve prefix to all matching provider IDs (shared prefixes)."""
+    from app.services.provider_aliases import overlay_alias_to_ids
 
-    Returns a list of provider IDs. For unique aliases, returns a single-item list.
-    For shared aliases like 'kilo', returns ['kilo-gateway', 'kilocode'].
-    """
-    return ALIAS_TO_IDS.get(provider_name, [provider_name])
+    return overlay_alias_to_ids(ALIAS_TO_IDS).get(
+        provider_name, [provider_name],
+    )
+
+
+def display_alias(provider_id: str) -> str:
+    """Public model prefix: DB row, else config.ALIAS."""
+    from app.services.provider_aliases import overlay_id_to_alias
+
+    return overlay_id_to_alias(ID_TO_ALIAS).get(
+        provider_id, provider_id,
+    )
 
 # Reverse mapping: provider ID → alias
 ID_TO_ALIAS: dict[str, str] = _build_id_to_alias()
@@ -793,6 +801,12 @@ async def _resolve_single_model(
     )
     connections = result.scalars().all()
 
+    from app.services.provider_models_store import (
+        list_enabled_ids,
+        uses_model_catalog_table,
+    )
+    catalog_ids: dict[str, set[str]] = {}
+
     # Match by registered model id only. Do NOT fall back to "first
     # active connection" — that misroutes combo leftovers (e.g. grok-4.5
     # onto alims-intl / voyage / nvidia) and poisons modelLock_*.
@@ -802,7 +816,16 @@ async def _resolve_single_model(
         if exclude_ids and cid in exclude_ids:
             continue
         data = json.loads(conn.data) if conn.data else {}
-        if not _connection_has_model(
+        if uses_model_catalog_table(conn.provider):
+            if conn.provider not in catalog_ids:
+                catalog_ids[conn.provider] = await list_enabled_ids(
+                    db, conn.provider,
+                )
+            if not _connection_has_model(
+                list(catalog_ids[conn.provider]), conn.provider, model,
+            ):
+                continue
+        elif not _connection_has_model(
             data.get("models", []), conn.provider, model,
         ):
             continue

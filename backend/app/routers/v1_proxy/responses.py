@@ -39,6 +39,7 @@ from .shared import (
     _unwrap_qoder_sse_line,
     _maybe_refresh_on_auth_error,
     _mark_conn_failed,
+    _before_user_forward,
 )
 
 router = APIRouter()
@@ -144,6 +145,16 @@ async def responses_endpoint(
                 )
                 if signed_headers:
                     target.headers = signed_headers
+                if not await _before_user_forward(
+                    target, conn_data, proxy,
+                ):
+                    last_error_detail = (
+                        "quality-gate: probe did not return 407"
+                    )
+                    last_error_status = 503
+                    if target.connection_id:
+                        exclude_ids.add(target.connection_id)
+                    continue
         else:
             # Translate to Chat Completions for non-Responses upstreams
             forward_body = {
@@ -176,6 +187,16 @@ async def responses_endpoint(
                     )
                     last_error_status = 500
                     exclude_ids.add(conn_id)
+                    continue
+                if not await _before_user_forward(
+                    target, conn_data, proxy,
+                ):
+                    last_error_detail = (
+                        "quality-gate: probe did not return 407"
+                    )
+                    last_error_status = 503
+                    if target.connection_id:
+                        exclude_ids.add(target.connection_id)
                     continue
 
         try:

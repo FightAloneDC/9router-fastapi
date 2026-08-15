@@ -63,6 +63,10 @@ class BaseProviderConfig(BaseModel):
     CUSTOM_MODAL: str = ""  # frontend modal component name (e.g. "kiro", "cursor", "gitlab")
     PROVIDER_SPECIFIC_DATA: bool = False  # needs extra form fields in AddKeyModal
     CATEGORY: str = ""  # "free", "freeTier", "webCookie" (empty = derive from auth)
+    # Fetch enables returned ids; Clear enables all (catalog stays in sync).
+    SYNC_DISABLED_WITH_MODEL_LIST: bool = False
+    # When True, model list lives in provider_models (not connection blobs).
+    MODEL_CATALOG_TABLE: bool = False
 
     # ── Runtime (from DB connection, not .env) ──────────────────────────
     API_KEY: str = ""
@@ -130,6 +134,22 @@ class BaseProviderHandler:
         retry the request.
         """
         return False
+
+    async def before_user_forward(
+        self,
+        *,
+        url: str,
+        model: str,
+        conn_data: dict,
+        proxy: str | None = None,
+        connection_id: str | None = None,
+    ) -> bool:
+        """Gate before forwarding a user chat to this connection.
+
+        Return True to send the user request. Return False to skip this
+        connection and try the next candidate. Default: allow.
+        """
+        return True
 
     async def validate(self, api_key: str, data: dict | None = None) -> ValidateResult:
         """Validate provider credentials."""
