@@ -38,6 +38,13 @@ from app.providers.nvidia.quota import (
     lookup_limits as nv_lookup_limits,
     quotas_from_headers as nv_quotas_from_headers,
 )
+from app.providers.cerebras.quota import (
+    CerebrasUsageHandler,
+    apply_local_usage as cb_apply_local_usage,
+    lookup_limits as cb_lookup_limits,
+    published_quota_rows as cb_published,
+    quotas_from_headers as cb_quotas_from_headers,
+)
 from app.providers.grok_cli.quota import (
     DEAD,
     EXHAUSTED,
@@ -67,6 +74,7 @@ def test_supported_providers():
     assert "groq" in providers
     assert "openrouter" in providers
     assert "nvidia" in providers
+    assert "cerebras" in providers
 
 
 def test_get_handler_known():
@@ -757,3 +765,86 @@ def test_nvidia_local_usage() -> None:
     assert rpm["remaining"] == 31
     assert today["used"] == 3
     assert today["unlimited"] is True
+
+
+def test_cerebras_handler_registered() -> None:
+    handler = get_usage_handler("cerebras")
+    assert handler is not None
+    assert isinstance(handler, CerebrasUsageHandler)
+
+
+def test_cerebras_config_limits() -> None:
+    free = cb_lookup_limits("cb/gpt-oss-120b", "free")
+    assert free["rpm"] == 5
+    assert free["tpm"] == 30000
+    assert free["tpd"] == 1000000
+    payg = cb_lookup_limits("gpt-oss-120b", "payg")
+    assert payg["rpm"] == 1000
+    assert payg["tpm"] == 1000000
+    assert "tpd" not in payg
+    assert cb_lookup_limits("unknown", "free") == {}
+
+
+def test_cerebras_published_rows() -> None:
+    rows = cb_published("free")
+    names = {r["name"] for r in rows}
+    assert any("gpt-oss-120b" in n and "TPD" in n for n in names)
+    payg = cb_published("developer")
+    assert any("RPM" in r["name"] for r in payg)
+
+
+def test_cerebras_quotas_from_headers() -> None:
+    headers = {
+        "x-ratelimit-limit-tokens": "30000",
+        "x-ratelimit-remaining-tokens": "28000",
+        "x-ratelimit-reset-tokens": "7.66s",
+    }
+    rows = cb_quotas_from_headers(
+        headers, "gpt-oss-120b", "free",
+    )
+    tpm = next(r for r in rows if "TPM" in r["name"])
+    assert tpm["total"] == 30000
+    assert tpm["remaining"] == 28000
+    assert tpm["used"] == 2000
+    tpd = next(r for r in rows if "TPD" in r["name"])
+    assert tpd["total"] == 1000000
+
+
+def test_cerebras_headers_minute_suffix() -> None:
+    headers = {
+        "x-ratelimit-limit-tokens-minute": "30000",
+        "x-ratelimit-remaining-tokens-minute": "29000",
+    }
+    rows = cb_quotas_from_headers(
+        headers, "gpt-oss-120b", "free",
+    )
+    tpm = next(r for r in rows if "TPM" in r["name"])
+    assert tpm["used"] == 1000
+    assert tpm["remaining"] == 29000
+
+
+def test_cerebras_local_usage() -> None:
+    rows = cb_apply_local_usage(
+        "free",
+        {"gpt-oss-120b": {"tokens": 120, "requests": 2}},
+        {"gpt-oss-120b": {"tokens": 40, "requests": 1}},
+    )
+    tpd = next(
+        r for r in rows
+        if r["name"].startswith("gpt-oss-120b")
+        and "TPD" in r["name"]
+    )
+    assert tpd["used"] == 120
+    assert tpd["total"] == 1000000
+    payg = cb_apply_local_usage(
+        "payg",
+        {},
+        {"gpt-oss-120b": {"tokens": 0, "requests": 3}},
+    )
+    rpm = next(
+        r for r in payg
+        if r["name"].startswith("gpt-oss-120b")
+        and "RPM" in r["name"]
+    )
+    assert rpm["used"] == 3
+    assert rpm["total"] == 1000
