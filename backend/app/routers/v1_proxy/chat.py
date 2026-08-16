@@ -217,6 +217,7 @@ async def chat_completions(
                         target, forward_body, request_id,
                         raw_body=raw_body,
                         proxy=proxy,
+                        db=db,
                     )
             total_latency_ms: int = int((time.time() - request_start_time) * 1000)
 
@@ -654,6 +655,10 @@ async def _post_phantom_retry(
                 headers=target.headers,
                 json=retry_json,
             ) as resp:
+                await observe_upstream_response(
+                    db, target.provider, cid, resp.headers,
+                    model=target.model,
+                )
                 if resp.status_code >= 400:
                     err = (await resp.aread()).decode(
                         "utf-8", errors="ignore",
@@ -669,9 +674,6 @@ async def _post_phantom_retry(
                         error=f"HTTP {resp.status_code}: {err}",
                     )
                     return None, resp.status_code, err
-                await observe_upstream_response(
-                    db, target.provider, cid, resp.headers,
-                )
                 events, usage = await _translate_grok_upstream(
                     resp, translator, assembler,
                 )
@@ -805,6 +807,11 @@ async def _non_stream_grok_responses(
             async with client.stream(
                 "POST", target.url, **send_kwargs,
             ) as resp:
+                await observe_upstream_response(
+                    db, target.provider,
+                    target.connection_id, resp.headers,
+                    model=target.model,
+                )
                 if resp.status_code >= 400:
                     await resp.aread()
                     raise httpx.HTTPStatusError(
@@ -812,11 +819,6 @@ async def _non_stream_grok_responses(
                         request=resp,
                         response=resp,
                     )
-                # PS hook: snapshot upstream rate-limit headers
-                await observe_upstream_response(
-                    db, target.provider,
-                    target.connection_id, resp.headers,
-                )
                 buffer = b""
                 async for chunk in resp.aiter_bytes():
                     buffer += chunk
@@ -993,6 +995,10 @@ async def _stream_grok_responses(
         await client.aclose()
         finish_dump(dump, None, status="error", error=str(exc))
         raise
+    await observe_upstream_response(
+        db, target.provider, target.connection_id, resp.headers,
+        model=target.model,
+    )
     if resp.status_code >= 400:
         err_text = (await resp.aread()).decode(
             "utf-8", errors="ignore",
@@ -1008,10 +1014,6 @@ async def _stream_grok_responses(
             request=upstream_req,
             response=resp,
         )
-    # PS hook: snapshot upstream rate-limit headers
-    await observe_upstream_response(
-        db, target.provider, target.connection_id, resp.headers,
-    )
 
     async def generate():  # type: ignore[no-untyped-def]
         usage: dict = {}

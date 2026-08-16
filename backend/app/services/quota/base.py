@@ -66,13 +66,11 @@ class BaseUsageHandler(ABC):
         db: Any,
         connection_id: str,
         headers: Any,
+        model: str | None = None,
     ) -> None:
-        """Optional PS hook: record observable signals from
-        upstream response headers (e.g. rate-limit counters).
+        """Optional PS hook: record rate-limit headers.
 
-        Called by the proxy on every successful upstream
-        response. Default: no-op. Fail-open — the dispatcher
-        logs and swallows errors.
+        Default: no-op. Dispatcher fail-open.
         """
 
     async def _get(

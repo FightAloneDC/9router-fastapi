@@ -1,33 +1,37 @@
-# OpenRouter catalog slice
+# Provider model catalog (SQL table)
 
-Date: 2026-08-15
+Date: 2026-08-15 (updated 2026-08-16)
 
-One provider only: **openrouter** (generic OpenAI-compat). Grok,
-Qoder, Mistral, Gemini stay on connection `data.models`.
+**Policy now:** the model catalog is a database table
+(`provider_models`). Storing the list in each connection JSON blob
+(`data.models`) is the old design and is **wrong**. Do not document
+or implement blob catalogs as the happy path.
 
 ## Switch (PS, not a name list in routers)
 
-`BaseProviderConfig.MODEL_CATALOG_TABLE = False`
+`BaseProviderConfig.MODEL_CATALOG_TABLE = False` — legacy only.
 
-`OpenrouterConfig.MODEL_CATALOG_TABLE = True`
+Set `MODEL_CATALOG_TABLE = True` on the provider config. Helper:
+`uses_model_catalog_table(provider_id)` via `Provider(id).config()`.
 
-Helper: `uses_model_catalog_table(provider_id) -> bool` reads that
-flag via `Provider(id).config()`.
+On as of 2026-08-16: **openrouter**, **groq**, **nvidia**.
+
+Everyone else still reading `data.models` is migration debt. Next
+ordinary OpenAI-compat provider gets the flag on day one.
 
 ## Behavior
 
-| Path | OpenRouter | Others |
-|------|------------|--------|
-| Fetch / set / clear models | `provider_models` | `data.models` blobs (main) |
+| Path | Flag on | Flag off (debt) |
+|------|---------|-----------------|
+| Fetch / set / clear | `provider_models` | `data.models` blob |
 | `/v1/models` + proxy match | catalog rows | blobs |
-| Chat body | unchanged (OpenAI) | unchanged |
+| Chat body | unchanged | unchanged |
 
-No Google door. No quota rewrite. No mass provider edits.
+Quota is `quota_cache` + provider `quota.py`, not the blob.
+Connection `data` keeps API keys and health only.
 
-Alembic: model first, then `--autogenerate`. Backfill **only**
-`provider = 'openrouter'` from existing blobs.
+## Backfill
 
-## Later
-
-Turn the same flag on for the next ordinary OpenAI-compat provider.
-Keep unique providers last.
+Alembic copies existing blob arrays into `provider_models`
+(`ON CONFLICT DO NOTHING`). After that, blobs are not the source of
+truth. Fetch must not write the catalog back into every connection.

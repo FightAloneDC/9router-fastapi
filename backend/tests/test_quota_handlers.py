@@ -17,6 +17,27 @@ from app.providers.claude.quota import ClaudeUsageHandler
 from app.providers.codex.quota import CodexUsageHandler
 from app.providers.kiro.quota import KiroUsageHandler
 from app.providers.qoder.quota import QoderUsageHandler
+from app.providers.groq.quota import (
+    GroqUsageHandler,
+    lookup_limits,
+    merge_live_rows,
+    overlay_live_on_published,
+    published_quota_rows,
+    quotas_from_headers,
+    reset_to_iso,
+)
+from app.providers.openrouter.quota import (
+    OpenrouterUsageHandler,
+    apply_local_usage,
+    lookup_limits as or_lookup_limits,
+    quotas_from_headers as or_quotas_from_headers,
+)
+from app.providers.nvidia.quota import (
+    NvidiaUsageHandler,
+    apply_local_usage as nv_apply_local_usage,
+    lookup_limits as nv_lookup_limits,
+    quotas_from_headers as nv_quotas_from_headers,
+)
 from app.providers.grok_cli.quota import (
     DEAD,
     EXHAUSTED,
@@ -43,6 +64,9 @@ def test_supported_providers():
     assert "kiro" in providers
     assert "qoder" in providers
     assert "grok-cli" in providers
+    assert "groq" in providers
+    assert "openrouter" in providers
+    assert "nvidia" in providers
 
 
 def test_get_handler_known():
@@ -538,3 +562,198 @@ async def test_grok_fetch_local_accumulation(monkeypatch):
     assert token_q.total == 1000000
     assert result.quotas[1].name == "Requests"
     assert result.quotas[1].used == 3
+
+
+def test_groq_handler_registered() -> None:
+    handler = get_usage_handler("groq")
+    assert handler is not None
+    assert isinstance(handler, GroqUsageHandler)
+
+
+def test_groq_config_limits() -> None:
+    caps = lookup_limits("gq/llama-3.1-8b-instant")
+    assert caps["rpm"] == 30
+    assert caps["rpd"] == 14400
+    assert caps["tpm"] == 6000
+    compound = lookup_limits("groq/compound")
+    assert compound["rpd"] == 250
+    assert lookup_limits("unknown-model") == {}
+
+
+def test_groq_quotas_from_headers() -> None:
+    headers = {
+        "x-ratelimit-limit-requests": "14400",
+        "x-ratelimit-remaining-requests": "14370",
+        "x-ratelimit-reset-requests": "2m59.56s",
+        "x-ratelimit-limit-tokens": "6000",
+        "x-ratelimit-remaining-tokens": "5997",
+        "x-ratelimit-reset-tokens": "7.66s",
+    }
+    rows = quotas_from_headers(headers, "llama-3.1-8b-instant")
+    names = {r["name"] for r in rows}
+    assert any("RPM" in n for n in names)
+    assert any("TPD" in n for n in names)
+    rpd = next(r for r in rows if "RPD" in r["name"])
+    assert rpd["total"] == 14400
+    assert rpd["remaining"] == 14370
+    assert rpd["used"] == 30
+    tpm = next(r for r in rows if "TPM" in r["name"])
+    assert tpm["total"] == 6000
+    assert tpm["remaining"] == 5997
+    assert rpd["reset_at"] is not None
+    assert "T" in rpd["reset_at"]
+
+
+def test_groq_headers_missing_use_config() -> None:
+    rows = quotas_from_headers({}, "llama-3.1-8b-instant")
+    names = {r["name"] for r in rows}
+    assert any("RPD" in n for n in names)
+    assert any("TPM" in n for n in names)
+    rpd = next(r for r in rows if "RPD" in r["name"])
+    assert rpd["total"] == 14400
+    assert rpd["remaining"] == 14400
+
+
+def test_groq_published_rows() -> None:
+    rows = published_quota_rows()
+    assert rows
+    names = {r["name"] for r in rows}
+    assert any("llama-3.1-8b-instant" in n for n in names)
+    rpd = next(
+        r for r in rows if "llama-3.1-8b-instant" in r["name"]
+    )
+    assert rpd["total"] == 14400
+    assert rpd["remaining"] == 14400
+
+
+def test_groq_reset_duration_to_iso() -> None:
+    iso = reset_to_iso("7.66s")
+    assert iso is not None
+    assert iso.endswith("+00:00") or "T" in iso
+    assert reset_to_iso("2m59.56s") is not None
+
+
+def test_groq_merge_keeps_catalog() -> None:
+    live = quotas_from_headers(
+        {
+            "x-ratelimit-limit-requests": "1000",
+            "x-ratelimit-remaining-requests": "991",
+            "x-ratelimit-limit-tokens": "8000",
+            "x-ratelimit-remaining-tokens": "4300",
+        },
+        "openai/gpt-oss-120b",
+    )
+    merged = merge_live_rows(
+        published_quota_rows(), live, "openai/gpt-oss-120b",
+    )
+    names = [r["name"] for r in merged]
+    assert any("llama-3.1-8b-instant" in n for n in names)
+    rpd = next(
+        r for r in merged
+        if r["name"] == "openai/gpt-oss-120b requests (RPD)"
+    )
+    assert rpd["used"] == 9
+    healed = overlay_live_on_published(live)
+    assert len(healed) > len(live)
+
+
+def test_openrouter_handler_registered() -> None:
+    handler = get_usage_handler("openrouter")
+    assert handler is not None
+    assert isinstance(handler, OpenrouterUsageHandler)
+
+
+def test_openrouter_config_limits() -> None:
+    free = or_lookup_limits(
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "free",
+    )
+    assert free["rpm"] == 20
+    assert free["rpd"] == 50
+    payg = or_lookup_limits(
+        "openrouter/google/gemini-2.0-flash:free",
+        "payg",
+    )
+    assert payg["rpd"] == 1000
+    assert or_lookup_limits("openai/gpt-4o", "free") == {}
+
+
+def test_openrouter_quotas_from_headers() -> None:
+    headers = {
+        "X-RateLimit-Limit": "50",
+        "X-RateLimit-Remaining": "12",
+        "X-RateLimit-Reset": "1741305600000",
+    }
+    rows = or_quotas_from_headers(
+        headers,
+        "google/gemma-3-27b-it:free",
+        "free",
+    )
+    rpd = next(r for r in rows if "RPD" in r["name"])
+    assert rpd["total"] == 50
+    assert rpd["remaining"] == 12
+    assert rpd["used"] == 38
+
+
+def test_openrouter_headers_missing_use_config() -> None:
+    rows = or_quotas_from_headers(
+        {}, "mistralai/mistral-small:free", "free",
+    )
+    names = {r["name"] for r in rows}
+    assert any("RPM" in n for n in names)
+    assert any("RPD" in n for n in names)
+    rpd = next(r for r in rows if "RPD" in r["name"])
+    assert rpd["total"] == 50
+    assert rpd["remaining"] == 50
+
+
+def test_openrouter_local_usage() -> None:
+    rows = apply_local_usage("free", 3, 7)
+    rpm = next(r for r in rows if "RPM" in r["name"])
+    rpd = next(r for r in rows if "RPD" in r["name"])
+    assert rpm["used"] == 3
+    assert rpm["remaining"] == 17
+    assert rpd["used"] == 7
+    assert rpd["remaining"] == 43
+
+
+def test_nvidia_handler_registered() -> None:
+    handler = get_usage_handler("nvidia")
+    assert handler is not None
+    assert isinstance(handler, NvidiaUsageHandler)
+
+
+def test_nvidia_config_limits() -> None:
+    caps = nv_lookup_limits("free")
+    assert caps["rpm"] == 40
+    assert "rpd" not in caps
+    assert nv_lookup_limits("unknown")["rpm"] == 40
+
+
+def test_nvidia_quotas_from_headers() -> None:
+    headers = {
+        "X-RateLimit-Limit": "40",
+        "X-RateLimit-Remaining": "12",
+    }
+    rows = nv_quotas_from_headers(headers, "free")
+    rpm = next(r for r in rows if "RPM" in r["name"])
+    assert rpm["total"] == 40
+    assert rpm["remaining"] == 12
+    assert rpm["used"] == 28
+
+
+def test_nvidia_headers_missing_use_config() -> None:
+    rows = nv_quotas_from_headers({}, "free")
+    rpm = next(r for r in rows if "RPM" in r["name"])
+    assert rpm["total"] == 40
+    assert rpm["remaining"] == 40
+
+
+def test_nvidia_local_usage() -> None:
+    rows = nv_apply_local_usage("free", 9, 3)
+    rpm = next(r for r in rows if "RPM" in r["name"])
+    today = next(r for r in rows if "today" in r["name"])
+    assert rpm["used"] == 9
+    assert rpm["remaining"] == 31
+    assert today["used"] == 3
+    assert today["unlimited"] is True

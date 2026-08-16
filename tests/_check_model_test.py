@@ -21,7 +21,7 @@ def main() -> int:
         urllib.request.urlopen(req, timeout=15).read(),
     )["access_token"]
 
-    model = sys.argv[1] if len(sys.argv) > 1 else "gcli/grok-build"
+    model = sys.argv[1] if len(sys.argv) > 1 else "gcli/grok-4.6"
     req = urllib.request.Request(
         BASE + "/models/test",
         data=json.dumps({"model": model}).encode(),

@@ -94,7 +94,7 @@ async def list_models(
                 })
                 seen_model_ids.add(model_id)
 
-    # Catalog-table providers (openrouter for now).
+    # Catalog-table providers (MODEL_CATALOG_TABLE flag).
     from app.models.provider_model import ProviderModel
     from app.services.provider_models_store import uses_model_catalog_table
 

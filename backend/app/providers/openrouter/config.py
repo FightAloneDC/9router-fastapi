@@ -18,6 +18,14 @@ class OpenrouterConfig(BaseProviderConfig):
     SERVICE_KINDS: list[str] = ["llm", "embedding", "imageToText", "tts"]
     CATEGORY: str = "freeTier"
     MODEL_CATALOG_TABLE: bool = True
+    # Free-variant caps (docs): per egress IP, not per API key.
+    # Paid (non-:free) models have no OpenRouter request cap.
+    # rpd 50 until $10 lifetime credits, then 1000. rpm stays 20.
+    RATE_LIMITS: dict[str, dict[str, int]] = {
+        "free": {"rpm": 20, "rpd": 50},
+        "payg": {"rpm": 20, "rpd": 1000},
+        "subscribe": {"rpm": 20, "rpd": 1000},
+    }
 
 
 class OpenrouterMetadata(BaseMetadata):
@@ -28,4 +36,10 @@ class OpenrouterMetadata(BaseMetadata):
     textIcon: str = "OR"
     icon: str = "Router"
     website: str = "https://openrouter.ai"
-    notice: dict | None = {"text": "Free tier: 27+ free models, no credit card needed, 200 req/day.", "apiKeyUrl": "https://openrouter.ai/settings/keys"}
+    notice: dict | None = {
+        "text": (
+            "Free :free models: 20 RPM, 50 RPD (1000 RPD after "
+            "$10 lifetime credits). Caps apply per egress IP."
+        ),
+        "apiKeyUrl": "https://openrouter.ai/settings/keys",
+    }

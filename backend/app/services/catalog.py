@@ -168,6 +168,7 @@ def _build_provider_entry(
         "modelCatalogTable": bool(
             getattr(config, "MODEL_CATALOG_TABLE", False)
         ),
+        "rateLimits": getattr(config, "RATE_LIMITS", None) or None,
         "bulkImportFormat": config.BULK_IMPORT_FORMAT,
         "requiresProxy": config.REQUIRES_PROXY,
         "customModal": config.CUSTOM_MODAL or None,

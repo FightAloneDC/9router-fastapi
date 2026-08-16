@@ -78,6 +78,7 @@ async def observe_upstream_response(
     provider_id: str,
     connection_id: str | None,
     headers,
+    model: str | None = None,
 ) -> None:
     """Dispatch upstream response headers to the provider's
     usage handler (PS hook). No-op without a handler or
@@ -91,7 +92,7 @@ async def observe_upstream_response(
         return
     try:
         await handler.observe_response(
-            db, connection_id, headers,
+            db, connection_id, headers, model=model,
         )
     except Exception as e:
         logger.warning(

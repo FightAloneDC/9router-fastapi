@@ -177,12 +177,25 @@ docs/
 
 ## Critical Patterns (MUST KNOW)
 
-### 1. Provider Data = JSON Blob
-All provider-specific data stored in a single `data` JSON TEXT column, NOT separate DB columns:
-```json
-{"apiKey": "***", "models": ["gpt-4"], "baseUrl": "https://...", "testStatus": "connected"}
-```
-**NEVER add new columns to provider tables** — put everything in the JSON blob.
+### 1. Catalog and quota live in tables (not the connection blob)
+The connection JSON `data` blob is **not** the catalog. Putting
+`models` in every connection was the old mistake.
+
+| Concern | Table |
+|---------|--------|
+| Model list (fetch / enable / clear) | `provider_models` |
+| Quota tracker snapshot | `quota_cache` |
+| Chat usage counts | `usage_history` |
+| Account row (key, proxy, health) | `provider_connections` + `data` **secrets/health only** |
+
+Set `MODEL_CATALOG_TABLE = True` on the provider config. Fetch/clear
+must write `provider_models`, never `data.models`. OpenRouter, Groq,
+and NVIDIA are already on the table. Other providers still on blobs
+are **debt** — migrate them the same way; do not add new blob catalogs.
+
+Do not add credential columns to `provider_connections`. Keys stay in
+`data` until a dedicated secrets table exists. Do not store the model
+list there.
 
 ### 2. PS Architecture (Provider-Specific)
 All provider-specific logic MUST live in `backend/app/providers/<provider>/`. This is the **PS Rule**.
@@ -255,7 +268,9 @@ When working on a bug or feature, trace the full round-trip:
 2. `backend/app/providers/<provider>/handler.py` — Request building, validation
 3. `backend/app/providers/<provider>/constants.py` — Provider-specific constants
 4. `backend/app/providers/<provider>/oauth.py` — OAuth handler (if applicable)
-5. `backend/app/providers/base.py` — Base classes (BaseProviderConfig, BaseMetadata, BaseProviderHandler)
+5. `backend/app/providers/<provider>/FLOW.md` — This provider's flow only (write from its code; no shared template)
+6. `backend/app/providers/base.py` — Base classes (BaseProviderConfig, BaseMetadata, BaseProviderHandler)
+   Same convention as grok-farm temp-mail `FLOW.md` (one file per provider folder).
 
 ### Reference (Original Next.js)
 - `_reference/providers.js` — Original providers page (52KB)
@@ -345,7 +360,7 @@ cd backend && ../.venv-local/bin/pytest tests/ -v
 ## Rules for AI Agents
 
 1. **READ BEFORE WRITE** — Always read the original Next.js source in `_reference/` before implementing. User expects faithful porting, not redesign.
-2. **No new DB columns** — Provider data goes in the JSON `data` blob.
+2. **Catalog is SQL, not the blob** — Model lists go in `provider_models` (`MODEL_CATALOG_TABLE`). Do not write catalogs into `data.models`. Connection `data` is secrets/health only; no new credential columns on `provider_connections`.
 3. **PS Rule** — All provider-specific logic MUST live in `backend/app/providers/<provider>/`. No hardcoded provider checks in routers or frontend.
 4. **ProviderDetailPage is the heart** — ALL features in the Providers menu must be fully fixed and working.
 5. **No half-measures** — Verify fixes in the running app, not just in code. If user says something is broken, they're right.
@@ -355,6 +370,7 @@ cd backend && ../.venv-local/bin/pytest tests/ -v
 9. **Respect backup files** — Files with `-v*` suffix are intentional backups in `.gitignore`. Don't delete or modify them.
 10. **Docs in English** — All documentation and code comments must be in English. Use chat language (Indonesian) for user communication.
 11. **Scratch folders stay out of git** — Before creating any junk/scratch/agent artifact directory (e.g. `.superpowers/`, `.scratch/`, SDD reports, temp workdirs), confirm it is listed in `.gitignore` first. If missing, add the ignore entry, then create the folder. Never force-add ignored paths. Do not turn the user's repository into a pile of agent trash.
+12. **Provider FLOW.md** — Each provider has its own character and flow; do not generalize. Before changing a provider, read `backend/app/providers/<id>/FLOW.md` if it exists. After the change, update (or write) that file from **this** provider's code only. Missing FLOW.md is better than a shared template. Do not invent flow from chat history.
 
 ---
 

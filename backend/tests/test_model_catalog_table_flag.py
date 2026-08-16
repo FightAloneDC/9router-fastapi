@@ -1,4 +1,4 @@
-"""Flag: only OpenRouter uses provider_models catalog table."""
+"""Flag: OpenRouter, Groq, NVIDIA use provider_models catalog."""
 
 from app.services.provider_models_store import (
     parse_history_entry,
@@ -10,6 +10,14 @@ from app.services.provider_models_store import (
 
 def test_openrouter_uses_catalog_table() -> None:
     assert uses_model_catalog_table("openrouter") is True
+
+
+def test_groq_uses_catalog_table() -> None:
+    assert uses_model_catalog_table("groq") is True
+
+
+def test_nvidia_uses_catalog_table() -> None:
+    assert uses_model_catalog_table("nvidia") is True
 
 
 def test_mistral_stays_on_blobs() -> None:
@@ -53,15 +61,3 @@ def test_parse_history_bool_and_object() -> None:
     assert parse_history_entry(
         {"enabled": False, "custom": True},
     ) == (False, True)
-
-
-def test_openrouter_uses_catalog_table() -> None:
-    assert uses_model_catalog_table("openrouter") is True
-
-
-def test_mistral_stays_on_blobs() -> None:
-    assert uses_model_catalog_table("mistral") is False
-
-
-def test_grok_cli_stays_on_blobs() -> None:
-    assert uses_model_catalog_table("grok-cli") is False

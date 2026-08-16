@@ -18,11 +18,14 @@ and must not be rewritten per upstream.
 
 ## Goal
 
-- One catalog table for all providers.
-- Opaque per-connection quota storage; meaning is provider-specific.
+- One catalog table for all providers. Blob `data.models` is not
+  the catalog.
+- Opaque per-connection quota storage (`quota_cache`); meaning is
+  provider-specific.
 - Chat transform stays in `providers/<id>/`.
 - Client doors that are widely used today, including native Google.
-- No new columns on `provider_connections`.
+- No new credential columns on `provider_connections` (`data` is
+  secrets/health only).
 
 ## Catalog
 
@@ -40,8 +43,10 @@ Table `provider_models` (already sketched in Alembic
 Unique `(provider, model_id)`. Fetch, Clear, and Disable target
 these rows. All connections of that provider share the list.
 
-After backfill, `data.models` on a connection is not the source of
-truth. Do not keep writing the catalog into every connection blob.
+After backfill, `data.models` on a connection is **not** the source
+of truth. Do not write the catalog into the blob. Providers still
+on blobs are debt; turn `MODEL_CATALOG_TABLE` on and stop using
+`data.models`.
 
 ## Connections
 

@@ -17,6 +17,14 @@ class NvidiaConfig(BaseProviderConfig):
     BASE_URL: str = "https://integrate.api.nvidia.com/v1"
     SERVICE_KINDS: list[str] = ["llm", "tts", "embedding"]
     CATEGORY: str = "freeTier"
+    MODEL_CATALOG_TABLE: bool = True
+
+    # Free-tier NIM (integrate.api.nvidia.com): documented ceiling is
+    # 40 RPM. NVIDIA does not publish a per-model table; actual 429s
+    # also depend on model, traffic, and concurrency. No RPD in docs.
+    RATE_LIMITS: dict[str, dict[str, int]] = {
+        "free": {"rpm": 40},
+    }
 
     # ── Model type overrides ────────────────────────────────────────────
     MODEL_TYPE_OVERRIDES: dict[str, str] = {
@@ -35,4 +43,10 @@ class NvidiaMetadata(BaseMetadata):
     textIcon: str = "NV"
     icon: str = "Cpu"
     website: str = "https://developer.nvidia.com/nim"
-    notice: dict | None = {"text": "Free access for NVIDIA Developer Program members.", "apiKeyUrl": "https://build.nvidia.com/settings/api-keys"}
+    notice: dict | None = {
+        "text": (
+            "Free NIM: up to 40 RPM (per API key). Actual 429s also "
+            "depend on model and platform traffic. No RPD in docs."
+        ),
+        "apiKeyUrl": "https://build.nvidia.com/settings/api-keys",
+    }

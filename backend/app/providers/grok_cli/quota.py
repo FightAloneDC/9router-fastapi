@@ -178,6 +178,7 @@ class GrokCliUsageHandler(BaseUsageHandler):
         db: Any,
         connection_id: str,
         headers: Any,
+        model: str | None = None,
     ) -> None:
         """Snapshot upstream rate-limit headers into
         quota_cache (authoritative daily counters)."""

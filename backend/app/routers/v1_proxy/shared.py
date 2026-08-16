@@ -453,6 +453,7 @@ async def _stream_response(
         try:
             await observe_upstream_response(
                 db, provider, connection_id, peek_resp.headers,
+                model=model,
             )
             if peek_resp.status_code >= 400:
                 body_preview = (await peek_resp.aread())[:500]
@@ -821,6 +822,7 @@ async def _stream_response(
                             await observe_upstream_response(
                                 db, provider, connection_id,
                                 resp.headers,
+                                model=model,
                             )
                             if resp.status_code >= 400:
                                 body_preview = (
@@ -963,6 +965,7 @@ async def _non_stream_response(
     *,
     raw_body: bytes | None = None,
     proxy: str | None = None,
+    db=None,
 ) -> tuple[JSONResponse, dict]:
     """Forward request to upstream and return complete response.
 
@@ -987,6 +990,11 @@ async def _non_stream_response(
 
     async with create_upstream_client(proxy=proxy, timeout=300.0) as client:
         resp = await client.post(target.url, **send_kwargs)
+        if db is not None:
+            await observe_upstream_response(
+                db, target.provider, target.connection_id,
+                resp.headers, model=target.model,
+            )
         resp.raise_for_status()
 
         # Unwrap provider-specific response envelope

@@ -34,6 +34,7 @@ import CursorAuthModal from '../components/CursorAuthModal'
 import GitLabAuthModal from '../components/GitLabAuthModal'
 import BulkImportModal from '../components/modals/BulkImportModal'
 import { useAuthStore } from '../stores/authStore'
+import SearchableSelect from '../components/ui/SearchableSelect'
 
 const COMPATIBLE_TYPES = new Set(['openai-compatible', 'anthropic-compatible'])
 
@@ -191,6 +192,51 @@ const ACCOUNT_TYPE_OPTIONS = [
   { value: 'payg', label: 'PAYG' },
   { value: 'subscribe', label: 'Subscribe' },
 ]
+
+function RateLimitsNote({ limits }) {
+  const entries = Object.entries(limits || {})
+  if (!entries.length) return null
+  const metrics = ['rpm', 'rpd', 'tpm', 'tpd']
+  return (
+    <div className="mt-2 max-h-40 overflow-auto rounded border border-zinc-800">
+      <table className="w-full text-left text-[10px] text-zinc-400">
+        <thead>
+          <tr className="border-b border-zinc-800 text-zinc-500">
+            <th className="px-2 py-1 font-medium">Limit</th>
+            {metrics.map((m) => (
+              <th
+                key={m}
+                className="px-2 py-1 font-medium uppercase"
+              >
+                {m}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map(([name, caps]) => (
+            <tr
+              key={name}
+              className="border-b border-zinc-800/60"
+            >
+              <td className="max-w-[220px] truncate px-2 py-1 text-zinc-300">
+                {name}
+              </td>
+              {metrics.map((m) => (
+                <td
+                  key={m}
+                  className="px-2 py-1 tabular-nums"
+                >
+                  {caps?.[m] ?? '—'}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
 
 function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onUpdateAccountType, onEdit, onDelete, onTest, testing, testResult, isOAuth = false, isSelected = false, onSelect = null }) {
   const [showProxyDropdown, setShowProxyDropdown] = useState(false)
@@ -1185,10 +1231,21 @@ function ModelRow({ model, fullModel, alias, copied, onCopy, onSetAlias, onDelet
    ChatTestPlayground — real API test for chat completions
    ════════════════════════════════════════════════════════════════ */
 
-// Dedupe StrictMode double-fetch of models/list
-const _inflightModelLists = new Map()
+function _stripPlaygroundPrefix(id, alias, providerId) {
+  let raw = String(id || '')
+  for (const head of [alias, providerId]) {
+    const p = `${head}/`
+    if (head && raw.startsWith(p)) raw = raw.slice(p.length)
+  }
+  return raw
+}
 
-function ChatTestPlayground({ providerId, providerAlias, connections }) {
+function ChatTestPlayground({
+  providerId,
+  providerAlias,
+  models = [],
+  disabledModelIds = [],
+}) {
   const token = useAuthStore(s => s.token)
   const [selectedModel, setSelectedModel] = useState('')
   const [messages, setMessages] = useState([{ role: 'user', content: 'Hello, how are you?' }])
@@ -1200,40 +1257,53 @@ function ChatTestPlayground({ providerId, providerAlias, connections }) {
   const [error, setError] = useState('')
   const [latency, setLatency] = useState(null)
   const [copiedCurl, setCopiedCurl] = useState(false)
-  const [availableModels, setAvailableModels] = useState([])
   const resultRef = useRef(null)
-  const providerAliasRef = useRef(providerAlias)
-  providerAliasRef.current = providerAlias
-  const selectedModelRef = useRef(selectedModel)
-  selectedModelRef.current = selectedModel
+  const prevAliasRef = useRef(providerAlias)
+
+  const availableModels = useMemo(() => {
+    const alias = providerAlias || providerId
+    const disabled = new Set(disabledModelIds)
+    const seen = new Set()
+    const rows = []
+    for (const m of models) {
+      const stored = typeof m === 'string' ? m : m.id
+      if (!stored || disabled.has(stored)) continue
+      const type = inferModelType(stored)
+      if (type !== 'llm' && type !== 'chat') continue
+      const raw = _stripPlaygroundPrefix(
+        stored, alias, providerId,
+      )
+      const id = `${alias}/${raw}`
+      if (seen.has(id)) continue
+      seen.add(id)
+      rows.push({ id, label: id })
+    }
+    return rows
+  }, [models, disabledModelIds, providerAlias, providerId])
 
   useEffect(() => {
-    if (!providerId) return
-    let cancelled = false
-    const key = `models-list:${providerId}`
-    let pending = _inflightModelLists.get(key)
-    if (!pending) {
-      pending = import('../api/client')
-        .then(({ default: client }) => client.get(`/providers/${providerId}/models/list`))
-        .finally(() => { _inflightModelLists.delete(key) })
-      _inflightModelLists.set(key, pending)
-    }
-    pending
-      .then((res) => {
-        if (cancelled) return
-        const alias = providerAliasRef.current || providerId
-        const models = (res.data?.models || []).map((m) => ({
-          id: `${alias}/${m.id}`,
-          type: m.type,
-        }))
-        setAvailableModels(models)
-        if (models.length > 0 && !selectedModelRef.current) {
-          setSelectedModel(models[0].id)
+    const ids = availableModels.map((m) => m.id)
+    const prevAlias = prevAliasRef.current
+    const alias = providerAlias || providerId
+    prevAliasRef.current = alias
+
+    setSelectedModel((cur) => {
+      let next = cur
+      const aliasChanged = Boolean(
+        prevAlias && prevAlias !== alias,
+      )
+      if (aliasChanged && next) {
+        const p = `${prevAlias}/`
+        if (next.startsWith(p)) {
+          next = `${alias}/${next.slice(p.length)}`
         }
-      })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [providerId])
+      }
+      if (next && ids.includes(next)) return next
+      if (!next && ids.length > 0) return ids[0]
+      if (aliasChanged && ids.length > 0) return ids[0]
+      return next
+    })
+  }, [availableModels, providerAlias, providerId])
 
   const buildBody = () => ({
     model: selectedModel || `${providerId}/default`,
@@ -1313,17 +1383,20 @@ function ChatTestPlayground({ providerId, providerAlias, connections }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <div>
-          <label className="text-xs text-zinc-400 mb-1 block">Model</label>
-          {availableModels.length > 0 ? (
-            <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200">
-              {availableModels.map(m => <option key={m.id} value={m.id}>{m.id}</option>)}
-            </select>
-          ) : (
-            <input value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)}
-              placeholder={`${providerId}/model-name`}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200" />
-          )}
+          <label className="text-xs text-zinc-400 mb-1 block">
+            Model
+          </label>
+          <SearchableSelect
+            value={selectedModel}
+            onChange={setSelectedModel}
+            options={availableModels.map((m) => ({
+              value: m.id,
+              label: m.label,
+            }))}
+            placeholder={`${providerAlias || providerId}/model-name`}
+            searchPlaceholder="Search models…"
+            allowCustom
+          />
         </div>
 
         <div>
@@ -2915,6 +2988,9 @@ function ProviderDetailPage() {
                 <p className="text-xs text-zinc-400">{info.notice.text}</p>
               </div>
             )}
+            {info?.rateLimits && (
+              <RateLimitsNote limits={info.rateLimits} />
+            )}
             <p className="text-zinc-500">
               {isFreeNoAuth
                 ? 'No authentication required'
@@ -3457,7 +3533,12 @@ function ProviderDetailPage() {
       </Card>
 
       {/* ── Chat Test Playground ── */}
-      <ChatTestPlayground providerId={providerId} providerAlias={providerDisplayAlias} connections={connections} />
+      <ChatTestPlayground
+        providerId={providerId}
+        providerAlias={providerDisplayAlias}
+        models={models}
+        disabledModelIds={disabledModelIds}
+      />
 
       {/* ── Bulk Proxy Modal ── */}
       <Modal
