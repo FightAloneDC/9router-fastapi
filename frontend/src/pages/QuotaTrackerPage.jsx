@@ -449,7 +449,10 @@ function ProviderQuotaCard({
 }) {
   const hasQuotas = provider.quotas && provider.quotas.length > 0
   const lowCount = getLowCount(provider.quotas)
-  const showModelDetails = provider.provider === 'alims-intl'
+  const showModelDetails = (
+    provider.provider === 'alims-intl'
+    || provider.provider === 'cohere'
+  )
 
   return (
     <Card className="hover:border-zinc-600/50 transition-colors">

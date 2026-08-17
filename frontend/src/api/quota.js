@@ -7,8 +7,9 @@ export const quotaApi = {
   // Get usage/quota for a single connection.
   // force=true bypasses the backend cache and always polls the
   // provider upstream (used by the manual refresh button).
-  // detail='models' loads the full per-model table (alims-intl);
-  // that response is not written to quota_cache.
+  // detail='models' loads the full per-model table
+  // (alims-intl, cohere); that response is not written to
+  // quota_cache.
   getUsage: (connectionId, force = false, detail = null) =>
     client.get(`/usage/${connectionId}`, {
       params: {

@@ -58,6 +58,13 @@ from app.providers.alims_intl.quota import (
     published_quota_rows as ali_published,
     quotas_from_headers as ali_quotas_from_headers,
 )
+from app.providers.cohere.quota import (
+    CohereUsageHandler,
+    apply_local_usage as co_apply_local_usage,
+    lookup_limits as co_lookup_limits,
+    quotas_from_headers as co_quotas_from_headers,
+    summary_quota_rows as co_summary_quota_rows,
+)
 from app.providers.grok_cli.quota import (
     DEAD,
     EXHAUSTED,
@@ -90,6 +97,7 @@ def test_supported_providers():
     assert "cerebras" in providers
     assert "mistral" in providers
     assert "alims-intl" in providers
+    assert "cohere" in providers
 
 
 def test_get_handler_known():
@@ -1035,3 +1043,103 @@ def test_alims_local_usage() -> None:
     assert rpm["total"] == 15000
     assert tpm["used"] == 400
     assert tpm["total"] == 5000000
+
+
+def test_cohere_handler_registered() -> None:
+    handler = get_usage_handler("cohere")
+    assert handler is not None
+    assert isinstance(handler, CohereUsageHandler)
+
+
+def test_cohere_config_limits() -> None:
+    assert co_lookup_limits(
+        "command-a-03-2025", "free",
+    )["rpm"] == 20
+    assert co_lookup_limits(
+        "co/command-a-03-2025", "payg",
+    )["rpm"] == 500
+    assert co_lookup_limits(
+        "command-a-reasoning-08-2025", "payg",
+    )["rpm"] == 20
+    assert co_lookup_limits(
+        "rerank-v4.0-pro", "free",
+    )["rpm"] == 10
+    assert co_lookup_limits("unknown", "free") == {}
+
+
+def test_cohere_summary_rows_free() -> None:
+    rows = co_summary_quota_rows(
+        {
+            "command-a-reasoning-08-2025": {
+                "tokens": 100, "requests": 2,
+            },
+        },
+        month_used=40,
+        account_type="free",
+    )
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["requests (last 60s)"]["used"] == 2
+    assert by_name["tokens (last 60s)"]["used"] == 100
+    assert by_name["calls (month)"]["used"] == 40
+    assert by_name["calls (month)"]["total"] == 1000
+
+
+def test_cohere_summary_rows_payg_no_monthly() -> None:
+    rows = co_summary_quota_rows(
+        {
+            "command-a-03-2025": {
+                "tokens": 1, "requests": 1,
+            },
+        },
+        month_used=999,
+        account_type="payg",
+    )
+    names = {r["name"] for r in rows}
+    assert "calls (month)" not in names
+    assert len(rows) == 2
+
+
+def test_cohere_local_usage_detail() -> None:
+    rows = co_apply_local_usage(
+        "free",
+        {
+            "command-a-reasoning-08-2025": {
+                "tokens": 0, "requests": 3,
+            },
+        },
+        {
+            "command-a-reasoning-08-2025": {
+                "tokens": 1000, "requests": 34,
+            },
+        },
+    )
+    rpm = next(
+        r for r in rows
+        if r["name"] == (
+            "command-a-reasoning-08-2025 requests (RPM)"
+        )
+    )
+    today = next(
+        r for r in rows
+        if r["name"] == (
+            "command-a-reasoning-08-2025 requests (today)"
+        )
+    )
+    assert rpm["used"] == 3
+    assert rpm["total"] == 20
+    assert today["used"] == 34
+    assert today["unlimited"] is True
+
+
+def test_cohere_quotas_from_headers() -> None:
+    headers = {
+        "x-ratelimit-limit-requests": "20",
+        "x-ratelimit-remaining-requests": "17",
+    }
+    rows = co_quotas_from_headers(
+        headers, "command-a-reasoning-08-2025", "free",
+    )
+    assert rows
+    assert rows[0]["used"] == 3
+    assert rows[0]["total"] == 20
+    assert "command-a-reasoning-08-2025" in rows[0]["name"]
