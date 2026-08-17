@@ -51,6 +51,13 @@ from app.providers.mistral.quota import (
     lookup_limits as mi_lookup_limits,
     quotas_from_headers as mi_quotas_from_headers,
 )
+from app.providers.alims_intl.quota import (
+    AlimsIntlUsageHandler,
+    apply_local_usage as ali_apply_local_usage,
+    lookup_limits as ali_lookup_limits,
+    published_quota_rows as ali_published,
+    quotas_from_headers as ali_quotas_from_headers,
+)
 from app.providers.grok_cli.quota import (
     DEAD,
     EXHAUSTED,
@@ -82,6 +89,7 @@ def test_supported_providers():
     assert "nvidia" in providers
     assert "cerebras" in providers
     assert "mistral" in providers
+    assert "alims-intl" in providers
 
 
 def test_get_handler_known():
@@ -927,3 +935,103 @@ def test_mistral_local_usage() -> None:
     assert today_r["unlimited"] is True
     assert today_t["used"] == 120
     assert minute["used"] == 1
+
+
+def test_alims_handler_registered() -> None:
+    handler = get_usage_handler("alims-intl")
+    assert handler is not None
+    assert isinstance(handler, AlimsIntlUsageHandler)
+
+
+def test_alims_config_limits() -> None:
+    caps = ali_lookup_limits("alims-intl/qwen3.7-flash")
+    assert caps["rpm"] == 15000
+    assert caps["tpm"] == 5000000
+    assert ali_lookup_limits("qwen3.7-max")["rpm"] == 600
+    assert ali_lookup_limits("qwen3.8-max") == {
+        "rpm": 15000, "tpm": 2000000,
+    }
+    assert ali_lookup_limits("text-embedding-v4") == {
+        "rpm": 1800, "tpm": 1000000,
+    }
+    assert ali_lookup_limits("qwen-image") == {"rpm": 120}
+    assert ali_lookup_limits("qwen3-tts-flash") == {"rpm": 180}
+    assert ali_lookup_limits("qwen3-asr-flash") == {"rpm": 100}
+    assert ali_lookup_limits("unknown") == {}
+
+
+def test_alims_published_rows() -> None:
+    rows = ali_published()
+    names = {r["name"] for r in rows}
+    assert any(
+        "qwen3.7-flash" in n and "RPM" in n for n in names
+    )
+    assert any(
+        "qwen3.7-flash" in n and "TPM" in n for n in names
+    )
+    assert any(
+        "text-embedding-v4" in n and "RPM" in n for n in names
+    )
+    assert any(
+        n.startswith("qwen-image ") and "RPM" in n for n in names
+    )
+    # Image models have no TPM column in the docs.
+    assert not any(
+        n.startswith("qwen-image ") and "TPM" in n for n in names
+    )
+    # Full catalog stays for detail modal — but list fetch must
+    # not ship it (see test_alims_summary_rows).
+    assert len(rows) > 50
+
+
+def test_alims_summary_rows() -> None:
+    from app.providers.alims_intl.quota import summary_quota_rows
+
+    rows = summary_quota_rows({
+        "qwen3.7-flash": {"tokens": 400, "requests": 2},
+        "qwen-image": {"tokens": 0, "requests": 1},
+    })
+    assert len(rows) == 2
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["requests (last 60s)"]["used"] == 3
+    assert by_name["requests (last 60s)"]["unlimited"] is True
+    assert by_name["tokens (last 60s)"]["used"] == 400
+    assert by_name["tokens (last 60s)"]["unlimited"] is True
+
+
+def test_alims_quotas_from_headers() -> None:
+    headers = {
+        "x-ratelimit-limit-tokens": "5000000",
+        "x-ratelimit-remaining-tokens": "4990000",
+        "x-ratelimit-limit-requests": "15000",
+        "x-ratelimit-remaining-requests": "14990",
+    }
+    rows = ali_quotas_from_headers(
+        headers, "qwen3.7-flash",
+    )
+    tpm = next(r for r in rows if "TPM" in r["name"])
+    rpm = next(r for r in rows if "RPM" in r["name"])
+    assert tpm["total"] == 5000000
+    assert tpm["used"] == 10000
+    assert rpm["total"] == 15000
+    assert rpm["used"] == 10
+
+
+def test_alims_local_usage() -> None:
+    rows = ali_apply_local_usage({
+        "qwen3.7-flash": {"tokens": 400, "requests": 2},
+    })
+    rpm = next(
+        r for r in rows
+        if r["name"].startswith("qwen3.7-flash")
+        and "RPM" in r["name"]
+    )
+    tpm = next(
+        r for r in rows
+        if r["name"].startswith("qwen3.7-flash")
+        and "TPM" in r["name"]
+    )
+    assert rpm["used"] == 2
+    assert rpm["total"] == 15000
+    assert tpm["used"] == 400
+    assert tpm["total"] == 5000000

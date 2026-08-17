@@ -190,9 +190,9 @@ The connection JSON `data` blob is **not** the catalog. Putting
 
 Set `MODEL_CATALOG_TABLE = True` on the provider config. Fetch/clear
 must write `provider_models`, never `data.models`. OpenRouter, Groq,
-NVIDIA, Cerebras, and Mistral are already on the table. Other
-providers still on blobs are **debt** — migrate them the same way;
-do not add new blob catalogs.
+NVIDIA, Cerebras, Mistral, and Alims-intl are already on the table.
+Other providers still on blobs are **debt** — migrate them the same
+way; do not add new blob catalogs.
 
 Do not add credential columns to `provider_connections`. Keys stay in
 `data` until a dedicated secrets table exists. Do not store the model

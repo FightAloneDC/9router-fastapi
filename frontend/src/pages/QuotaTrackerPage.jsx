@@ -19,8 +19,10 @@ import {
   ToggleRight,
   Zap,
   ZapOff,
+  ListTree,
 } from 'lucide-react'
 import Card, { CardContent, CardHeader } from '../components/ui/Card'
+import Modal from '../components/ui/Modal'
 import { quotaApi } from '../api/quota'
 import { providersApi } from '../api/providers'
 
@@ -435,9 +437,19 @@ function CardMenu({ provider, onToggle, onEdit, onDelete }) {
 
 // --- Provider card (compact, 2-column layout) ---
 
-function ProviderQuotaCard({ provider, onRefresh, isRefreshing, isLoadingUsage, onToggle, onEdit, onDelete }) {
+function ProviderQuotaCard({
+  provider,
+  onRefresh,
+  isRefreshing,
+  isLoadingUsage,
+  onToggle,
+  onEdit,
+  onDelete,
+  onModelDetails,
+}) {
   const hasQuotas = provider.quotas && provider.quotas.length > 0
   const lowCount = getLowCount(provider.quotas)
+  const showModelDetails = provider.provider === 'alims-intl'
 
   return (
     <Card className="hover:border-zinc-600/50 transition-colors">
@@ -472,6 +484,15 @@ function ProviderQuotaCard({ provider, onRefresh, isRefreshing, isLoadingUsage, 
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
+            {showModelDetails && (
+              <button
+                onClick={() => onModelDetails(provider)}
+                className="p-1 rounded-md hover:bg-zinc-800 transition-colors cursor-pointer"
+                title="Per-model RPM/TPM details"
+              >
+                <ListTree size={12} className="text-zinc-400" />
+              </button>
+            )}
             <span
               className={`w-2 h-2 rounded-full ${
                 provider.is_active ? 'bg-emerald-500' : 'bg-zinc-600'
@@ -508,22 +529,24 @@ function ProviderQuotaCard({ provider, onRefresh, isRefreshing, isLoadingUsage, 
             <p className="text-xs text-zinc-500">Fetching usage…</p>
           </div>
         ) : hasQuotas ? (
-          <table className="w-full table-fixed text-left">
-            <thead>
-              <tr className="border-b border-zinc-800/50 text-[9px] text-zinc-600 uppercase tracking-wider">
-                <th className="py-1 px-2 font-normal w-[30%]">Quota</th>
-                <th className="py-1 px-2 font-normal w-[40%]">Usage</th>
-                <th className="py-1 px-2 font-normal w-[30%] text-right">
-                  Resets
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {provider.quotas.map((quota, idx) => (
-                <QuotaRow key={quota.name || idx} quota={quota} />
-              ))}
-            </tbody>
-          </table>
+          <div className="max-h-48 overflow-y-auto">
+            <table className="w-full table-fixed text-left">
+              <thead className="sticky top-0 bg-zinc-900/95 backdrop-blur-sm">
+                <tr className="border-b border-zinc-800/50 text-[9px] text-zinc-600 uppercase tracking-wider">
+                  <th className="py-1 px-2 font-normal w-[30%]">Quota</th>
+                  <th className="py-1 px-2 font-normal w-[40%]">Usage</th>
+                  <th className="py-1 px-2 font-normal w-[30%] text-right">
+                    Resets
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {provider.quotas.map((quota, idx) => (
+                  <QuotaRow key={quota.name || idx} quota={quota} />
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <div className="flex flex-col items-center justify-center py-6 text-center">
             <CloudOff size={18} className="text-zinc-600 mb-2" />
@@ -534,6 +557,107 @@ function ProviderQuotaCard({ provider, onRefresh, isRefreshing, isLoadingUsage, 
         )}
       </CardContent>
     </Card>
+  )
+}
+
+function ModelDetailsModal({ provider, onClose }) {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [filter, setFilter] = useState('')
+  const [message, setMessage] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const res = await quotaApi.getUsage(
+          provider.id, false, 'models',
+        )
+        if (cancelled) return
+        const usage = res.data || {}
+        setRows(usage.quotas || [])
+        setMessage(usage.message || null)
+      } catch (err) {
+        if (cancelled) return
+        setError(
+          err.response?.data?.detail
+          || err.message
+          || 'Failed to load model details',
+        )
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [provider.id])
+
+  const q = filter.trim().toLowerCase()
+  const visible = q
+    ? rows.filter((r) =>
+      String(r.name || '').toLowerCase().includes(q))
+    : rows
+
+  return (
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={`Model limits — ${provider.name || provider.provider}`}
+      className="max-w-3xl"
+    >
+      <div className="space-y-3">
+        <div className="relative">
+          <Search
+            size={14}
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500"
+          />
+          <input
+            type="text"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter models…"
+            className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
+          />
+        </div>
+        {message && (
+          <p className="text-[11px] text-zinc-500">{message}</p>
+        )}
+        {loading ? (
+          <div className="flex items-center justify-center py-10 gap-2">
+            <RefreshCw size={14} className="text-zinc-500 animate-spin" />
+            <p className="text-xs text-zinc-500">Loading models…</p>
+          </div>
+        ) : error ? (
+          <p className="text-xs text-red-400 py-6 text-center">{error}</p>
+        ) : (
+          <div className="max-h-[60vh] overflow-y-auto -mx-2">
+            <table className="w-full table-fixed text-left">
+              <thead className="sticky top-0 bg-zinc-900">
+                <tr className="border-b border-zinc-800/50 text-[9px] text-zinc-600 uppercase tracking-wider">
+                  <th className="py-1 px-2 font-normal w-[30%]">Quota</th>
+                  <th className="py-1 px-2 font-normal w-[40%]">Usage</th>
+                  <th className="py-1 px-2 font-normal w-[30%] text-right">
+                    Resets
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((quota, idx) => (
+                  <QuotaRow key={quota.name || idx} quota={quota} />
+                ))}
+              </tbody>
+            </table>
+            {visible.length === 0 && (
+              <p className="text-xs text-zinc-500 text-center py-6">
+                No models match the filter.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
   )
 }
 
@@ -622,7 +746,7 @@ export default function QuotaTrackerPage() {
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [refreshInterval, setRefreshInterval] = useState(60)
   const [countdown, setCountdown] = useState(60)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(10)
   const [currentPage, setCurrentPage] = useState(1)
   const [providerFilter, setProviderFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -635,6 +759,7 @@ export default function QuotaTrackerPage() {
   const [tabVisible, setTabVisible] = useState(true)
   const [editingProvider, setEditingProvider] = useState(null)
   const [confirmAction, setConfirmAction] = useState(null)
+  const [modelDetailsProvider, setModelDetailsProvider] = useState(null)
 
   const intervalRef = useRef(null)
   const countdownRef = useRef(null)
@@ -1201,6 +1326,7 @@ export default function QuotaTrackerPage() {
             onToggle={handleToggleActive}
             onEdit={setEditingProvider}
             onDelete={(p) => setConfirmAction({ type: 'delete', provider: p })}
+            onModelDetails={setModelDetailsProvider}
           />
         ))}
       </div>
@@ -1302,6 +1428,13 @@ export default function QuotaTrackerPage() {
           confirmClass="bg-amber-600 text-white hover:bg-amber-700"
           onConfirm={handleBulkDisableConfirm}
           onCancel={() => setConfirmAction(null)}
+        />
+      )}
+
+      {modelDetailsProvider && (
+        <ModelDetailsModal
+          provider={modelDetailsProvider}
+          onClose={() => setModelDetailsProvider(null)}
         />
       )}
     </div>

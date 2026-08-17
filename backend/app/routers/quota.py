@@ -375,6 +375,7 @@ async def bulk_enable_inactive(
 async def get_connection_usage(
     connection_id: str,
     force: bool = False,
+    detail: str | None = None,
     db: AsyncSession = Depends(get_db),
     _user=Depends(get_current_user),
 ):
@@ -384,6 +385,9 @@ async def get_connection_usage(
     possible; calls the provider's usage API only for connections
     without a cache or in active use (ban-risk reduction).
     Pass force=true to always poll upstream.
+
+    Pass detail=models for providers that support a full per-model
+    breakdown (e.g. alims-intl). That payload is not cached.
     """
     # Reject non-UUID ids early — otherwise asyncpg raises a 500 on
     # the bind (e.g. stray "/usage/stream" hitting this param route).
@@ -422,6 +426,23 @@ async def get_connection_usage(
         data = json.loads(conn.data) if conn.data else {}
     except (json.JSONDecodeError, TypeError):
         data = {}
+
+    want_models = (detail or "").strip().lower() == "models"
+    if want_models:
+        detail_fn = getattr(handler, "fetch_model_details", None)
+        if detail_fn is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Per-model quota detail is not supported "
+                    f"for '{conn.provider}'."
+                ),
+            )
+        return await detail_fn(
+            access_token="",
+            provider_data=data,
+            connection_id=str(conn.id),
+        )
 
     # Serve cached balance unless a fresh poll is required.
     # Local-state handlers (USES_UPSTREAM=False) are cheap and
