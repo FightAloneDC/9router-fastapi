@@ -162,3 +162,23 @@ Short rules only. Details: [`docs/architecture/handbook.md`](docs/architecture/h
 - Never edit upstream packages (`node_modules`, `vendor/`, …)
 - Use `uv` for Python deps and scripts
 - Scratch files stay in the workdir (e.g. `tests/`, `.scratch/`)
+
+
+---
+
+## enowx-rag memory
+
+This project uses the `enowx-rag` MCP server for per-project memory.
+
+### Before coding
+
+1. Call `rag_retrieve_context` with the project ID `9router-fastapi` and the user's query.
+2. Read the returned context. If relevant, use it to shape your answer or plan.
+
+### After coding
+
+1. Summarize what you changed.
+2. Call `rag_index` with useful new facts, design decisions, gotchas, or patterns under project ID `9router-fastapi`.
+
+Keep chunks concise (one idea per chunk). Use metadata tags like `type:architecture`, `type:decision`, `type:api`, `type:bugfix`, `type:howto`, or `type:snippet`.
+
