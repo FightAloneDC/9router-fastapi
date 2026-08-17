@@ -32,7 +32,11 @@ from app.services.outbound_proxy import (
     proxy_for_connection,
 )
 
-from .shared import _should_fallback_on_error, _mark_conn_failed
+from .shared import (
+    MAX_FALLBACK_ATTEMPTS,
+    _should_fallback_on_error,
+    _mark_conn_failed,
+)
 
 router = APIRouter()
 
@@ -158,6 +162,8 @@ async def audio_speech(
     last_error: dict | None = None
 
     while True:
+        if len(exclude_ids) >= MAX_FALLBACK_ATTEMPTS:
+            break
         conn = select_connection_for_provider(
             connections=list(connections),
             provider_id=provider_id,
@@ -248,7 +254,11 @@ async def audio_speech(
 
         except httpx.HTTPStatusError as e:
             last_error = {"status": e.response.status_code, "detail": e.response.text[:500]}
-            if not _should_fallback_on_error(e.response.status_code, e.response.text):
+            if not _should_fallback_on_error(
+                e.response.status_code,
+                e.response.text,
+                provider_id,
+            ):
                 return JSONResponse(
                     status_code=e.response.status_code,
                     content={"error": {"message": e.response.text[:500]}},
@@ -402,6 +412,8 @@ async def audio_transcriptions(
     last_error: dict | None = None
 
     while True:
+        if len(exclude_ids) >= MAX_FALLBACK_ATTEMPTS:
+            break
         conn = select_connection_for_provider(
             connections=list(connections),
             provider_id=provider_id,
@@ -476,7 +488,11 @@ async def audio_transcriptions(
 
         except httpx.HTTPStatusError as e:
             last_error = {"status": e.response.status_code, "detail": e.response.text[:500]}
-            if not _should_fallback_on_error(e.response.status_code, e.response.text):
+            if not _should_fallback_on_error(
+                e.response.status_code,
+                e.response.text,
+                provider_id,
+            ):
                 return JSONResponse(
                     status_code=e.response.status_code,
                     content={"error": {"message": e.response.text[:500]}},

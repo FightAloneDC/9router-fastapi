@@ -20,6 +20,10 @@ from app.services.usage_tracking import save_request_tracking
 from app.services.active_requests import track_request_end
 from app.services.outbound_proxy import create_upstream_client
 
+# Hard stop for farm burn (429 loops across thousands of keys).
+# If 5 healthy candidates also fail, stop — do not walk the pool.
+MAX_FALLBACK_ATTEMPTS = 5
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared helper classes / types
 # ─────────────────────────────────────────────────────────────────────────────
@@ -48,9 +52,46 @@ class ProxyTarget:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _should_fallback_on_error(status_code: int, detail: str) -> bool:
-    """Check if we should fallback to next connection on error."""
+def _should_fallback_on_error(
+    status_code: int,
+    detail: str,
+    provider_id: str | None = None,
+) -> bool:
+    """Fallback to next connection? PS handler may override."""
+    if provider_id:
+        try:
+            from app.providers.provider import Provider
+
+            handler = Provider(provider_id).handler()
+            decision = handler.should_fallback_on_error(
+                status_code, detail,
+            )
+            if decision is not None:
+                return decision
+        except (ValueError, ModuleNotFoundError):
+            pass
     return should_fallback_on_error(status_code, detail)
+
+
+def _rewrite_body_after_error(
+    provider_id: str | None,
+    status_code: int,
+    detail: str,
+    model: str,
+    body: dict,
+) -> dict | None:
+    """PS: optional same-connection body rewrite (no pool rotate)."""
+    if not provider_id:
+        return None
+    try:
+        from app.providers.provider import Provider
+
+        handler = Provider(provider_id).handler()
+    except (ValueError, ModuleNotFoundError):
+        return None
+    return handler.rewrite_body_after_error(
+        status_code, detail, model, body,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -387,10 +428,12 @@ async def _stream_response(
     encoding *body*.  This is required for Qoder's WAF-bypass encoding.
     """
     # Call provider's prepare_request hook (e.g. mimo-free JWT bootstrap)
+    stream_handler = None
     try:
         from app.providers.provider import Provider
         p = Provider(target.provider)
         handler = p.handler()
+        stream_handler = handler
         target.headers, body = await handler.prepare_request(
             target.headers, body, stream=True,
         )
@@ -813,6 +856,7 @@ async def _stream_response(
                     timeout=_STREAM_TIMEOUT,
                     limits=_STREAM_LIMITS,
                 ) as client:
+                    saw_done = False
                     try:
                         async with client.stream(
                             "POST",
@@ -834,31 +878,115 @@ async def _stream_response(
                                     request=resp.request,
                                     response=resp,
                                 )
+                            sse_line_xform = bool(
+                                stream_handler is not None
+                                and getattr(
+                                    stream_handler,
+                                    "SSE_LINE_TRANSFORM",
+                                    False,
+                                )
+                            )
+                            line_buf = b""
                             async for chunk in resp.aiter_bytes():
                                 chunk_count += 1
-                                yield chunk
-                                try:
-                                    text = chunk.decode(
+                                if not sse_line_xform:
+                                    if b"[DONE]" in chunk:
+                                        saw_done = True
+                                    yield chunk
+                                    try:
+                                        text = chunk.decode(
+                                            "utf-8",
+                                            errors="ignore",
+                                        )
+                                        for line in text.split("\n"):
+                                            _sniff_openai_sse_line(
+                                                line,
+                                            )
+                                            if (
+                                                line.startswith(
+                                                    "data: ",
+                                                )
+                                                and line.strip()
+                                                != "data: [DONE]"
+                                            ):
+                                                data = json.loads(
+                                                    line[6:],
+                                                )
+                                                if (
+                                                    "usage" in data
+                                                    and data[
+                                                        "usage"
+                                                    ]
+                                                ):
+                                                    usage = data[
+                                                        "usage"
+                                                    ]
+                                    except (
+                                        json.JSONDecodeError,
+                                        UnicodeDecodeError,
+                                    ):
+                                        pass
+                                    continue
+                                line_buf += chunk
+                                while b"\n" in line_buf:
+                                    raw_line, line_buf = (
+                                        line_buf.split(b"\n", 1)
+                                    )
+                                    line = raw_line.decode(
                                         "utf-8", errors="ignore",
                                     )
-                                    for line in text.split("\n"):
-                                        _sniff_openai_sse_line(line)
+                                    if stream_handler is not None:
+                                        line = (
+                                            stream_handler
+                                            .transform_openai_sse_line(
+                                                line,
+                                            )
+                                        )
+                                    if line is None:
+                                        continue
+                                    if line.strip() == "data: [DONE]":
+                                        saw_done = True
+                                    _sniff_openai_sse_line(line)
+                                    try:
                                         if (
-                                            line.startswith("data: ")
+                                            line.startswith(
+                                                "data: ",
+                                            )
                                             and line.strip()
                                             != "data: [DONE]"
                                         ):
-                                            data = json.loads(line[6:])
+                                            data = json.loads(
+                                                line[6:],
+                                            )
                                             if (
                                                 "usage" in data
                                                 and data["usage"]
                                             ):
-                                                usage = data["usage"]
-                                except (
-                                    json.JSONDecodeError,
-                                    UnicodeDecodeError,
-                                ):
-                                    pass
+                                                usage = data[
+                                                    "usage"
+                                                ]
+                                    except (
+                                        json.JSONDecodeError,
+                                        UnicodeDecodeError,
+                                    ):
+                                        pass
+                                    yield f"{line}\n".encode()
+                            if sse_line_xform and line_buf.strip():
+                                line = line_buf.decode(
+                                    "utf-8", errors="ignore",
+                                )
+                                if stream_handler is not None:
+                                    line = (
+                                        stream_handler
+                                        .transform_openai_sse_line(
+                                            line,
+                                        )
+                                    )
+                                if line is not None:
+                                    if line.strip() == "data: [DONE]":
+                                        saw_done = True
+                                    _sniff_openai_sse_line(line)
+                                    yield f"{line}\n".encode()
                     except asyncio.CancelledError:
                         end_status = "error"
                         _flush_sniff({"ended": "cancelled"})
@@ -893,7 +1021,10 @@ async def _stream_response(
                         yield b"data: [DONE]\n\n"
                     else:
                         _flush_sniff({"ended": "ok"})
-                        yield b"data: [DONE]\n\n"
+                        # Upstream often already sent data: [DONE];
+                        # do not emit a second one (breaks some clients).
+                        if not saw_done:
+                            yield b"data: [DONE]\n\n"
 
             # Save usage tracking AFTER stream is consumed
             if (

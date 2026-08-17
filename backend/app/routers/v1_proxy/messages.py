@@ -35,7 +35,9 @@ from app.services.outbound_proxy import (
 )
 
 from .shared import (
+    MAX_FALLBACK_ATTEMPTS,
     _should_fallback_on_error,
+    _rewrite_body_after_error,
     _maybe_refresh_on_auth_error,
     _mark_conn_failed,
     _build_provider_request,
@@ -105,10 +107,27 @@ async def messages_endpoint(
     # Fallback loop with exclude
     exclude_ids: set[str] = set()
     refreshed_ids: set[str] = set()
+    body_retry_ids: set[str] = set()
+    stripped_openai: dict | None = None
     last_error_detail: str | None = None
     last_error_status: int = 503
 
     while True:
+        if len(exclude_ids) >= MAX_FALLBACK_ATTEMPTS:
+            break
+        if await request.is_disconnected():
+            return JSONResponse(
+                status_code=499,
+                content={
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": "Client disconnected",
+                    },
+                },
+                headers={"X-Request-Id": request_id},
+            )
+
         targets = await resolve_model_to_targets(
             db, model_str, is_stream, exclude_ids=exclude_ids,
             combo_strategy=strategy, combo_sticky_limit=sticky_limit,
@@ -153,9 +172,16 @@ async def messages_endpoint(
         if is_claude_upstream:
             forward_body: dict = {**body, "model": target.model}
         else:
-            forward_body = claude_to_openai_request(body)
-            forward_body["model"] = target.model
-            forward_body["stream"] = is_stream
+            forward_body = (
+                stripped_openai
+                if stripped_openai is not None
+                else claude_to_openai_request(body)
+            )
+            forward_body = {
+                **forward_body,
+                "model": target.model,
+                "stream": is_stream,
+            }
 
         if conn and not is_claude_upstream:
             conn_data = json.loads(conn.data) if conn.data else {}
@@ -317,7 +343,28 @@ async def messages_endpoint(
                 refreshed_ids.add(conn_id)
                 continue
 
-            if not _should_fallback_on_error(e.response.status_code, e.response.text):
+            if (
+                conn_id
+                and conn_id not in body_retry_ids
+                and not is_claude_upstream
+            ):
+                rewritten = _rewrite_body_after_error(
+                    target.provider,
+                    e.response.status_code,
+                    e.response.text,
+                    target.model,
+                    forward_body,
+                )
+                if rewritten is not None:
+                    body_retry_ids.add(conn_id)
+                    stripped_openai = rewritten
+                    continue
+
+            if not _should_fallback_on_error(
+                e.response.status_code,
+                e.response.text,
+                target.provider,
+            ):
                 try:
                     error_body = e.response.json()
                 except Exception:

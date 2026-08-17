@@ -27,6 +27,7 @@ from app.services.outbound_proxy import (
 )
 
 from .shared import (
+    MAX_FALLBACK_ATTEMPTS,
     _build_embeddings_url,
     _build_embeddings_body,
     _should_fallback_on_error,
@@ -80,6 +81,8 @@ async def embeddings(
     last_error_status: int = 503
 
     while True:
+        if len(exclude_ids) >= MAX_FALLBACK_ATTEMPTS:
+            break
         targets = await resolve_model_to_targets(
             db, model, stream=False, exclude_ids=exclude_ids,
             combo_strategy=strategy, combo_sticky_limit=sticky_limit,
@@ -163,7 +166,11 @@ async def embeddings(
             track_request_end(active_request_id, status="error")
             last_error_detail = e.response.text[:500]
             last_error_status = e.response.status_code
-            if not _should_fallback_on_error(e.response.status_code, e.response.text):
+            if not _should_fallback_on_error(
+                e.response.status_code,
+                e.response.text,
+                target.provider,
+            ):
                 return JSONResponse(
                     status_code=e.response.status_code,
                     content={"error": {"message": last_error_detail}},

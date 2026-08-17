@@ -151,6 +151,35 @@ class BaseProviderHandler:
         """
         return True
 
+    def should_fallback_on_error(
+        self,
+        status_code: int,
+        error_text: str,
+    ) -> bool | None:
+        """PS override for pool fallback after an upstream error.
+
+        Return None to use the global default. Return False to stop
+        the fallback loop and surface the error. Return True to force
+        trying the next connection.
+        """
+        return None
+
+    def rewrite_body_after_error(
+        self,
+        status_code: int,
+        error_text: str,
+        model: str,
+        body: dict,
+    ) -> dict | None:
+        """Optional same-connection body rewrite after upstream error.
+
+        Return a new client body to retry once on the same connection
+        without rotating the pool. Return None to keep the normal
+        error / fallback path.
+        """
+        del status_code, error_text, model, body
+        return None
+
     async def validate(self, api_key: str, data: dict | None = None) -> ValidateResult:
         """Validate provider credentials."""
         if not api_key:
@@ -385,3 +414,11 @@ class BaseProviderHandler:
         """
         import json
         return json.loads(response_text)
+
+    # When True, proxy buffers SSE by line and calls
+    # transform_openai_sse_line (e.g. Mistral Magistral content parts).
+    SSE_LINE_TRANSFORM = False
+
+    def transform_openai_sse_line(self, line: str) -> str | None:
+        """Optional per-line SSE rewrite. None = drop line. Default: keep."""
+        return line

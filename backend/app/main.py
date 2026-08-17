@@ -1,15 +1,15 @@
 """FastAPI application factory for 9Router."""
 
 import asyncio
-import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.openapi_ui import openapi_ui_kwargs
 from app.middleware.api_prefix import StripApiPrefixMiddleware
+from app.middleware.request_logging import RequestLoggingMiddleware
 from app.static_ui import mount_provider_icons, mount_static_ui
 from app.routers import auth as auth_router
 from app.routers import api_keys as api_keys_router
@@ -42,8 +42,10 @@ async def lifespan(app: FastAPI):
     refresh_task = asyncio.create_task(token_refresh_loop())
     health_task = asyncio.create_task(connection_health_loop())
 
-    from app.database import async_session
+    from app.database import async_session, install_quiet_pool_terminate
     from app.services.provider_aliases import refresh_from_db
+
+    install_quiet_pool_terminate()
 
     try:
         async with async_session() as session:
@@ -90,25 +92,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.add_middleware(StripApiPrefixMiddleware)
-
-    # Request logging middleware — feeds the console log buffer
-    @app.middleware("http")
-    async def log_requests(request: Request, call_next):
-        from app.routers.console import add_log
-
-        start = time.time()
-        response = await call_next(request)
-        duration_ms = round((time.time() - start) * 1000, 1)
-        method = request.method
-        path = request.url.path
-        status = response.status_code
-        level = "ERROR" if status >= 500 else "WARN" if status >= 400 else "INFO"
-        add_log(
-            level=level,
-            message=f"{method} {path} -> {status} ({duration_ms}ms)",
-            source="http",
-        )
-        return response
+    # Pure ASGI — do not use @app.middleware("http") / BaseHTTPMiddleware
+    # (client disconnect cancels DB pool terminate → noisy traceback).
+    app.add_middleware(RequestLoggingMiddleware)
 
     # Provider icons must register before /providers/{conn_id} API routes.
     mount_provider_icons(app)

@@ -274,7 +274,7 @@ function QuotaRow({ quota }) {
               {quota.total > 0 ? formatQuotaNum(quota.total) : '∞'}
             </span>
             <span className={`font-medium ${colors.text}`}>
-              {pct.toFixed(0)}%
+              {pct.toFixed(0)}% left
             </span>
           </div>
         </div>

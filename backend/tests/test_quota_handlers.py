@@ -45,6 +45,12 @@ from app.providers.cerebras.quota import (
     published_quota_rows as cb_published,
     quotas_from_headers as cb_quotas_from_headers,
 )
+from app.providers.mistral.quota import (
+    MistralUsageHandler,
+    apply_local_usage as mi_apply_local_usage,
+    lookup_limits as mi_lookup_limits,
+    quotas_from_headers as mi_quotas_from_headers,
+)
 from app.providers.grok_cli.quota import (
     DEAD,
     EXHAUSTED,
@@ -75,6 +81,7 @@ def test_supported_providers():
     assert "openrouter" in providers
     assert "nvidia" in providers
     assert "cerebras" in providers
+    assert "mistral" in providers
 
 
 def test_get_handler_known():
@@ -848,3 +855,75 @@ def test_cerebras_local_usage() -> None:
     )
     assert rpm["used"] == 3
     assert rpm["total"] == 1000
+
+
+def test_mistral_handler_registered() -> None:
+    handler = get_usage_handler("mistral")
+    assert handler is not None
+    assert isinstance(handler, MistralUsageHandler)
+
+
+def test_mistral_config_limits() -> None:
+    assert mi_lookup_limits("free") == {}
+    assert mi_lookup_limits("scale") == {}
+    assert mi_lookup_limits("payg") == {}
+
+
+def test_mistral_quotas_from_headers() -> None:
+    headers = {
+        "x-ratelimit-limit-tokens-minute": "500000",
+        "x-ratelimit-remaining-tokens-minute": "499000",
+    }
+    rows = mi_quotas_from_headers(headers)
+    tok = next(r for r in rows if "TPM" in r["name"])
+    assert tok["total"] == 500000
+    assert tok["used"] == 1000
+    assert tok["remaining"] == 499000
+    assert tok["reset_at"]
+
+
+def test_mistral_headers_pair_minute_not_mix() -> None:
+    """Ignore non-minute token headers (Studio uses *-minute)."""
+    rows = mi_quotas_from_headers({
+        "x-ratelimit-limit-tokens": "50000",
+        "x-ratelimit-remaining-tokens": "0",
+    })
+    assert rows == []
+
+
+def test_mistral_headers_live_req_minute() -> None:
+    rows = mi_quotas_from_headers({
+        "x-ratelimit-limit-tokens-minute": "50000",
+        "x-ratelimit-remaining-tokens-minute": "49979",
+        "x-ratelimit-limit-req-minute": "50",
+        "x-ratelimit-remaining-req-minute": "49",
+    })
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["Mistral TPM (per minute)"]["total"] == 50000
+    assert by_name["Mistral TPM (per minute)"]["used"] == 21
+    assert by_name["Mistral RPM (per minute)"]["total"] == 50
+    assert by_name["Mistral RPM (per minute)"]["used"] == 1
+    assert by_name["Mistral TPM (per minute)"]["reset_at"]
+
+
+def test_mistral_headers_missing() -> None:
+    assert mi_quotas_from_headers({}) == []
+
+
+def test_mistral_local_usage() -> None:
+    rows = mi_apply_local_usage(4, 120, 1)
+    today_r = next(
+        r for r in rows
+        if "requests (today)" in r["name"]
+    )
+    today_t = next(
+        r for r in rows
+        if "tokens (today)" in r["name"]
+    )
+    minute = next(
+        r for r in rows if "last 60s" in r["name"]
+    )
+    assert today_r["used"] == 4
+    assert today_r["unlimited"] is True
+    assert today_t["used"] == 120
+    assert minute["used"] == 1

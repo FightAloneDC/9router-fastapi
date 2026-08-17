@@ -24,8 +24,8 @@ def test_cerebras_uses_catalog_table() -> None:
     assert uses_model_catalog_table("cerebras") is True
 
 
-def test_mistral_stays_on_blobs() -> None:
-    assert uses_model_catalog_table("mistral") is False
+def test_mistral_uses_catalog_table() -> None:
+    assert uses_model_catalog_table("mistral") is True
 
 
 def test_grok_cli_stays_on_blobs() -> None:

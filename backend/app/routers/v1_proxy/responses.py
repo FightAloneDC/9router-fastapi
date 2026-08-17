@@ -34,7 +34,9 @@ from app.services.outbound_proxy import (
 )
 
 from .shared import (
+    MAX_FALLBACK_ATTEMPTS,
     _should_fallback_on_error,
+    _rewrite_body_after_error,
     _build_provider_request,
     _unwrap_qoder_sse_line,
     _maybe_refresh_on_auth_error,
@@ -92,10 +94,22 @@ async def responses_endpoint(
     # Fallback loop with exclude
     exclude_ids: set[str] = set()
     refreshed_ids: set[str] = set()
+    body_retry_ids: set[str] = set()
     last_error_detail: str | None = None
     last_error_status: int = 503
 
     while True:
+        if len(exclude_ids) >= MAX_FALLBACK_ATTEMPTS:
+            break
+        if await request.is_disconnected():
+            return JSONResponse(
+                status_code=499,
+                content={
+                    "error": {"message": "Client disconnected"},
+                },
+                headers={"X-Request-Id": request_id},
+            )
+
         targets = await resolve_model_to_targets(
             db, model, stream, exclude_ids=exclude_ids,
             combo_strategy=strategy, combo_sticky_limit=sticky_limit,
@@ -293,7 +307,28 @@ async def responses_endpoint(
                 refreshed_ids.add(conn_id)
                 continue
 
-            if not _should_fallback_on_error(e.response.status_code, e.response.text):
+            if (
+                conn_id
+                and conn_id not in body_retry_ids
+                and not is_responses_upstream
+            ):
+                rewritten = _rewrite_body_after_error(
+                    target.provider,
+                    e.response.status_code,
+                    e.response.text,
+                    target.model,
+                    chat_body,
+                )
+                if rewritten is not None:
+                    body_retry_ids.add(conn_id)
+                    chat_body = rewritten
+                    continue
+
+            if not _should_fallback_on_error(
+                e.response.status_code,
+                e.response.text,
+                target.provider,
+            ):
                 return JSONResponse(
                     status_code=e.response.status_code,
                     content={"error": {"message": last_error_detail}},
