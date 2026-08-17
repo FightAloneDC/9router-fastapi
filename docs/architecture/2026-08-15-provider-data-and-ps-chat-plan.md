@@ -35,8 +35,8 @@ models, httpx, pytest.
   `connection_model_quotas`.
 - Do not turn on quality-gate 407 or phantom-write retry.
 - Do not commit unless the user explicitly asks.
-- Tests: `cd backend && ../.venv-local/bin/pytest …` if that venv
-  exists, else `./.venv/bin/python -m pytest …`.
+- Tests: `cd backend && .venv/bin/pytest …` or
+  `uv run pytest …`.
 - Max 80 characters per Python/JS line.
 
 ## File map
@@ -143,7 +143,7 @@ tests; do not overload it).
 - [ ] **Step 2: Run tests**
 
 ```bash
-cd backend && ../.venv-local/bin/pytest \
+cd backend && .venv/bin/pytest \
   tests/test_provider_models_store.py -v
 ```
 
@@ -247,7 +247,7 @@ Allowed leftovers: combo models, unrelated JSON. Not fetch/clear.
 - [ ] **Step 4: Run store tests + any provider models router tests**
 
 ```bash
-cd backend && ../.venv-local/bin/pytest \
+cd backend && .venv/bin/pytest \
   tests/test_provider_models_store.py -v
 ```
 

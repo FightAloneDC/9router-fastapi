@@ -200,7 +200,7 @@ TOKEN=$(curl -s -X POST http://localhost:9000/auth/login \
 curl http://localhost:9000/providers/catalog \
   -H "Authorization: Bearer $TOKEN"
 
-cd backend && ../.venv-local/bin/pytest tests/ -v
+cd backend && .venv/bin/pytest tests/ -v
 # or: uv run pytest tests/ -v
 ```
 

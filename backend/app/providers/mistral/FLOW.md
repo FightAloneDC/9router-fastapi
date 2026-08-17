@@ -46,18 +46,23 @@ empty on purpose.
 Client POST /v1/chat/completions  model="mi/mistral-small-latest"
   → alias mi → provider mistral
   → MistralHandler.build_request_body
-       sanitize_mistral_chat_body (drop max_context_size, store,
-       map developer→system; reasoning* from capabilities cache:
-       True→clamp none|high, False→drop, None→keep+clamp)
+       sanitize_mistral_chat_body (drop max_context_size,
+       max_context, context_length, store — also inside
+       extra_body; map developer→system; reasoning* from
+       capabilities cache: True→clamp none|high, False→drop,
+       None→keep+clamp)
   → upstream chat/completions
-  ← if 400 code 3051 ("reasoning_effort is not enabled") or 422
-       with reasoning* still present: strip → retry same connection
-       once; 3051 also updates capability cache to False. Models that
-       accept reasoning never hit 3051 — not a global disable.
+  ← if 400 reasoning rejection (code 3051, "reasoning_effort is not
+       enabled", "reasoning is not enabled") or 422 with reasoning*
+       still present and the capability cache does not say supported:
+       strip → retry same connection once; every 400 rejection sets
+       the capability cache to False. Models that accept reasoning
+       never hit these — not a global disable.
   ← Magistral may return content as thinking+text parts;
-       unwrap / SSE flatten keeps type:text only (drops thinking
-       deltas; does not touch string content — avoids cutting
-       answers or leaking the plan into Pi)
+       unwrap / SSE flatten keeps type:text only for stream deltas
+       (drops thinking deltas; does not touch string content —
+       avoids cutting answers or leaking the plan into Pi);
+       non-stream thinking-only content is promoted to text
   → Bearer data.apiKey
   → POST {BASE_URL}/chat/completions
   → observe_upstream_response → MistralUsageHandler.observe_response
@@ -67,7 +72,8 @@ Client POST /v1/chat/completions  model="mi/mistral-small-latest"
 
 `observe_response` no-ops unless minute limit/remaining headers
 are integers (`*-req-minute`, `*-tokens-minute`). Bars are labeled
-**RPM/TPM (per minute)** with a next-minute `reset_at` (not a cryptic
+**RPM/TPM (per minute)**; `reset_at` prefers `x-ratelimit-reset` /
+`retry-after` headers, falling back to next minute (not a cryptic
 "(header)" + N/A). Stale header overlays older than 90s are ignored
 on fetch so exhausted snapshots do not stick forever.
 
@@ -75,9 +81,12 @@ on fetch so exhausted snapshots do not stick forever.
 
 `MistralHandler.should_fallback_on_error` returns **False** for:
 
-- Labs models not enabled (`labs_not_enabled` / "is a Labs model")
+- Labs models not enabled (`labs_not_enabled` / "is a Labs model"
+  / bare "labs model"; also HTTP **403** containing "labs" or
+  "not enabled")
 - HTTP **422** (body rejected; same body on the next key fails)
-- HTTP **429** / `rate_limited` (do not burn the farm)
+- HTTP **429** / `rate_limited` / "rate limit" text (do not burn
+  the farm)
 
 Chat/messages/responses also support one same-connection body
 rewrite via `rewrite_body_after_error` before surfacing a 422.
@@ -115,9 +124,10 @@ rate-limit poll).
   **Mistral tokens (today)** (`total=0`, unlimited)
 - last 60s → **Mistral requests (last 60s)** (unlimited)
 
-Cached header bars with other names are appended. `plan` is
-free|scale. `limit_reached` only if a non-unlimited bar has
-remaining 0.
+Cached header bars with other names are appended only if they pass
+the live-header-bar name filter ("(header)" / "per minute" /
+"mistral rpm" / "mistral tpm"). `plan` is free|scale.
+`limit_reached` only if a non-unlimited bar has remaining 0.
 
 ### Observe
 

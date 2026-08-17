@@ -30,8 +30,8 @@ persists only summary bars; `fetch_model_details` serves
 - Do not dual-write catalog into `data.models` on fetch/clear.
 - Max 80 characters per Python/JS line.
 - Do **not** commit unless the user explicitly asks.
-- Tests: `cd backend && ../.venv-local/bin/pytest …` if that venv
-  exists, else `uv run pytest …` or `./.venv/bin/python -m pytest …`.
+- Tests: `cd backend && .venv/bin/pytest …` or
+  `uv run pytest …`.
 - Mirror Alibaba Studio summary + detail pattern; do not seed the
   full per-model table into `quota_cache`.
 
@@ -138,7 +138,7 @@ change the “On as of …” line to include **cohere** after
 - [ ] **Step 3: Smoke-import**
 
 ```bash
-cd backend && ../.venv-local/bin/python -c \
+cd backend && .venv/bin/python -c \
   "from app.providers.cohere.config import CohereConfig; \
    c=CohereConfig(); assert c.MODEL_CATALOG_TABLE; \
    assert c.RATE_LIMITS['free/_monthly']['calls']==1000; \
@@ -306,7 +306,7 @@ Default `"free"`.
 - [ ] **Step 6: Import check**
 
 ```bash
-cd backend && ../.venv-local/bin/python -c \
+cd backend && .venv/bin/python -c \
   "from app.services.quota import get_usage_handler; \
    h=get_usage_handler('cohere'); \
    assert h is not None; print(h.PROVIDER_ID, h.USES_UPSTREAM)"
@@ -412,7 +412,7 @@ def test_cohere_quotas_from_headers() -> None:
 - [ ] **Step 3: Run tests**
 
 ```bash
-cd backend && ../.venv-local/bin/pytest \
+cd backend && .venv/bin/pytest \
   tests/test_quota_handlers.py -k cohere -v
 ```
 
@@ -485,7 +485,7 @@ Sections (mirror Groq/Alibaba Studio length):
 - [ ] **Step 2: Full Cohere-related pytest**
 
 ```bash
-cd backend && ../.venv-local/bin/pytest \
+cd backend && .venv/bin/pytest \
   tests/test_quota_handlers.py -k cohere -v
 ```
 
@@ -494,7 +494,7 @@ Expected: PASS.
 - [ ] **Step 3: Confirm catalog flag in process**
 
 ```bash
-cd backend && ../.venv-local/bin/python -c \
+cd backend && .venv/bin/python -c \
   "from app.providers.provider import Provider; \
    p=Provider('cohere'); \
    assert p.config().MODEL_CATALOG_TABLE; \

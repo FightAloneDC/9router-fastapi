@@ -13,6 +13,7 @@ Intl with standard DashScope `sk-...` keys.
 | `handler.py` | Chat sanitize (developer→system); `execute_rerank` |
 | `quota.py` | Summary tracker + on-demand model detail |
 | `bulk.py` | Farm-json bulk import |
+| `__init__.py` | Package marker |
 
 ## Identity
 
@@ -61,6 +62,13 @@ opens a searchable modal for the detail request.
 
 ## Chat / rerank
 
-- `prepare_request`: map `developer` → `system`; drop invalid
-  `reasoning_effort`.
-- Rerank: DashScope compatible-mode `/reranks` via handler.
+- `prepare_request`: map `developer` → `system`; strip `think` /
+  `thinking`; drop `reasoning_effort` outside
+  `low|medium|high|xhigh|max` (and `reasoning` with it).
+- Rerank: `execute_rerank` POSTs
+  `{root}/compatible-mode/v1/reranks` where `root` is the
+  resolved baseUrl with a trailing `/compatible-mode/v1`
+  stripped (`rerank_url`). Default `BASE_URL`, workspace
+  SG/EU hosts that already end in that suffix, and a
+  host-root custom `baseUrl` all produce exactly one
+  compatible-mode segment.

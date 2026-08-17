@@ -25,9 +25,14 @@ docker compose -f docker-compose-v1.yml up --build
 
 ```bash
 cd backend
-../.venv-test/bin/pytest tests/ -v
-# Prefer project venv; do not rely on Docker-only `.venv`
+.venv/bin/pytest tests/ -v
+# or: uv run pytest tests/ -v
 ```
+
+Host local run uses `backend/.venv` (same venv as
+`uv run uvicorn`). Production compose has its own image
+venv — do not recreate repo-root extras (`.venv-test`,
+`.venv-local`).
 
 Use `PYTHONPATH` to the worktree/backend path when running from an
 isolated checkout.

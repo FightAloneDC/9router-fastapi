@@ -83,9 +83,17 @@ If NVIDIA sends them (success or 429):
 ```
 x-ratelimit-limit / x-ratelimit-limit-requests
 x-ratelimit-remaining / x-ratelimit-remaining-requests
-x-ratelimit-reset / retry-after
+x-ratelimit-reset / x-ratelimit-reset-requests / retry-after
 ```
 
-`observe_response` no-ops when those headers are missing.
+`observe_response` no-ops when those headers are missing. It
+caches rows named `NIM requests (last 60s / RPM)` (same
+merge key as the local RPM bar) and, when the header limit
+differs from config rpm, `NIM requests (header)`.
 
-`fetch` takes the max of local count vs cached header `used`.
+`fetch` overlays a fresh cache (`fetched_at` ≤ 90 s) onto
+local counts: matching names take `max(local used, cached
+used)`; leftover `NIM requests*` rows are appended. A stale
+or timestamp-less cache is ignored so a rare 429 snapshot
+cannot pin the RPM bar. No headers (the common case) →
+local counts only.

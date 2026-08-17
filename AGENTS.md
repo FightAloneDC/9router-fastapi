@@ -134,7 +134,9 @@ Short rules only. Details: [`docs/architecture/handbook.md`](docs/architecture/h
 
 ## 8. Python Rules (Backend — FastAPI)
 
-- Use a venv in the project workdir, never system-wide
+- Use `backend/.venv` (or `uv run` in `backend/`). Never
+  a system Python. Do not create repo-root extra venvs
+  (`.venv-test`, `.venv-local`).
 - Type annotations on all function parameters and return values
 - Prefer stdlib over third-party packages
 - Max 80 characters per line

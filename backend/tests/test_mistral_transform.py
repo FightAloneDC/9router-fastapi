@@ -375,3 +375,36 @@ def test_alims_drops_invalid_reasoning_effort() -> None:
     assert body["messages"][0]["role"] == "system"
     assert "think" not in body
     assert "reasoning_effort" not in body
+
+
+def test_alims_rerank_url_default_not_doubled() -> None:
+    from app.providers.alims_intl.config import AlimsIntlConfig
+    from app.providers.alims_intl.handler import rerank_url
+
+    url = rerank_url(AlimsIntlConfig().BASE_URL)
+    assert url.count("/compatible-mode/v1") == 1
+    assert url.endswith("/compatible-mode/v1/reranks")
+    assert url == (
+        "https://dashscope-intl.aliyuncs.com"
+        "/compatible-mode/v1/reranks"
+    )
+
+
+def test_alims_rerank_url_shapes() -> None:
+    from app.providers.alims_intl.handler import rerank_url
+
+    assert rerank_url(
+        "https://ws.ap-southeast-1.maas.aliyuncs.com"
+        "/compatible-mode/v1"
+    ) == (
+        "https://ws.ap-southeast-1.maas.aliyuncs.com"
+        "/compatible-mode/v1/reranks"
+    )
+    assert rerank_url("https://host.example") == (
+        "https://host.example/compatible-mode/v1/reranks"
+    )
+    assert rerank_url(
+        "https://dashscope-intl.aliyuncs.com"
+        "/compatible-mode/v1/"
+    ).count("/compatible-mode/v1") == 1
+    assert rerank_url("") == "/compatible-mode/v1/reranks"

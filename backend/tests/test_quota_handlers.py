@@ -4,7 +4,9 @@ Validates that each provider handler correctly parses
 API responses into standardized UsageResponse format.
 """
 
+import json
 import pytest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from app.services.quota import (
@@ -36,6 +38,7 @@ from app.providers.nvidia.quota import (
     NvidiaUsageHandler,
     apply_local_usage as nv_apply_local_usage,
     lookup_limits as nv_lookup_limits,
+    overlay_header_cache as nv_overlay_header_cache,
     quotas_from_headers as nv_quotas_from_headers,
 )
 from app.providers.cerebras.quota import (
@@ -767,7 +770,10 @@ def test_nvidia_quotas_from_headers() -> None:
         "X-RateLimit-Remaining": "12",
     }
     rows = nv_quotas_from_headers(headers, "free")
-    rpm = next(r for r in rows if "RPM" in r["name"])
+    rpm = next(
+        r for r in rows
+        if r["name"] == "NIM requests (last 60s / RPM)"
+    )
     assert rpm["total"] == 40
     assert rpm["remaining"] == 12
     assert rpm["used"] == 28
@@ -788,6 +794,199 @@ def test_nvidia_local_usage() -> None:
     assert rpm["remaining"] == 31
     assert today["used"] == 3
     assert today["unlimited"] is True
+
+
+def test_nvidia_header_row_name_matches_local() -> None:
+    hdr = nv_quotas_from_headers(
+        {
+            "X-RateLimit-Limit": "40",
+            "X-RateLimit-Remaining": "12",
+        },
+        "free",
+    )
+    local = nv_apply_local_usage("free", 1, 0)
+    hdr_names = {r["name"] for r in hdr}
+    local_names = {r["name"] for r in local}
+    assert "NIM requests (last 60s / RPM)" in hdr_names
+    assert "NIM requests (last 60s / RPM)" in local_names
+
+
+def test_nvidia_overlay_max_used_when_fresh() -> None:
+    now = datetime.now(timezone.utc)
+    local = nv_apply_local_usage("free", 2, 0)
+    cached = [{
+        "name": "NIM requests (last 60s / RPM)",
+        "used": 10,
+        "total": 40,
+        "remaining": 30,
+        "reset_at": "cached-reset",
+        "unlimited": False,
+    }]
+    out = nv_overlay_header_cache(
+        local, cached, now, now,
+    )
+    rpm = next(
+        r for r in out
+        if r["name"] == "NIM requests (last 60s / RPM)"
+    )
+    assert rpm["used"] == 10
+    assert rpm["total"] == 40
+    assert rpm["reset_at"] == "cached-reset"
+
+
+def test_nvidia_overlay_keeps_higher_local() -> None:
+    now = datetime.now(timezone.utc)
+    local = nv_apply_local_usage("free", 12, 0)
+    cached = [{
+        "name": "NIM requests (last 60s / RPM)",
+        "used": 3,
+        "total": 40,
+        "remaining": 37,
+        "reset_at": None,
+        "unlimited": False,
+    }]
+    out = nv_overlay_header_cache(
+        local, cached, now, now,
+    )
+    rpm = next(
+        r for r in out
+        if r["name"] == "NIM requests (last 60s / RPM)"
+    )
+    assert rpm["used"] == 12
+
+
+def test_nvidia_overlay_ignores_stale_cache() -> None:
+    now = datetime.now(timezone.utc)
+    stale = now - timedelta(seconds=91)
+    local = nv_apply_local_usage("free", 2, 0)
+    cached = [{
+        "name": "NIM requests (last 60s / RPM)",
+        "used": 40,
+        "total": 40,
+        "remaining": 0,
+        "reset_at": None,
+        "unlimited": False,
+    }]
+    out = nv_overlay_header_cache(
+        local, cached, stale, now,
+    )
+    rpm = next(
+        r for r in out
+        if r["name"] == "NIM requests (last 60s / RPM)"
+    )
+    assert rpm["used"] == 2
+    assert all(
+        r["name"] != "NIM requests (header)" for r in out
+    )
+
+
+def test_nvidia_overlay_missing_fetched_at_is_stale() -> None:
+    now = datetime.now(timezone.utc)
+    local = nv_apply_local_usage("free", 2, 0)
+    cached = [{
+        "name": "NIM requests (last 60s / RPM)",
+        "used": 40,
+        "total": 40,
+        "remaining": 0,
+        "reset_at": None,
+        "unlimited": False,
+    }]
+    out = nv_overlay_header_cache(
+        local, cached, None, now,
+    )
+    rpm = next(
+        r for r in out
+        if r["name"] == "NIM requests (last 60s / RPM)"
+    )
+    assert rpm["used"] == 2
+
+
+def test_nvidia_overlay_appends_fresh_header_row() -> None:
+    now = datetime.now(timezone.utc)
+    local = nv_apply_local_usage("free", 2, 0)
+    cached = [{
+        "name": "NIM requests (header)",
+        "used": 5,
+        "total": 80,
+        "remaining": 75,
+        "reset_at": None,
+        "unlimited": False,
+    }]
+    out = nv_overlay_header_cache(
+        local, cached, now, now,
+    )
+    extra = next(
+        r for r in out
+        if r["name"] == "NIM requests (header)"
+    )
+    assert extra["used"] == 5
+    assert extra["total"] == 80
+
+
+def test_nvidia_overlay_aliases_legacy_rpm_name() -> None:
+    now = datetime.now(timezone.utc)
+    local = nv_apply_local_usage("free", 2, 0)
+    cached = [{
+        "name": "NIM requests (RPM)",
+        "used": 9,
+        "total": 40,
+        "remaining": 31,
+        "reset_at": None,
+        "unlimited": False,
+    }]
+    out = nv_overlay_header_cache(
+        local, cached, now, now,
+    )
+    rpm = next(
+        r for r in out
+        if r["name"] == "NIM requests (last 60s / RPM)"
+    )
+    assert rpm["used"] == 9
+    assert all(
+        r["name"] != "NIM requests (RPM)" for r in out
+    )
+
+
+@pytest.mark.anyio
+async def test_nvidia_fetch_applies_fresh_overlay() -> None:
+    cid = "11111111-1111-1111-1111-111111111111"
+    now = datetime.now(timezone.utc)
+    cache = MagicMock()
+    cache.quotas = json.dumps([{
+        "name": "NIM requests (last 60s / RPM)",
+        "used": 10,
+        "total": 40,
+        "remaining": 30,
+        "reset_at": None,
+        "unlimited": False,
+    }])
+    cache.fetched_at = now
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=cache)
+    session_cm = AsyncMock()
+    session_cm.__aenter__.return_value = db
+    session_cm.__aexit__.return_value = False
+
+    handler = NvidiaUsageHandler()
+    with (
+        patch(
+            "app.providers.nvidia.quota._count_requests",
+            new_callable=AsyncMock,
+            return_value=2,
+        ),
+        patch(
+            "app.database.async_session",
+            return_value=session_cm,
+        ),
+    ):
+        result = await handler.fetch(
+            "", {"accountType": "free"}, cid,
+        )
+    rpm = next(
+        q for q in result.quotas
+        if q.name == "NIM requests (last 60s / RPM)"
+    )
+    assert rpm.used == 10
 
 
 def test_cerebras_handler_registered() -> None:

@@ -30,6 +30,10 @@ _LIMIT_REQ = "x-ratelimit-limit-requests"
 _REMAIN_REQ = "x-ratelimit-remaining-requests"
 _RESET_REQ = "x-ratelimit-reset-requests"
 
+_HEADER_STALE_SEC = 90
+_RPM_BAR = "NIM requests (last 60s / RPM)"
+_LEGACY_RPM_BAR = "NIM requests (RPM)"
+
 
 def lookup_limits(account_type: str | None = None) -> dict[str, int]:
     """Published caps for the NIM plan (config, not headers)."""
@@ -145,7 +149,7 @@ def quotas_from_headers(
             remain = hdr_remain
             used_reset = reset_at
         rows.append(_item(
-            "NIM requests (RPM)",
+            _RPM_BAR,
             used=max(0, rpm - remain),
             total=rpm,
             reset_at=used_reset,
@@ -184,11 +188,75 @@ def apply_local_usage(
     ))
     if rpm is not None:
         rows.append(_item(
-            "NIM requests (last 60s / RPM)",
+            _RPM_BAR,
             used=rpm_used,
             total=rpm,
             reset_at=rpm_reset,
         ))
+    return rows
+
+
+def _cache_age_sec(
+    fetched_at: datetime | None,
+    now: datetime,
+) -> float:
+    """Seconds since cache write; missing stamp counts as stale."""
+    if fetched_at is None:
+        return 10_000.0
+    fetched = fetched_at
+    if fetched.tzinfo is None:
+        fetched = fetched.replace(tzinfo=timezone.utc)
+    return (now - fetched).total_seconds()
+
+
+def overlay_header_cache(
+    rows: list[dict],
+    raw: object,
+    fetched_at: datetime | None,
+    now: datetime,
+) -> list[dict]:
+    """Overlay a fresh header cache onto local quota bars.
+
+    Stale cache (age > 90 s, or no fetched_at) is ignored.
+    NVIDIA rarely sends headers on success, so a 429
+    snapshot must not pin the RPM bar.
+    """
+    if not isinstance(raw, list):
+        return rows
+    if _cache_age_sec(fetched_at, now) > _HEADER_STALE_SEC:
+        return rows
+
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "")
+        if name == _LEGACY_RPM_BAR:
+            name = _RPM_BAR
+        if not name:
+            continue
+        matched = False
+        for row in rows:
+            if row["name"] != name:
+                continue
+            matched = True
+            used = int(item.get("used") or 0)
+            if used > int(row["used"] or 0):
+                row.update(_item(
+                    row["name"],
+                    used=used,
+                    total=row["total"],
+                    reset_at=(
+                        item.get("reset_at")
+                        or row["reset_at"]
+                    ),
+                ))
+            break
+        if matched:
+            continue
+        if name.startswith("NIM requests"):
+            extra = dict(item)
+            extra["name"] = name
+            rows.append(extra)
     return rows
 
 
@@ -333,24 +401,12 @@ class NvidiaUsageHandler(BaseUsageHandler):
                 except (json.JSONDecodeError, TypeError):
                     raw = []
                 if isinstance(raw, list):
-                    for row in rows:
-                        for q in raw:
-                            if not isinstance(q, dict):
-                                continue
-                            name = str(q.get("name") or "")
-                            if name != row["name"]:
-                                continue
-                            used = int(q.get("used") or 0)
-                            if used > row["used"]:
-                                row.update(_item(
-                                    row["name"],
-                                    used=used,
-                                    total=row["total"],
-                                    reset_at=(
-                                        q.get("reset_at")
-                                        or row["reset_at"]
-                                    ),
-                                ))
+                    rows = overlay_header_cache(
+                        rows,
+                        raw,
+                        cache.fetched_at,
+                        now,
+                    )
         return UsageResponse(
             plan=plan,
             quotas=_quota_items(rows),

@@ -10,6 +10,16 @@ import httpx
 
 from app.providers.base import BaseProviderHandler
 
+_COMPAT_SUFFIX = "/compatible-mode/v1"
+
+
+def rerank_url(base_url: str) -> str:
+    """Compatible-mode rerank endpoint for any base URL shape."""
+    root = (base_url or "").rstrip("/")
+    if root.endswith(_COMPAT_SUFFIX):
+        root = root[: -len(_COMPAT_SUFFIX)]
+    return f"{root}{_COMPAT_SUFFIX}/reranks"
+
 
 class AlimsIntlHandler(BaseProviderHandler):
     """Adapt OpenAI developer messages for Alibaba Studio."""
@@ -88,7 +98,7 @@ class AlimsIntlHandler(BaseProviderHandler):
             body["instruct"] = instruct
 
         # Use compatible-mode endpoint for qwen3-rerank
-        url = f"{base_url.rstrip('/')}/compatible-mode/v1/reranks"
+        url = rerank_url(base_url)
 
         headers = {
             "Authorization": f"Bearer {token}",

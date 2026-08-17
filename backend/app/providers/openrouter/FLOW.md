@@ -13,7 +13,7 @@ cannot come from a successful playground/`/chat` call alone.
 | File | Role |
 |------|------|
 | `config.py` | Identity, catalog flag, `RATE_LIMITS` by accountType |
-| `handler.py` | Extra headers + TTS via chat completions |
+| `handler.py` | TTS via chat completions; referer/title headers for TTS + validate only |
 | `models.py` | `GET /models` parsing |
 | `quota.py` | IP-scoped caps, local log count, 429 overlay |
 | `__init__.py` | Package marker |
@@ -44,7 +44,7 @@ Connection `data.accountType` selects the row (`free` default).
 ```
 Client POST /v1/chat/completions  model="openrouter/meta-llama/...:free"
   → provider openrouter
-  → Bearer + HTTP-Referer / X-Title (handler extra headers)
+  → Bearer only (no HTTP-Referer / X-Title on the chat proxy)
   → POST {BASE_URL}/chat/completions
   → observe_upstream_response (only writes cache if X-RateLimit-Limit)
   → stream or JSON to client
@@ -92,6 +92,10 @@ return a stale all-zero cache after chats.
 
 ## Implementation notes
 
+- `HTTP-Referer` / `X-Title` are NOT sent on the chat proxy path.
+  `execute_tts` sends them hardcoded (`https://9router.local` /
+  `9Router`); `validate()` sends them only when connection data has
+  `httpReferer` / `xTitle`.
 - Rotating HTTP proxies: OpenRouter may split the 50 RPD per IP;
   this tracker still counts **one pool** (it does not see egress IP).
 - `GET /api/v1/key` (credits) is **not** polled on tracker load
