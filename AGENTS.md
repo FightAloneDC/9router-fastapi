@@ -108,7 +108,8 @@ Short rules only. Details: [`docs/architecture/handbook.md`](docs/architecture/h
    `/providers/catalog`. Do not hardcode provider lists.
 5. **Provider FLOW.md** — Per-provider flow from that provider's
    code only. Update after changes; missing FLOW.md beats a shared
-   template.
+   template. Process:
+   [`docs/architecture/provider-optimization-sop.md`](docs/architecture/provider-optimization-sop.md).
 6. **ProviderDetailPage** — Providers menu features must work
    end-to-end; verify in the running app.
 7. **Optimistic UI** — Toggle state first, then API; rollback on

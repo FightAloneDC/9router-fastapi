@@ -208,4 +208,5 @@ cd backend && .venv/bin/pytest tests/ -v
 
 - [Architecture overview](overview.md)
 - [Catalog table slice](2026-08-15-openrouter-catalog-slice.md)
+- [Provider optimization SOP](provider-optimization-sop.md)
 - [Docs index](../README.md)
