@@ -8,10 +8,13 @@ under [`archives/`](archives/).
 | Section | Description |
 |---------|-------------|
 | [Architecture](architecture/overview.md) | Runtime topology, modules, data model |
+| [Project handbook](architecture/handbook.md) | Stack, patterns, key files, debugging |
 | [Configuration](configuration/environment.md) | Env vars, compose files, proxy usage |
 | [Production ops](operations/production.md) | Deploy, UI release, recreate app |
 | [Development ops](operations/development.md) | Local/host workflow and tests |
 | [Gotchas](gotchas/spa-routing.md) | SPA vs API collisions, icons, DEBUG docs |
+
+Agent behavioral rules: [`AGENTS.md`](../AGENTS.md) (not project detail).
 
 ## Archives
 

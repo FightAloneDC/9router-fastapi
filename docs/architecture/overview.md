@@ -51,6 +51,7 @@ DB columns): API keys, models, `proxyUsage`, test status, etc.
 
 ## Related
 
+- [Project handbook](handbook.md) — stack, patterns, key files, debugging
 - [Configuration](../configuration/environment.md)
 - [Production operations](../operations/production.md)
 - [Gotchas](../gotchas/spa-routing.md)
