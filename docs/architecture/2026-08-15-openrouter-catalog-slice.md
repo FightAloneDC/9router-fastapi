@@ -15,7 +15,8 @@ Set `MODEL_CATALOG_TABLE = True` on the provider config. Helper:
 `uses_model_catalog_table(provider_id)` via `Provider(id).config()`.
 
 On as of 2026-08-18: **openrouter**, **groq**, **nvidia**,
-**cerebras**, **mistral**, **alims-intl**, **cohere**, **morph**.
+**cerebras**, **mistral**, **alims-intl**, **cohere**, **morph**,
+**qoder**, **grok-cli**.
 
 Everyone else still reading `data.models` is migration debt. Next
 ordinary OpenAI-compat provider gets the flag on day one.

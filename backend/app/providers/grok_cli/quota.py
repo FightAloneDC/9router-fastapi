@@ -38,12 +38,14 @@ Research notes (grok-farm-modular, verified 2026-08):
 - The free tier comes from x.ai and is limited to grok-4.5.
   Grok (grok.com) has no free plan — grok-build 402s on free
   accounts by design (model gating, not exhaustion).
-- Daily free allowance: 2M tokens/day during the first promo
-  period, later reduced to 1M/day (X-Ratelimit-Limit-Tokens).
-  Enforcement observed 2026-08-09: one farmed account 429'd at
+- Daily free allowance is account-random: **1M or 500K**
+  tokens/day. Published both rows on
+  ``GrokCliConfig.RATE_LIMITS`` (``free/1m``, ``free/500k``)
+  with ``requests: 21``. Headers often claim 1M; 429 body may
+  show 500K — the 429 body is authoritative when present.
+- Enforcement observed 2026-08-09: one farmed account 429'd at
   an actual 500K limit (rolling 24h window) while its headers
-  still claimed 1M — the real limit appears account-specific,
-  the 429 body is the only authoritative source.
+  still claimed 1M.
 """
 
 from __future__ import annotations
@@ -74,10 +76,35 @@ from app.services.quota.base import (
 
 logger = logging.getLogger(__name__)
 
-# Free-tier daily token allowance. Research value: the first
-# promo period granted 2M/day, later reduced to 1M/day. Matches
-# the observed X-Ratelimit-Limit-Tokens header.
-GROK_CLI_FREE_DAILY_TOKENS = 1_000_000
+
+def published_daily_tokens_1m() -> int:
+    """Default free daily cap (1M tier) from RATE_LIMITS."""
+    from app.providers.grok_cli.config import GrokCliConfig
+
+    table = GrokCliConfig().RATE_LIMITS
+    return int(table.get("free/1m", {}).get("tpd") or 1_000_000)
+
+
+def published_daily_tokens_500k() -> int:
+    """Alternate free daily cap (500K tier) from RATE_LIMITS."""
+    from app.providers.grok_cli.config import GrokCliConfig
+
+    table = GrokCliConfig().RATE_LIMITS
+    return int(table.get("free/500k", {}).get("tpd") or 500_000)
+
+
+def published_request_cap() -> int:
+    """Published Limit-Requests from RATE_LIMITS (both tiers)."""
+    from app.providers.grok_cli.config import GrokCliConfig
+
+    table = GrokCliConfig().RATE_LIMITS
+    row = table.get("free/1m") or table.get("free/500k") or {}
+    return int(row.get("requests") or 21)
+
+
+# Free-tier daily token allowance default (1M tier). Account may
+# instead be on the 500K tier — see RATE_LIMITS free/500k.
+GROK_CLI_FREE_DAILY_TOKENS = published_daily_tokens_1m()
 
 _LIMIT_TOKENS_HDR = "x-ratelimit-limit-tokens"
 _REMAIN_TOKENS_HDR = "x-ratelimit-remaining-tokens"

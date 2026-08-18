@@ -34,6 +34,15 @@ class GrokCliConfig(BaseProviderConfig):
     # Accepts bulk JSON account import (grok-farm-modular export)
     SUPPORTS_BULK_IMPORT: bool = True
     SYNC_DISABLED_WITH_MODEL_LIST: bool = True
+    # Fetch/set/clear → provider_models (not connection data.models).
+    MODEL_CATALOG_TABLE: bool = True
+    # Free daily token cap is account-random: 1M or 500K
+    # (operator 2026-08). Headers often claim 1M; 429 body may
+    # show 500K. requests=21 from X-Ratelimit-Limit-Requests.
+    RATE_LIMITS: dict[str, dict[str, int]] = {
+        "free/1m": {"tpd": 1_000_000, "requests": 21},
+        "free/500k": {"tpd": 500_000, "requests": 21},
+    }
 
     # ── Static client fingerprint headers ──────────────────────────────
     EXTRA_HEADERS: dict[str, str] = {
@@ -55,9 +64,11 @@ class GrokCliMetadata(BaseMetadata):
     website: str = "https://x.ai"
     notice: dict | None = {
         "text": (
-            "Sign in with your xAI / Grok account via device code. "
-            "Uses Grok Build subscription credits "
-            "(cli-chat-proxy.grok.com)."
+            "Sign in via device code (auth.x.ai). Free daily "
+            "tokens are 1M or 500K at random per account "
+            "(Limit-Requests often 21). Used = local "
+            "usage_history; remaining headers are not trusted. "
+            "cli-chat-proxy.grok.com Responses API."
         ),
         "signupUrl": "https://grok.com/supergrok",
     }

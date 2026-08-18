@@ -375,6 +375,27 @@ async def test_kiro_usage():
 # ──────────────────────────────────────────────
 
 
+def test_qoder_config_limits_no_invented_rpm() -> None:
+    from app.providers.qoder.config import QoderConfig
+
+    limits = QoderConfig().RATE_LIMITS
+    assert limits == {"trial": {"credits": 300, "days": 14}}
+    assert "rpm" not in limits["trial"]
+    assert "tpm" not in limits["trial"]
+
+
+def test_grok_cli_config_limits_two_tiers() -> None:
+    from app.providers.grok_cli.config import GrokCliConfig
+
+    limits = GrokCliConfig().RATE_LIMITS
+    assert limits == {
+        "free/1m": {"tpd": 1_000_000, "requests": 21},
+        "free/500k": {"tpd": 500_000, "requests": 21},
+    }
+    assert "rpm" not in limits["free/1m"]
+    assert "tpm" not in limits["free/500k"]
+
+
 @pytest.mark.asyncio
 async def test_qoder_usage():
     handler = QoderUsageHandler()

@@ -27,6 +27,14 @@ class QoderConfig(BaseProviderConfig):
     SUPPORTS_PAT: bool = True
     # Accepts bulk JSON account import (grok-farm-modular export)
     SUPPORTS_BULK_IMPORT: bool = True
+    # Fetch/set/clear → provider_models (not connection data.models).
+    MODEL_CATALOG_TABLE: bool = True
+    # Per-account trial (operator 2026-08-18 + quota API shape):
+    # 300 credits, window window ~14 days (expiresAt from upstream).
+    # No published RPM/TPM table — do not invent rows.
+    RATE_LIMITS: dict[str, dict[str, int]] = {
+        "trial": {"credits": 300, "days": 14},
+    }
 
 
 class QoderMetadata(BaseMetadata):
@@ -37,4 +45,12 @@ class QoderMetadata(BaseMetadata):
     textIcon: str = "QD"
     icon: str = "Zap"
     website: str = "https://qoder.com"
-    notice: dict | None = {"signupUrl": "https://qoder.com"}
+    notice: dict | None = {
+        "text": (
+            "Trial: 300 credits per account/connection, "
+            "valid ~14 days (see expiresAt on quota API). "
+            "Live used/remaining: Quota Tracker / "
+            "openapi…/quota/usage."
+        ),
+        "signupUrl": "https://qoder.com",
+    }

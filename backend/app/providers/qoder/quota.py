@@ -1,9 +1,12 @@
 """Qoder usage handler.
 
 Endpoint: QODER_QUOTA_USAGE_URL (providers/qoder/constants.py)
-Auth: OAuth Bearer token.
+Auth: OAuth Bearer token (not COSY).
 
-Response shape (verified 2026-08):
+Published trial cap: QoderConfig.RATE_LIMITS["trial"]
+(credits + days). Live used/remaining/expiresAt come from the
+quota API. Response shape (verified 2026-08):
+
   {"userType": "personal_professional_trial",
    "usageType": "credits",
    "isQuotaExceeded": true,
@@ -18,6 +21,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from app.providers.qoder.config import QoderConfig
 from app.providers.qoder.constants import (
     QODER_QUOTA_USAGE_URL,
 )
@@ -31,6 +35,12 @@ from app.services.quota.base import (
 logger = logging.getLogger(__name__)
 
 
+def published_credit_cap() -> int:
+    """Trial credit total from RATE_LIMITS (Provider Detail table)."""
+    table = QoderConfig().RATE_LIMITS
+    return int(table.get("trial", {}).get("credits") or 300)
+
+
 class QoderUsageHandler(BaseUsageHandler):
     PROVIDER_ID = "qoder"
 
@@ -40,6 +50,7 @@ class QoderUsageHandler(BaseUsageHandler):
         provider_data: dict | None = None,
         connection_id: str | None = None,
     ) -> UsageResponse:
+        del provider_data, connection_id
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {access_token}",
@@ -62,7 +73,7 @@ class QoderUsageHandler(BaseUsageHandler):
 
         data = resp.json()
         quota = data.get("userQuota") or {}
-        total = int(quota.get("total", 0))
+        total = int(quota.get("total", 0)) or published_credit_cap()
         used = int(quota.get("used", 0))
         remaining = int(
             quota.get("remaining", max(0, total - used))
