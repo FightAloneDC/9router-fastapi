@@ -1,6 +1,7 @@
 """Morph request adapter — cases from docs + request_details logs."""
 
 import asyncio
+import json
 
 from app.providers.morph.config import MorphConfig
 from app.providers.morph.handler import (
@@ -256,6 +257,7 @@ def test_apply_keeps_tools_forces_tool_choice_none() -> None:
     assert body["messages"][1]["content"] == "run date"
     # Must NOT wrap agent tool turns as merge XML.
     assert "<instruction>" not in body["messages"][1]["content"]
+    assert body["messages"][0]["content"] == "You are pi"
 
 
 def test_unwrap_apply_xml_tool_call_to_openai() -> None:
@@ -403,11 +405,222 @@ def test_prepare_request_and_no_farm_rotate() -> None:
     assert "<instruction>" in content
     assert "User: x" not in content
     assert "x" in content
-    assert "<code>" in content
-    assert "(no file edit; reply as chat)" in content
+    assert "<code> </code>" in content
+    assert "<update> </update>" in content
+    assert "(no file edit; reply as chat)" not in content
     err = (
         '{"error":{"message":"text.charCodeAt is not a function"'
         ',"type":"internal_error"}}'
     )
     assert handler.should_fallback_on_error(500, err) is False
     assert handler.should_fallback_on_error(429, "retry") is None
+
+
+def test_morph_v3_fast_chat_does_not_forward_system() -> None:
+    """Live: Pi AGENTS.md in system is emitted as the merged file."""
+    marker = "UNIQUE_AGENTS_MARKER_9ROUTER"
+    body = adapt_morph_body({
+        "model": "mo/morph-v3-fast",
+        "messages": [
+            {
+                "role": "developer",
+                "content": f"# AGENTS.md\n{marker}\nThink Before Coding.",
+            },
+            {"role": "user", "content": "hi"},
+        ],
+        "tools": [{
+            "type": "function",
+            "function": {"name": "bash"},
+        }],
+    })
+    assert "tools" not in body
+    assert len(body["messages"]) == 1
+    content = body["messages"][0]["content"]
+    assert marker not in content
+    assert "AGENTS.md" not in content
+    assert "hi" in content
+    assert content.startswith("<instruction>")
+    assert "<code> </code>" in content
+    assert "<update> </update>" in content
+
+
+def test_morph_v3_fast_real_apply_xml_still_collapses() -> None:
+    xml = (
+        "<instruction>merge</instruction>\n"
+        "<code>a=1</code>\n"
+        "<update>a=2</update>"
+    )
+    body = adapt_morph_body({
+        "model": "mo/morph-v3-fast",
+        "messages": [
+            {"role": "system", "content": "# AGENTS.md dumped"},
+            {"role": "user", "content": xml},
+        ],
+    })
+    content = body["messages"][0]["content"]
+    assert "<code>a=1</code>" in content
+    assert "Reply conversationally" not in content
+    assert "AGENTS.md" not in content
+
+
+def test_morph_v3_large_tools_still_passthrough() -> None:
+    """large stays on the tools+none path; do not wrap."""
+    body = adapt_morph_body({
+        "model": "mo/morph-v3-large",
+        "messages": [
+            {"role": "developer", "content": "# AGENTS.md"},
+            {"role": "user", "content": "hi"},
+        ],
+        "tools": [{
+            "type": "function",
+            "function": {"name": "bash"},
+        }],
+    })
+    assert body["tools"]
+    assert body["tool_choice"] == "none"
+    assert body["messages"][1]["content"] == "hi"
+
+
+def _run_prompt(cmd: str) -> str:
+    return (
+        "Jalankan perintah berikut di environment ini.\n"
+        f"\n{cmd}\n\n"
+        "Bandingkan outputnya dengan jawaban sebelumnya."
+    )
+
+
+def _assert_bash_cmd(msg: dict, finish: str, cmd: str) -> None:
+    assert msg.get("content") is None
+    calls = msg.get("tool_calls") or []
+    assert len(calls) == 1
+    assert calls[0]["function"]["name"] == "bash"
+    args = json.loads(calls[0]["function"]["arguments"])
+    assert args["command"] == cmd
+    assert finish == "tool_calls"
+
+
+def test_apply_fast_drops_echo_of_user_prompt() -> None:
+    from app.providers.morph.transform import apply_fast_client_output
+
+    prompt = (
+        "Sebelum menjawab, baca konteks environment/session ini.\n"
+        "Jangan mengarang fakta yang tidak ada di context.\n"
+        "Jawab hanya:\n- Ringkasan:\n- Sumber:\n- Catatan:"
+    )
+    msg, finish = apply_fast_client_output(
+        prompt,
+        last_user=prompt,
+        bash_tool="bash",
+    )
+    assert msg.get("content") in (None, "")
+    assert not msg.get("tool_calls")
+    assert finish == "stop"
+
+
+def test_apply_fast_drops_truncated_echo() -> None:
+    from app.providers.morph.transform import apply_fast_client_output
+
+    prompt = (
+        "Sebelum menjawab, baca konteks environment/session ini "
+        "berdasarkan informasi yang tersedia di session.\n"
+        "Jangan mengarang fakta yang tidak ada di context.\n"
+        "Jawab hanya:\n- Ringkasan:\n- Sumber:\n- Catatan:"
+    )
+    msg, finish = apply_fast_client_output(
+        prompt[:120],
+        last_user=prompt,
+        bash_tool="bash",
+    )
+    assert msg.get("content") in (None, "")
+    assert finish == "stop"
+
+
+def test_apply_fast_keeps_short_hi() -> None:
+    from app.providers.morph.transform import apply_fast_client_output
+
+    msg, finish = apply_fast_client_output(
+        "hi",
+        last_user="hi",
+        bash_tool="bash",
+    )
+    assert msg.get("content") == "hi"
+    assert finish == "stop"
+
+
+def test_apply_fast_ls_line_becomes_tool_call() -> None:
+    from app.providers.morph.transform import apply_fast_client_output
+
+    prompt = _run_prompt("ls -la")
+    msg, finish = apply_fast_client_output(
+        "ls -la",
+        last_user=prompt,
+        bash_tool="bash",
+    )
+    _assert_bash_cmd(msg, finish, "ls -la")
+
+
+def test_apply_fast_git_status_from_backticks() -> None:
+    from app.providers.morph.transform import apply_fast_client_output
+
+    prompt = "Cek status repo dengan `git status` lalu jelaskan."
+    msg, finish = apply_fast_client_output(
+        "git status",
+        last_user=prompt,
+        bash_tool="bash",
+    )
+    _assert_bash_cmd(msg, finish, "git status")
+
+
+def test_apply_fast_curl_from_script_wrap() -> None:
+    from app.providers.morph.transform import apply_fast_client_output
+
+    cmd = "curl -sS https://example.com/health"
+    prompt = _run_prompt(cmd)
+    script = (
+        "#!/bin/bash\n"
+        "# fetch health endpoint\n"
+        f"{cmd}\n"
+    )
+    msg, finish = apply_fast_client_output(
+        script,
+        last_user=prompt,
+        bash_tool="bash",
+    )
+    _assert_bash_cmd(msg, finish, cmd)
+
+
+def test_apply_fast_echo_with_one_command_becomes_tool_call() -> None:
+    from app.providers.morph.transform import apply_fast_client_output
+
+    prompt = _run_prompt("uname -a")
+    msg, finish = apply_fast_client_output(
+        prompt,
+        last_user=prompt,
+        bash_tool="bash",
+    )
+    _assert_bash_cmd(msg, finish, "uname -a")
+
+
+def test_apply_fast_dollar_prompt() -> None:
+    from app.providers.morph.transform import apply_fast_client_output
+
+    prompt = "Lihat proses dengan:\n$ ps aux | head\n"
+    msg, finish = apply_fast_client_output(
+        "ps aux | head",
+        last_user=prompt,
+        bash_tool="bash",
+    )
+    _assert_bash_cmd(msg, finish, "ps aux | head")
+
+
+def test_apply_fast_keeps_normal_reply() -> None:
+    from app.providers.morph.transform import apply_fast_client_output
+
+    msg, finish = apply_fast_client_output(
+        "17 dikali 3 adalah 51.",
+        last_user="Berapa 17 dikali 3?",
+        bash_tool="bash",
+    )
+    assert msg.get("content") == "17 dikali 3 adalah 51."
+    assert not msg.get("tool_calls")
+    assert finish == "stop"

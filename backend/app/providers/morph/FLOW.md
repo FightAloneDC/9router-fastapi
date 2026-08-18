@@ -1,7 +1,8 @@
 # Morph Provider Flow
 
 Written from `backend/app/providers/morph/` and official Morph docs
-(retrieved 2026-08-18).
+(retrieved 2026-08-18). Case-closed notes (Pi agent fit) updated
+2026-08-18 from live A/B + operator tests.
 
 `MorphConfig.BASE_URL` is `https://api.morphllm.com/v1` — it already
 ends in `/v1`, so URL building must never append a second copy
@@ -11,6 +12,53 @@ ends in `/v1`, so URL building must never append a second copy
 `provider_models` (SQL). The only published numeric cap is the free
 tier's **200 requests per month**; `quota.py` tracks that as a
 local monthly bar (no upstream usage API, no rate-limit headers).
+
+## Product classes (suitability)
+
+One Morph key covers several product lines. They are **not**
+interchangeable.
+
+| Class | Example ids | Role | Pi / agent? |
+|-------|-------------|------|-------------|
+| **Apply** | `morph-v3-fast`, `morph-v3-large`, `auto` | Code merge | **No** |
+| **Fast Models** | `morph-kimik3`, `morph-qwen*`, `deepseek/deepseek-v4-flash-0731` | Chat + OpenAI `tools` | **Yes** |
+| **Warp Grep** | `morph-warp-grep-*` | Built-in grep tools | Grep only |
+
+### Apply (`morph-v3-fast` / `morph-v3-large` / `auto`)
+
+Official marketing (OpenRouter / Morph models pages, 2026-08-18):
+both are **apply** models for code edits. Same required prompt:
+
+```
+<instruction>{instruction}</instruction>
+<code>{initial_code}</code>
+<update>{edit_snippet}</update>
+```
+
+Output is the **merged file** in `message.content`. They are not
+chat LLMs and not tool agents. Fast ≈ higher throughput / ~96%
+apply accuracy; Large ≈ higher accuracy / ~98%. Do **not** use
+Apply ids as the Pi planner (AGENTS.md + bash + write_file).
+
+Live 2026-08-18 (identical chat prompt, Morph API):
+- `morph-v3-fast` no tools → exact echo of the user prompt
+- `morph-v3-large` no tools → invents Python/`subprocess` code
+- `tools` + `tool_choice=none`: fast → large garbage dump;
+  large → XML `<tool_call>` in content (not native OpenAI tools)
+
+**Case closed:** stop adapting Apply into a Pi agent. Use Fast
+Models for agents; use Apply only for merge clients that already
+send the XML above.
+
+### Fast Models (agent / chat)
+
+Keep client `tools` / `tool_choice` (real OpenAI `tool_calls`).
+Kimi K3 omits null `content` when a message carries tools.
+
+Pi **write file** verified 2026-08-18 (operator):
+
+- `mo/morph-kimik3`
+- `mo/deepseek/deepseek-v4-flash-0731`
 
 ## Sources
 
@@ -100,32 +148,34 @@ Client POST /v1/chat/completions  model="mo/<id>"
   → MorphHandler.prepare_request → sanitize_morph_chat_body
        flatten list/dict content → string (JS charCodeAt contract)
        drop Pi `store`
-       Apply (morph-v3-fast|large|auto):
-         A) Client sends tools[] (Pi agent):
-            keep multi-turn messages (no merge XML wrap);
-            keep tools; force tool_choice="none"
-            (live 2026-08-18: auto/omit/required → HTTP 400
-            "enable-auto-tool-choice" / tool-call-parser;
-            tools+none → 200 with XML in content:
-            <tool_call>{"name":…,"arguments":…}</tool_call>)
-         B) No tools (merge/chat):
-            one user message with
-            <instruction>…</instruction>
-            <code>…</code>
-            <update>…</update>
-            allowlist model/messages/stream/max_tokens/temperature;
-            map max_completion_tokens → max_tokens; default
-            temperature 0 if omitted; strip tools.
-            Client already has <code>+<update>: collapse to one user.
-            Client chat without Apply XML: wrap — system + prior
-            turns + latest user in <instruction>, empty <code>,
-            <update>(no file edit; reply as chat)</update>
-            (live: user in <update> echoes; history in <code>
-            dumps transcript into the answer).
+       Apply (morph-v3-fast|large|auto) — merge only, not agents:
+         Official input is always one user message with
+         <instruction>/<code>/<update> (S3 + marketing pages).
+         Allowlist model/messages/stream/max_tokens/temperature;
+         map max_completion_tokens → max_tokens; default
+         temperature 0 if omitted.
+         morph-v3-fast (proxy path, live 2026-08-18):
+           Pi system/developer becomes the "merged file" if
+           forwarded. Non-XML chat: wrap last user only into
+           Apply XML with one space in <code>/<update>; strip
+           tools; drop system. Real last-user Apply XML
+           passthrough. Response rewrites (echo drop / optional
+           shell→tool_calls) are legacy mitigations — do not
+           treat fast as an agent product.
+         morph-v3-large / auto:
+           A) Client tools[]: keep turns; tools; tool_choice=none
+              (auto/omit/required → HTTP 400 without Morph's
+              tool-call-parser; tools+none → XML <tool_call> in
+              content). Workaround only — still not a Fast Model.
+           B) No tools: collapse to Apply XML. Client already has
+              <code>+<update>: one user. Chat without XML: wrap
+              (system+history+user in <instruction>; chat marker
+              in <update>). User text in <update> echoes.
        Warp Grep (morph-warp-grep-*): drop client tools array only;
          keep assistant tool_calls + tool results (multi-turn)
        Fast Models: keep tools for auto/omit/required/none
-         (live: OpenAI tool_calls in response). Do NOT strip on auto.
+         (live: OpenAI tool_calls). Do NOT strip on auto.
+         Preferred for Pi agents (kimik3 / dsv4flash verified).
        Kimi K3: omit content when message carries tools (S1)
   → Bearer data.apiKey
   → POST {BASE_URL}/chat/completions
@@ -142,15 +192,17 @@ Client POST /v1/chat/completions  model="mo/<id>"
 Official product rules for tools (S1 + live A/B 2026-08-18):
 
 - **Fast Models** — support `tools`, `response_format`, structured
-  outputs; return OpenAI `tool_calls`.
+  outputs; return OpenAI `tool_calls`. Use these for Pi / agents
+  (`morph-kimik3`, `deepseek/deepseek-v4-flash-0731`, …).
 - **Kimi K3** (`morph-kimik3`, `morph-kimik3-fast`) — dynamic tool
   loading via a `system` message with `tools` and **no** `content`
   key (`content: null` → HTTP 400). `tool_choice` may be `required`.
-- **Apply** — S3 documents merge XML fields. Live also accepts
-  OpenAI `tools` when `tool_choice` is `"none"`; the model emits
-  tool intents as XML in `message.content`. This proxy converts
-  that XML to OpenAI `tool_calls` for Pi. Catalog `tools:true` is
-  incomplete for Apply — do not treat catalog alone as the contract.
+- **Apply** — merge XML only (S3 + OpenRouter Morph pages). Same
+  format for fast and large. Live may accept `tools` with
+  `tool_choice="none"` and emit XML `<tool_call>` in content; the
+  proxy can convert that to OpenAI `tool_calls`, but Apply is still
+  **not** an agent product. Catalog `tools:true` is incomplete —
+  do not treat catalog alone as the contract.
 - **Warp Grep** — built-in tools; do **not** pass a client `tools`
   array; multi-turn still uses `tool_calls` / `tool` messages.
 
@@ -226,6 +278,9 @@ cataloging them.
   `POST /v1/responses`, Anthropic-format `POST /v1/messages` (S1).
 - Kimi K3 dynamic tool loading (S1): handler keeps message-level
   `tools` and omits null `content`. Do not strip Fast Model tools.
+- Apply ids are merge-only (case closed 2026-08-18): do not use
+  `morph-v3-fast` / `morph-v3-large` / `auto` as Pi agents; prefer
+  Fast Models (`morph-kimik3`, `deepseek/deepseek-v4-flash-0731`).
 - No usage/credits/balance API exists publicly (S9) — dashboard
   credits polling is undocumented and not built.
 - Native non-chat paths (`/v1/compact`, `/v1/reflex/predict`,

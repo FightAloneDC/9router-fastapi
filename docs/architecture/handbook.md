@@ -112,6 +112,21 @@ Frontend: derived from catalog.
 | Web Cookie | Browser cookie | grok-web, perplexity-web |
 | Custom | Custom endpoint | OpenAI/Anthropic-compatible nodes |
 
+### Morph (`mo/`) product classes
+
+One Morph API key serves several product lines. Details:
+[Morph FLOW.md](../../backend/app/providers/morph/FLOW.md).
+
+- **Apply** (`morph-v3-fast`, `morph-v3-large`, `auto`): code
+  merge XML only — **not** Pi agents.
+- **Fast Models** (`morph-kimik3`, `morph-qwen*`,
+  `deepseek/deepseek-v4-flash-0731`): chat + OpenAI tools (agents).
+- **Warp Grep** (`morph-warp-grep-*`): built-in grep tools.
+
+Pi write-file verified 2026-08-18: `mo/morph-kimik3`,
+`mo/deepseek/deepseek-v4-flash-0731`. Do not use Apply ids as the
+agent planner.
+
 ### Other
 
 - Sensitive fields (`apiKey`, `accessToken`, `refreshToken`,
@@ -209,4 +224,5 @@ cd backend && .venv/bin/pytest tests/ -v
 - [Architecture overview](overview.md)
 - [Catalog table slice](2026-08-15-openrouter-catalog-slice.md)
 - [Provider optimization SOP](provider-optimization-sop.md)
+- [Morph provider FLOW](../../backend/app/providers/morph/FLOW.md)
 - [Docs index](../README.md)

@@ -13,7 +13,12 @@ from app.providers.base import BaseProviderConfig, BaseProviderHandler
 # from app.providers.morph.debug_io import save_provider_response
 from app.providers.morph.transform import (
     MorphSseToolState,
+    apply_fast_completion,
+    client_bash_tool_name,
     flatten_content,
+    last_user_text,
+    model_tail,
+    normalize_message,
     normalize_morph_completion,
     normalize_morph_sse_line,
     sanitize_morph_chat_body,
@@ -47,15 +52,29 @@ class MorphHandler(BaseProviderHandler):
     ) -> tuple[dict[str, str], dict]:
         del stream
         self._sse_tool_state = MorphSseToolState()
-        # self._sse_raw = []
+        messages = body.get("messages")
+        if isinstance(messages, list):
+            cleaned = [normalize_message(m) for m in messages]
+            self._sse_tool_state.last_user = last_user_text(cleaned)
+        self._sse_tool_state.bash_tool = client_bash_tool_name(body)
+        self._sse_tool_state.apply_fast = (
+            model_tail(body.get("model")) == "morph-v3-fast"
+        )
         return {**headers}, sanitize_morph_chat_body(body)
 
     def unwrap_response(self, response_text: str) -> dict:
         """Parse JSON; convert Apply <tool_call> XML → tool_calls."""
         # save_provider_response(response_text)
         data = json.loads(response_text)
-        if isinstance(data, dict):
-            return normalize_morph_completion(data)
+        if not isinstance(data, dict):
+            return data
+        data = normalize_morph_completion(data)
+        if self._sse_tool_state.apply_fast:
+            data = apply_fast_completion(
+                data,
+                last_user=self._sse_tool_state.last_user,
+                bash_tool=self._sse_tool_state.bash_tool,
+            )
         return data
 
     def transform_openai_sse_line(self, line: str) -> str | None:

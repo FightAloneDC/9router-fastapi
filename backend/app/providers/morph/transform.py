@@ -43,8 +43,14 @@ _DROP_ALWAYS = (
 
 # Live 2026-08-18: chat wrap must NOT put user text in <update>
 # (echo) and must NOT use the docs unchanged-code marker alone with
-# empty <code> (Morph returns the marker). Working chat update body:
+# empty <code> (Morph returns the marker). Working chat update body
+# for morph-v3-large / auto:
 _APPLY_CHAT_UPDATE = "(no file edit; reply as chat)"
+
+# morph-v3-fast live 2026-08-18: empty code/update → blank; the
+# large chat marker is echoed; one space in both slots + last user
+# in <instruction> returns a reply without dumping system text.
+_APPLY_FAST_SLOT = " "
 
 _REPLY_TAG_RE = re.compile(
     r"<reply>(.*?)</reply>",
@@ -119,6 +125,25 @@ def joined_message_text(messages: list) -> str:
 def looks_like_apply_payload(messages: list) -> bool:
     """Official Apply XML: <code>…</code> and <update>…</update>."""
     blob = joined_message_text(messages).lower()
+    return "<code>" in blob and "<update>" in blob
+
+
+def last_user_text(messages: list) -> str:
+    last = ""
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        if str(msg.get("role") or "").strip().lower() != "user":
+            continue
+        text = msg.get("content")
+        if isinstance(text, str) and text.strip():
+            last = text.strip()
+    return last
+
+
+def looks_like_apply_last_user(messages: list) -> bool:
+    """Apply XML on the last user turn only (ignore Pi system)."""
+    blob = last_user_text(messages).lower()
     return "<code>" in blob and "<update>" in blob
 
 
@@ -280,6 +305,28 @@ def wrap_chat_as_apply_xml(messages: list) -> list[dict]:
     return [{"role": "user", "content": content}]
 
 
+def wrap_chat_as_apply_fast(messages: list) -> list[dict]:
+    """morph-v3-fast chat wrap: last user only, space code/update.
+
+    Live 2026-08-18: this model emits system/developer text (Pi
+    AGENTS.md) as the merged file. Do not put those turns in XML.
+    """
+    last_user = last_user_text(messages)
+    if last_user:
+        instruction = (
+            "Reply conversationally to the user message: "
+            f"{last_user}"
+        )
+    else:
+        instruction = "Reply conversationally to the user."
+    content = format_apply_xml(
+        instruction,
+        _APPLY_FAST_SLOT,
+        _APPLY_FAST_SLOT,
+    )
+    return [{"role": "user", "content": content}]
+
+
 def build_apply_messages(messages: list) -> list[dict]:
     """Always forward Apply as docs XML in one user message."""
     if looks_like_apply_payload(messages):
@@ -413,6 +460,252 @@ def normalize_morph_completion(data: dict) -> dict:
     return out
 
 
+_BASH_TOOL_NAMES = frozenset({
+    "bash",
+    "shell",
+    "run",
+    "run_command",
+})
+
+
+def client_bash_tool_name(body: dict) -> str | None:
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        return None
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function")
+        if not isinstance(fn, dict):
+            fn = tool
+        name = fn.get("name")
+        if isinstance(name, str) and name.lower() in _BASH_TOOL_NAMES:
+            return name
+    return None
+
+
+_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
+_FENCE_RE = re.compile(
+    r"```(?:ba)?sh\s*(.*?)```",
+    re.IGNORECASE | re.DOTALL,
+)
+_DOLLAR_RE = re.compile(r"^\$\s+(\S.*)$", re.MULTILINE)
+_IDENT_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._+-]*$")
+_SHELL_HINT_RE = re.compile(r"[|><;&`$()/\\]|\s-[A-Za-z0-9]")
+_GREETINGS = frozenset({
+    "hi", "hey", "hello", "halo", "hai", "ok", "yes", "no",
+})
+_PROSE_FIRST = frozenset({
+    "sekarang", "sebelum", "jangan", "jika", "jawab",
+    "dalam", "apakah", "bandingkan", "jelaskan",
+    "tentukan", "jalankan", "please", "now", "then",
+    "this", "that", "when", "what", "how", "why",
+    "anda", "kamu", "saya", "untuk", "pada", "dari",
+    "dengan", "lalu",
+})
+
+
+def _looks_like_command(text: str) -> bool:
+    """True for a shell snippet, not a chat sentence."""
+    raw = text.strip()
+    if not raw or len(raw) > 4000:
+        return False
+    if raw.startswith(("#", "-", "*")):
+        return False
+    if raw.endswith(("?", ".", ":")):
+        return False
+    first = raw.split()[0]
+    lowered = first.lower()
+    if raw.lower() in _GREETINGS or lowered in _GREETINGS:
+        return False
+    if lowered in _PROSE_FIRST:
+        return False
+    if first.startswith(("./", "/", "$", "~")):
+        return True
+    if not _IDENT_RE.match(first):
+        return False
+    words = raw.split()
+    if len(words) == 1:
+        return True
+    if _SHELL_HINT_RE.search(raw):
+        return True
+    second = words[1]
+    if second.startswith(("-", "/", ".", "~")):
+        return True
+    if _IDENT_RE.match(second) and len(words) <= 12:
+        return True
+    return False
+
+
+def _add_shell_candidate(found: list[str], seen: set[str], raw: str) -> None:
+    item = raw.strip().strip("`")
+    if item.startswith("$ "):
+        item = item[2:].strip()
+    if not _looks_like_command(item):
+        return
+    if item in seen:
+        return
+    seen.add(item)
+    found.append(item)
+
+
+def _user_shell_candidates(user: str) -> list[str]:
+    """Command snippets the user asked to run (any shell command)."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _FENCE_RE.finditer(user):
+        _add_shell_candidate(found, seen, match.group(1))
+    for match in _BACKTICK_RE.finditer(user):
+        _add_shell_candidate(found, seen, match.group(1))
+    for match in _DOLLAR_RE.finditer(user):
+        _add_shell_candidate(found, seen, match.group(1))
+    for line in user.splitlines():
+        _add_shell_candidate(found, seen, line)
+    return found
+
+
+def _morph_shell_payload(text: str) -> str | None:
+    """Strip merge-file wrappers; keep a runnable shell payload."""
+    raw = text.strip()
+    fence = _FENCE_RE.search(raw)
+    if fence:
+        raw = fence.group(1).strip()
+    raw = raw.strip("`")
+    if (
+        raw.startswith("(")
+        and raw.endswith(")")
+        and "\n" not in raw
+        and len(raw) > 2
+    ):
+        raw = raw[1:-1].strip()
+    lines = [
+        line.strip()
+        for line in raw.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    if not lines:
+        return None
+    if len(lines) == 1:
+        payload = lines[0]
+    else:
+        payload = "\n".join(lines)
+    head = payload.splitlines()[0]
+    if not _looks_like_command(head):
+        return None
+    return payload
+
+
+def _resolved_shell_command(text: str, user: str) -> str | None:
+    """Map Morph merge output to the shell command the user requested."""
+    wanted = _user_shell_candidates(user)
+    if not wanted:
+        return None
+    payload = _morph_shell_payload(text)
+    if payload:
+        head = payload.splitlines()[0].strip()
+        for item in wanted:
+            if payload == item or head == item:
+                return item
+            if item in payload.splitlines():
+                return item
+        if len(wanted) == 1:
+            return wanted[0]
+    if _is_long_prompt_echo(text, user) and len(wanted) == 1:
+        return wanted[0]
+    return None
+
+
+_ECHO_MIN = 80
+
+
+def _is_long_prompt_echo(text: str, user: str) -> bool:
+    """True when Morph copied a long user prompt (possibly truncated)."""
+    if not text or not user or len(user) < _ECHO_MIN:
+        return False
+    if text == user:
+        return True
+    if user.startswith(text) and len(text) >= _ECHO_MIN:
+        return True
+    head = user[:_ECHO_MIN]
+    if text.startswith(head) and len(text) >= _ECHO_MIN:
+        return True
+    return False
+
+
+def apply_fast_client_output(
+    content: object,
+    *,
+    last_user: str,
+    bash_tool: str | None,
+) -> tuple[dict, str]:
+    """morph-v3-fast merge output → chat or a shell tool_call.
+
+    Apply-fast emits merged file text. When the client sent a shell
+    tool, any requested command (own line, backticks, fence, $ cmd)
+    is converted to OpenAI tool_calls — not one hardcoded binary.
+    Long prompt echoes are dropped unless they contain exactly one
+    such command.
+    """
+    text = content.strip() if isinstance(content, str) else ""
+    user = (last_user or "").strip()
+    cmd = (
+        _resolved_shell_command(text, user)
+        if bash_tool
+        else None
+    )
+    if cmd and bash_tool:
+        args = json.dumps({"command": cmd}, ensure_ascii=False)
+        return ({
+            "content": None,
+            "tool_calls": [{
+                "id": "call-morph-0",
+                "type": "function",
+                "function": {
+                    "name": bash_tool,
+                    "arguments": args,
+                },
+            }],
+        }, "tool_calls")
+    if _is_long_prompt_echo(text, user):
+        return {"content": None}, "stop"
+    return (
+        {"content": content if isinstance(content, str) else text},
+        "stop",
+    )
+
+
+def apply_fast_completion(
+    data: dict,
+    *,
+    last_user: str,
+    bash_tool: str | None,
+) -> dict:
+    out = dict(data)
+    choices = out.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return out
+    ch0 = choices[0]
+    if not isinstance(ch0, dict):
+        return out
+    msg = ch0.get("message")
+    if not isinstance(msg, dict):
+        return out
+    rewritten, finish = apply_fast_client_output(
+        msg.get("content"),
+        last_user=last_user,
+        bash_tool=bash_tool,
+    )
+    new_msg = dict(msg)
+    new_msg["content"] = rewritten.get("content")
+    if rewritten.get("tool_calls"):
+        new_msg["tool_calls"] = rewritten["tool_calls"]
+    ch = dict(ch0)
+    ch["message"] = new_msg
+    ch["finish_reason"] = finish
+    out["choices"] = [ch, *choices[1:]]
+    return out
+
+
 class MorphSseToolState:
     """Buffer streamed Apply <tool_call> XML across SSE deltas."""
 
@@ -420,6 +713,10 @@ class MorphSseToolState:
         self.buf: str = ""
         self.buffering: bool = False
         self.emitted: bool = False
+        self.apply_fast: bool = False
+        self.last_user: str = ""
+        self.bash_tool: str | None = None
+        self.content_buf: str = ""
 
 
 def normalize_morph_sse_line(
@@ -471,6 +768,46 @@ def normalize_morph_sse_line(
         delta = {}
     piece = delta.get("content")
     finish = choice0.get("finish_reason")
+
+    if state.apply_fast:
+        if isinstance(piece, str) and piece:
+            state.content_buf += piece
+            if not finish:
+                return None
+        if not finish:
+            return line
+        rewritten, new_finish = apply_fast_client_output(
+            state.content_buf,
+            last_user=state.last_user,
+            bash_tool=state.bash_tool,
+        )
+        state.content_buf = ""
+        out = dict(data)
+        ch = dict(choice0)
+        if rewritten.get("tool_calls"):
+            state.emitted = True
+            ch["delta"] = {
+                "role": delta.get("role") or "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "index": i,
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": tc["function"],
+                    }
+                    for i, tc in enumerate(rewritten["tool_calls"])
+                ],
+            }
+            ch["finish_reason"] = "tool_calls"
+        else:
+            ch["delta"] = {
+                "role": delta.get("role") or "assistant",
+                "content": rewritten.get("content") or "",
+            }
+            ch["finish_reason"] = new_finish
+        out["choices"] = [ch]
+        return f"data: {json.dumps(out, ensure_ascii=False)}"
 
     if isinstance(piece, str) and piece:
         if not state.buffering:
@@ -592,6 +929,17 @@ def sanitize_morph_chat_body(body: dict) -> dict:
     out = drop_pi_extras({**body, "messages": cleaned})
 
     if apply:
+        if model_tail(model) == "morph-v3-fast":
+            if looks_like_apply_last_user(cleaned):
+                msgs = [{
+                    "role": "user",
+                    "content": last_user_text(cleaned),
+                }]
+            else:
+                msgs = wrap_chat_as_apply_fast(cleaned)
+            return finalize_apply_body(
+                strip_client_tools({**out, "messages": msgs}),
+            )
         if client_has_tools(out):
             # Agent tool turn — do not wrap as merge XML; keep tools.
             return prepare_apply_tools_body(out)

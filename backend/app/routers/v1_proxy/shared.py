@@ -1103,6 +1103,7 @@ async def _non_stream_response(
     Returns (JSONResponse, raw_data_dict) so callers can extract usage info.
     """
     # Call provider's prepare_request hook (e.g. mimo-free JWT bootstrap)
+    handler = None
     try:
         from app.providers.provider import Provider
         p = Provider(target.provider)
@@ -1111,7 +1112,7 @@ async def _non_stream_response(
             target.headers, body, stream=False,
         )
     except (ValueError, ModuleNotFoundError):
-        pass
+        handler = None
 
     send_kwargs: dict = {"headers": target.headers}
     if raw_body is not None:
@@ -1128,11 +1129,12 @@ async def _non_stream_response(
             )
         resp.raise_for_status()
 
-        # Unwrap provider-specific response envelope
+        # Unwrap on the same handler that prepared the request so
+        # per-request state (e.g. Morph apply-fast last_user) survives.
         try:
-            from app.providers.provider import Provider
-            p = Provider(target.provider)
-            handler = p.handler()
+            if handler is None:
+                from app.providers.provider import Provider
+                handler = Provider(target.provider).handler()
             data = handler.unwrap_response(resp.text)
         except Exception:
             # Fallback: standard JSON parse
