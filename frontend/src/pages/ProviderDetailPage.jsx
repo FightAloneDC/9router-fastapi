@@ -196,7 +196,18 @@ const ACCOUNT_TYPE_OPTIONS = [
 function RateLimitsNote({ limits }) {
   const entries = Object.entries(limits || {})
   if (!entries.length) return null
-  const metrics = ['rpm', 'rpd', 'tpm', 'tpd']
+  const extra = new Set()
+  for (const [, caps] of entries) {
+    if (!caps || typeof caps !== 'object') continue
+    for (const key of Object.keys(caps)) {
+      extra.add(key)
+    }
+  }
+  const metrics = ['rpm', 'rpd', 'tpm', 'tpd'].concat(
+    [...extra].filter(
+      (k) => !['rpm', 'rpd', 'tpm', 'tpd'].includes(k),
+    ).sort(),
+  )
   return (
     <div className="mt-2 max-h-40 overflow-auto rounded border border-zinc-800">
       <table className="w-full text-left text-[10px] text-zinc-400">

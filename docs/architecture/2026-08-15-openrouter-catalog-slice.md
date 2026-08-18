@@ -1,6 +1,6 @@
 # Provider model catalog (SQL table)
 
-Date: 2026-08-15 (updated 2026-08-16)
+Date: 2026-08-15 (updated 2026-08-18)
 
 **Policy now:** the model catalog is a database table
 (`provider_models`). Storing the list in each connection JSON blob
@@ -14,8 +14,8 @@ or implement blob catalogs as the happy path.
 Set `MODEL_CATALOG_TABLE = True` on the provider config. Helper:
 `uses_model_catalog_table(provider_id)` via `Provider(id).config()`.
 
-On as of 2026-08-17: **openrouter**, **groq**, **nvidia**,
-**cerebras**, **mistral**, **alims-intl**, **cohere**.
+On as of 2026-08-18: **openrouter**, **groq**, **nvidia**,
+**cerebras**, **mistral**, **alims-intl**, **cohere**, **morph**.
 
 Everyone else still reading `data.models` is migration debt. Next
 ordinary OpenAI-compat provider gets the flag on day one.

@@ -32,6 +32,10 @@ def test_alims_intl_uses_catalog_table() -> None:
     assert uses_model_catalog_table("alims-intl") is True
 
 
+def test_morph_uses_catalog_table() -> None:
+    assert uses_model_catalog_table("morph") is True
+
+
 def test_grok_cli_stays_on_blobs() -> None:
     assert uses_model_catalog_table("grok-cli") is False
 

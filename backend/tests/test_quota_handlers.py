@@ -4,6 +4,7 @@ Validates that each provider handler correctly parses
 API responses into standardized UsageResponse format.
 """
 
+import asyncio
 import json
 import pytest
 from datetime import datetime, timedelta, timezone
@@ -79,6 +80,12 @@ from app.providers.grok_cli.quota import (
     _plan_from_access_token,
     classify_health,
 )
+from app.providers.morph.config import MorphConfig
+from app.providers.morph.quota import (
+    MorphUsageHandler,
+    count_requests_since as morph_count_requests_since,
+    monthly_bar as morph_monthly_bar,
+)
 
 
 # ──────────────────────────────────────────────
@@ -101,6 +108,7 @@ def test_supported_providers():
     assert "mistral" in providers
     assert "alims-intl" in providers
     assert "cohere" in providers
+    assert "morph" in providers
 
 
 def test_get_handler_known():
@@ -1342,3 +1350,119 @@ def test_cohere_quotas_from_headers() -> None:
     assert rows[0]["used"] == 3
     assert rows[0]["total"] == 20
     assert "command-a-reasoning-08-2025" in rows[0]["name"]
+
+
+# ──────────────────────────────────────────────
+# Morph
+# ──────────────────────────────────────────────
+
+
+def test_morph_handler_registered() -> None:
+    handler = get_usage_handler("morph")
+    assert handler is not None
+    assert isinstance(handler, MorphUsageHandler)
+
+
+def test_morph_config_limits_no_invented_rows() -> None:
+    limits = MorphConfig().RATE_LIMITS
+    assert limits["free"] == {"calls": 200}
+    assert limits["payg"] == {}
+    assert limits["subscribe"] == {}
+    assert set(limits) == {"free", "payg", "subscribe"}
+    assert "rpm" not in limits["free"]
+    assert "rpd" not in limits["free"]
+    assert "tpm" not in limits["free"]
+    assert "tpd" not in limits["free"]
+
+
+def test_morph_monthly_bar_local_used() -> None:
+    bar = morph_monthly_bar(
+        37, reset_at="2026-09-01T00:00:00+00:00",
+    )
+    assert bar["name"] == "Morph monthly free requests"
+    assert bar["used"] == 37
+    assert bar["total"] == 200
+    assert bar["remaining"] == 163
+    assert bar["unlimited"] is False
+
+
+def test_morph_monthly_bar_cap_reached() -> None:
+    bar = morph_monthly_bar(200, reset_at=None)
+    assert bar["used"] == 200
+    assert bar["remaining"] == 0
+    assert bar["remaining_percentage"] == 0.0
+
+
+def test_morph_fetch_free_local_used() -> None:
+    handler = MorphUsageHandler()
+    with patch(
+        "app.providers.morph.quota.count_requests_since",
+        new_callable=AsyncMock,
+        return_value=41,
+    ):
+        result = asyncio.run(handler.fetch(
+            "tok", {"accountType": "free"}, "conn-1",
+        ))
+    assert result.plan == "free"
+    assert len(result.quotas) == 1
+    quota = result.quotas[0]
+    assert quota.name == "Morph monthly free requests"
+    assert quota.used == 41
+    assert quota.total == 200
+    assert quota.reset_at is not None
+    assert result.limit_reached is False
+    assert result.message is not None
+    assert "200 requests per month" in result.message
+
+
+def test_morph_fetch_free_cap_reached() -> None:
+    handler = MorphUsageHandler()
+    with patch(
+        "app.providers.morph.quota.count_requests_since",
+        new_callable=AsyncMock,
+        return_value=200,
+    ):
+        result = asyncio.run(handler.fetch(
+            "tok", {"accountType": "free"}, "conn-1",
+        ))
+    assert result.limit_reached is True
+    assert result.quotas[0].remaining == 0
+
+
+def test_morph_payg_no_bar() -> None:
+    handler = MorphUsageHandler()
+    result = asyncio.run(handler.fetch(
+        "tok", {"accountType": "payg"}, "conn-1",
+    ))
+    assert result.quotas == []
+    assert result.limit_reached is False
+    assert result.message is not None
+    assert "no numeric" in result.message
+
+
+def test_morph_subscribe_no_bar() -> None:
+    handler = MorphUsageHandler()
+    result = asyncio.run(handler.fetch(
+        "tok", {"accountType": "subscribe"}, "conn-1",
+    ))
+    assert result.plan == "subscribe"
+    assert result.quotas == []
+
+
+def test_morph_count_requests_since_local_db() -> None:
+    fake_db = MagicMock()
+    fake_result = MagicMock()
+    fake_result.scalar.return_value = 12
+    fake_db.execute = AsyncMock(return_value=fake_result)
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=fake_db)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+    with patch(
+        "app.database.async_session",
+        return_value=session_cm,
+    ):
+        used = asyncio.run(morph_count_requests_since(
+            datetime(2026, 8, 1, tzinfo=timezone.utc),
+            "abc-123",
+        ))
+    assert used == 12
