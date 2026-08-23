@@ -6,7 +6,7 @@
 2. One terminal — backend + Vite on the host (hot reload, no Docker):
 
 ```bash
-./scripts/dev-local.sh
+./scripts/start-local.sh
 ```
 
 - UI: http://localhost:5173 (proxies `/api` and `/v1` to the backend)
