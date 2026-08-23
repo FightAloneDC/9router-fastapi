@@ -12,8 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.settings import SettingsModel
+from app.models.user import User
 from app.routers.auth import get_current_user
 from app.schemas.settings import DatabaseImportRequest, SettingsOut, SettingsUpdate
+from app.services.auth import get_any_user, hash_password, verify_password
 
 BACKUP_DIR = Path("backups")
 
@@ -115,12 +117,18 @@ def _build_safe_settings(raw: dict) -> dict:
     merged["oidcConfigured"] = bool(
         merged.get("oidcIssuerUrl") and merged.get("oidcClientId") and raw.get("oidcClientSecret")
     )
-    merged["hasPassword"] = bool(raw.get("password"))
     # Runtime flags (env-based, not stored)
     import os
     merged["enableRequestLogs"] = os.environ.get("ENABLE_REQUEST_LOGS", "false").lower() == "true"
     merged["enableTranslator"] = os.environ.get("ENABLE_TRANSLATOR", "false").lower() == "true"
     return merged
+
+
+async def _settings_response(db: AsyncSession, raw: dict) -> SettingsOut:
+    """Build settings response with auth flags from users table."""
+    safe = _build_safe_settings(raw)
+    safe["hasPassword"] = await get_any_user(db) is not None
+    return SettingsOut(**safe)
 
 
 @router.get("", response_model=SettingsOut)
@@ -131,14 +139,14 @@ async def get_settings(
     """Return current application settings (secrets excluded)."""
     row = await _get_or_create_settings(db)
     data = json.loads(row.data)
-    return SettingsOut(**_build_safe_settings(data))
+    return await _settings_response(db, data)
 
 
 @router.patch("", response_model=SettingsOut)
 async def update_settings(
     body: SettingsUpdate,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Update application settings (partial merge)."""
     row = await _get_or_create_settings(db)
@@ -146,23 +154,22 @@ async def update_settings(
 
     update_data = body.model_dump(exclude_unset=True)
 
-    # Handle password change specially
+    # Handle password change — login uses users.hashed_password, not settings JSON
     new_password = update_data.pop("newPassword", None)
     current_password = update_data.pop("currentPassword", None)
     if new_password is not None:
-        import bcrypt
-        existing_hash = current.get("password", "")
-        if existing_hash:
-            # Verify current password
-            if not current_password:
-                raise HTTPException(status_code=400, detail="Current password required")
-            if not bcrypt.checkpw(current_password.encode(), existing_hash.encode()):
-                raise HTTPException(status_code=401, detail="Invalid current password")
-        else:
-            # First time — accept default "123456" or empty
-            if current_password and current_password != "123456":
-                raise HTTPException(status_code=401, detail="Invalid current password")
-        current["password"] = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        if not current_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current password required",
+            )
+        if not verify_password(current_password, current_user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid current password",
+            )
+        current_user.hashed_password = hash_password(new_password)
+        current.pop("password", None)
 
     # Strip empty oidcClientSecret (don't overwrite with blank)
     if "oidcClientSecret" in update_data:
@@ -174,7 +181,7 @@ async def update_settings(
     await db.flush()
     await db.refresh(row)
 
-    return SettingsOut(**_build_safe_settings(json.loads(row.data)))
+    return await _settings_response(db, json.loads(row.data))
 
 
 # --- Public endpoint: require-login check (no auth required) ---
