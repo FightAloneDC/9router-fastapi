@@ -117,5 +117,8 @@ class DatabaseExport(BaseModel):
 
 class DatabaseImportRequest(BaseModel):
     """Database import request."""
+
     password: Optional[str] = None
     tables: Dict[str, Any]
+    import_mode: Optional[str] = None
+    filters: Optional[Dict[str, Any]] = None

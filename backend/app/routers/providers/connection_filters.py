@@ -140,3 +140,79 @@ def build_connection_filter_clause(
         clauses.append(_cooldown_clause(filters.in_cooldown))
 
     return and_(*clauses)
+
+
+def build_export_filter_clause(
+    filters: ConnectionListFilters,
+    providers: list[str] | None = None,
+) -> ColumnElement[bool]:
+    """Filter connections for export across zero or more providers."""
+    clauses: list[ColumnElement[bool]] = []
+    if providers:
+        clauses.append(ProviderConnection.provider.in_(providers))
+
+    data = _data_jsonb()
+
+    q = (filters.q or "").strip()
+    if q:
+        escaped_q = q.replace("\\", "\\\\")
+        escaped_q = escaped_q.replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped_q}%"
+        display = data["displayName"].as_string()
+        clauses.append(
+            or_(
+                ProviderConnection.name.ilike(pattern, escape="\\"),
+                ProviderConnection.email.ilike(pattern, escape="\\"),
+                display.ilike(pattern, escape="\\"),
+            )
+        )
+
+    if filters.is_active is not None:
+        clauses.append(ProviderConnection.is_active.is_(filters.is_active))
+
+    if filters.auth_type:
+        clauses.append(ProviderConnection.auth_type == filters.auth_type)
+
+    if filters.test_status:
+        status = filters.test_status.strip().lower()
+        status_col = func.lower(data["testStatus"].as_string())
+        if status in CONNECTED_TEST_STATUSES:
+            clauses.append(status_col.in_(sorted(CONNECTED_TEST_STATUSES)))
+        else:
+            clauses.append(status_col == status)
+
+    if filters.proxy_pool_id is not None:
+        clauses.append(
+            ProviderConnection.proxy_pool_id == filters.proxy_pool_id
+        )
+    if filters.has_proxy is True:
+        clauses.append(ProviderConnection.proxy_pool_id.is_not(None))
+    elif filters.has_proxy is False:
+        clauses.append(ProviderConnection.proxy_pool_id.is_(None))
+
+    if filters.token_issue:
+        expires_raw = data["expiresAt"].as_string()
+        last_err = data["lastError"].as_string()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        expired = and_(
+            expires_raw.is_not(None),
+            expires_raw != "",
+            expires_raw < now_iso,
+        )
+        refresh_err = and_(
+            last_err.is_not(None),
+            last_err != "",
+        )
+        if filters.token_issue == "expired":
+            clauses.append(expired)
+        elif filters.token_issue == "refresh_error":
+            clauses.append(refresh_err)
+        else:
+            clauses.append(or_(expired, refresh_err))
+
+    if filters.in_cooldown is not None:
+        clauses.append(_cooldown_clause(filters.in_cooldown))
+
+    if not clauses:
+        return and_(True)
+    return and_(*clauses)

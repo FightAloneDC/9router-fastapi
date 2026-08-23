@@ -3,6 +3,7 @@ import { useAuthStore } from '../stores/authStore'
 
 const client = axios.create({
   baseURL: '/api',
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -25,6 +26,10 @@ function getDedupeKey(config) {
   return `${method}|${config.url || ''}|${params}`
 }
 
+function getDefaultAdapter(config) {
+  return axios.getAdapter(config.adapter || 'http')
+}
+
 client.interceptors.request.use(
   (config) => {
     const token = useAuthStore.getState().token
@@ -37,56 +42,31 @@ client.interceptors.request.use(
 
     const existing = inflightGets.get(key)
     if (existing) {
-      // Reuse the in-flight response instead of opening a second XHR.
-      config.adapter = () =>
-        existing.then((response) => ({
-          data: response.data,
-          status: response.status,
-          statusText: response.statusText,
-          headers: response.headers,
-          config,
-          request: response.request,
-        }))
+      config.adapter = () => existing
       return config
     }
 
-    let resolve
-    let reject
-    const deferred = new Promise((res, rej) => {
-      resolve = res
-      reject = rej
+    const defaultAdapter = getDefaultAdapter(config)
+    const tracked = defaultAdapter(config).finally(() => {
+      inflightGets.delete(key)
     })
-    inflightGets.set(key, deferred)
-    config.__dedupeKey = key
-    config.__dedupeResolve = resolve
-    config.__dedupeReject = reject
+    inflightGets.set(key, tracked)
+    config.adapter = () => tracked
     return config
   },
-  (error) => Promise.reject(error)
+  (error) => Promise.reject(error),
 )
 
-function settleDedupe(config, error, response) {
-  if (!config?.__dedupeResolve) return
-  const key = config.__dedupeKey
-  if (error) config.__dedupeReject(error)
-  else config.__dedupeResolve(response)
-  if (key) inflightGets.delete(key)
-}
-
-// Response interceptor - settle dedupe + handle 401
+// Response interceptor — handle 401
 client.interceptors.response.use(
-  (response) => {
-    settleDedupe(response.config, null, response)
-    return response
-  },
+  (response) => response,
   (error) => {
-    if (error.config) settleDedupe(error.config, error, null)
     if (error.response?.status === 401) {
       useAuthStore.getState().logout()
       window.location.href = '/login'
     }
     return Promise.reject(error)
-  }
+  },
 )
 
 export default client

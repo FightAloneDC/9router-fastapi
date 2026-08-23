@@ -2,7 +2,14 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import PlaceholderPage from './pages/PlaceholderPage'
-import SettingsPage from './pages/SettingsPage'
+import SettingsLayout from './pages/settings/SettingsLayout'
+import GeneralSettingsPage from './pages/settings/GeneralSettingsPage'
+import SecuritySettingsPage from './pages/settings/SecuritySettingsPage'
+import BackupSettingsPage from './pages/settings/BackupSettingsPage'
+import RoutingSettingsPage from './pages/settings/RoutingSettingsPage'
+import ObservabilitySettingsPage from './pages/settings/ObservabilitySettingsPage'
+import NetworkSettingsPage from './pages/settings/NetworkSettingsPage'
+import ExperimentalSettingsPage from './pages/settings/ExperimentalSettingsPage'
 import QuotaTrackerPage from './pages/QuotaTrackerPage'
 import UsagePage from './pages/UsagePage'
 import EndpointPage from './pages/EndpointPage'
@@ -61,7 +68,25 @@ function App() {
       <Route path="/chat" element={<ProtectedRoute><DashboardLayout><ChatPage /></DashboardLayout></ProtectedRoute>} />
 
       {/* Settings */}
-      <Route path="/settings" element={<ProtectedRoute><DashboardLayout><SettingsPage /></DashboardLayout></ProtectedRoute>} />
+      <Route
+        path="/settings"
+        element={
+          <ProtectedRoute>
+            <DashboardLayout>
+              <SettingsLayout />
+            </DashboardLayout>
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<Navigate to="general" replace />} />
+        <Route path="general" element={<GeneralSettingsPage />} />
+        <Route path="security" element={<SecuritySettingsPage />} />
+        <Route path="backup" element={<BackupSettingsPage />} />
+        <Route path="routing" element={<RoutingSettingsPage />} />
+        <Route path="observability" element={<ObservabilitySettingsPage />} />
+        <Route path="network" element={<NetworkSettingsPage />} />
+        <Route path="experimental" element={<ExperimentalSettingsPage />} />
+      </Route>
 
       {/* OAuth Callback */}
       <Route path="/callback" element={<CallbackPage />} />

@@ -21,6 +21,7 @@ import {
   Settings,
   MessageSquare,
 } from 'lucide-react'
+import { settingsNavItems } from './settingsNavigation'
 
 // Main navigation items
 export const navItems = [
@@ -63,12 +64,14 @@ export const debugItems = [
   { path: '/console-log', label: 'Console Log', icon: Monitor, description: 'View system logs and debug output' },
 ]
 
-// Settings (standalone bottom link)
+// Settings accordion (sidebar submenu)
 export const settingsItem = {
   path: '/settings',
   label: 'Settings',
   icon: Settings,
   description: 'Application configuration and preferences',
+  hasChildren: true,
+  children: settingsNavItems,
 }
 
 // Page title/description/icon mapping by route path
@@ -91,5 +94,15 @@ export const pageTitles = {
   '/proxy-pools': { title: 'Proxy Pools', description: 'Manage proxy pool configurations', icon: Network },
   '/skills': { title: 'Skills', description: 'Manage agent skills and capabilities', icon: Puzzle },
   '/console-log': { title: 'Console Log', description: 'View system logs and debug output', icon: Monitor },
-  '/settings': { title: 'Settings', description: 'Application configuration and preferences', icon: Settings },
+  '/settings': { title: 'Settings', description: 'Application configuration', icon: Settings },
+  ...Object.fromEntries(
+    settingsNavItems.map((item) => [
+      item.path,
+      {
+        title: item.label,
+        description: item.description,
+        icon: item.icon,
+      },
+    ]),
+  ),
 }

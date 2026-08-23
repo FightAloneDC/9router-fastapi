@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,20 @@ from app.models.user import User
 from app.routers.auth import get_current_user
 from app.schemas.settings import DatabaseImportRequest, SettingsOut, SettingsUpdate
 from app.services.auth import get_any_user, hash_password, verify_password
+from app.routers.providers.connection_filters import ConnectionListFilters
+from app.services.database_transfer import (
+    CONNECTIONS_TABLES,
+    IMPORT_MODE_MERGE,
+    IMPORT_MODE_REPLACE,
+    IMPORT_ORDER,
+    ConnectionExportOptions,
+    build_export_payload,
+    export_connections_filtered,
+    export_options_to_filters_dict,
+    export_tables,
+    import_connections_data,
+    import_tables,
+)
 
 BACKUP_DIR = Path("backups")
 
@@ -204,24 +218,25 @@ async def check_require_login(db: AsyncSession = Depends(get_db)):
 
 # --- Database export/import ---
 
-DB_TABLES: list[str] = [
-    "settings",
-    "users",
-    "provider_connections",
-    "provider_nodes",
-    "api_keys",
-    "combos",
-    "usage_daily",
-    "usage_history",
-    "request_details",
-    "chat_conversations",
-    "chat_messages",
-    "cli_tool_configs",
-    "proxy_pools",
-    "mitm_config",
-    "mitm_logs",
-    "kv",
-]
+
+async def _auto_backup_before_import(
+    db: AsyncSession,
+    prefix: str,
+) -> Path:
+    """Snapshot current DB tables before a destructive import."""
+    backup_data = await export_tables(db, IMPORT_ORDER)
+    backup_dir = BACKUP_DIR.resolve()
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    backup_path = backup_dir / f"{prefix}-{stamp}.json"
+    backup_path.write_text(
+        json.dumps(
+            build_export_payload(backup_data, scope="auto-backup"),
+            indent=2,
+            default=str,
+        )
+    )
+    return backup_path
 
 
 @router.get("/database")
@@ -229,16 +244,9 @@ async def export_database(
     db: AsyncSession = Depends(get_db),
     _user: object = Depends(get_current_user),
 ) -> dict[str, object]:
-    """Export all database tables as JSON."""
-    result: dict[str, list[dict[str, object]]] = {}
-    for table in DB_TABLES:
-        rows = (await db.execute(text(f"SELECT * FROM {table}"))).mappings().all()
-        result[table] = [dict(r) for r in rows]
-
-    return {
-        "exported_at": datetime.now(timezone.utc).isoformat(),
-        "tables": result,
-    }
+    """Export all application tables as JSON (FK-safe metadata)."""
+    tables = await export_tables(db, IMPORT_ORDER)
+    return build_export_payload(tables, scope="full")
 
 
 @router.post("/database")
@@ -247,44 +255,125 @@ async def import_database(
     db: AsyncSession = Depends(get_db),
     _user: object = Depends(get_current_user),
 ) -> dict[str, object]:
-    """Import database tables from JSON export.
+    """Import full database export. Restores rows verbatim, not bulk-add."""
+    backup_path = await _auto_backup_before_import(db, "auto-pre-import")
+    imported = await import_tables(
+        db,
+        body.tables,
+        IMPORT_ORDER,
+        _parse_datetimes,
+    )
+    await db.commit()
+    return {"success": True, "imported": imported, "backup": str(backup_path)}
 
-    Auto-backs up all tables before overwriting.
-    """
-    # Step 1: Auto-backup current data before any destructive operation
-    backup_data: dict[str, list[dict[str, object]]] = {}
-    for table in DB_TABLES:
-        rows = (await db.execute(text(f"SELECT * FROM {table}"))).mappings().all()
-        backup_data[table] = [dict(r) for r in rows]
 
-    backup_dir = BACKUP_DIR.resolve()
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    backup_path = backup_dir / f"auto-pre-import-{stamp}.json"
-    backup_path.write_text(
-        json.dumps({"exported_at": stamp, "tables": backup_data}, indent=2, default=str)
+@router.get("/database/connections")
+async def export_connections(
+    db: AsyncSession = Depends(get_db),
+    _user: object = Depends(get_current_user),
+    providers: str | None = Query(
+        None,
+        description="Comma-separated provider ids",
+    ),
+    is_active: bool | None = Query(None),
+    test_status: str | None = Query(None),
+    health: str | None = Query(
+        None,
+        description="healthy, rate_limited, cooldown, exhausted, dead",
+    ),
+    auth_type: str | None = Query(None),
+    has_proxy: bool | None = Query(None),
+    in_cooldown: bool | None = Query(None),
+    token_issue: str | None = Query(
+        None,
+        pattern="^(expired|refresh_error|any)$",
+    ),
+    q: str | None = Query(None),
+    include_catalog: bool = Query(True),
+    include_quota: bool = Query(True),
+) -> dict[str, object]:
+    """Export connections with optional filters (selective export)."""
+    provider_list: list[str] | None = None
+    if providers:
+        provider_list = [p.strip() for p in providers.split(",") if p.strip()]
+
+    filters = ConnectionListFilters(
+        q=q,
+        is_active=is_active,
+        test_status=test_status,
+        auth_type=auth_type,
+        has_proxy=has_proxy,
+        in_cooldown=in_cooldown,
+        token_issue=token_issue,  # type: ignore[arg-type]
+    )
+    options = ConnectionExportOptions(
+        providers=provider_list,
+        filters=filters,
+        health=health,
+        include_catalog=include_catalog,
+        include_quota=include_quota,
     )
 
-    # Step 2: Import with TRUNCATE
-    imported: dict[str, int] = {}
-    for table in DB_TABLES:
-        rows = body.tables.get(table, [])
-        if not rows:
-            continue
-        await db.execute(text(f"TRUNCATE TABLE {table} CASCADE"))
-        for row in _parse_datetimes(rows):
-            clean = {k: v for k, v in row.items() if v is not None}
-            if clean:
-                cols = ", ".join(clean.keys())
-                placeholders = ", ".join([f":{k}" for k in clean.keys()])
-                await db.execute(
-                    text(f"INSERT INTO {table} ({cols}) VALUES ({placeholders})"),
-                    clean,
-                )
-        imported[table] = len(rows)
+    try:
+        tables = await export_connections_filtered(db, options)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    scope = "connections-selective" if (
+        provider_list
+        or health
+        or is_active is not None
+        or test_status
+        or auth_type
+        or has_proxy is not None
+        or in_cooldown is not None
+        or token_issue
+        or (q and q.strip())
+    ) else "connections"
+
+    import_mode = IMPORT_MODE_MERGE if provider_list else IMPORT_MODE_REPLACE
+    filter_payload = export_options_to_filters_dict(options)
+
+    return build_export_payload(
+        tables,
+        scope=scope,
+        filters=filter_payload,
+        import_mode=import_mode,
+    )
+
+
+@router.post("/database/connections")
+async def import_connections(
+    body: DatabaseImportRequest,
+    db: AsyncSession = Depends(get_db),
+    _user: object = Depends(get_current_user),
+    import_mode: str | None = Query(
+        None,
+        description="replace_all or merge_providers",
+    ),
+) -> dict[str, object]:
+    """Import connections export without touching auth, settings, or usage."""
+    backup_path = await _auto_backup_before_import(db, "auto-pre-connections-import")
+    mode = import_mode or body.import_mode or IMPORT_MODE_REPLACE
+    if mode not in (IMPORT_MODE_REPLACE, IMPORT_MODE_MERGE):
+        raise HTTPException(
+            status_code=400,
+            detail="import_mode must be replace_all or merge_providers",
+        )
+    imported = await import_connections_data(
+        db,
+        body.tables,
+        _parse_datetimes,
+        import_mode=mode,
+        filters=body.filters,
+    )
     await db.commit()
-    return {"success": True, "imported": imported, "backup": backup_path}
+    return {
+        "success": True,
+        "imported": imported,
+        "import_mode": mode,
+        "backup": str(backup_path),
+    }
 
 
 # --- Proxy test ---

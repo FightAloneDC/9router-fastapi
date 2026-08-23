@@ -5,9 +5,8 @@ import {
   ChevronDown,
   ChevronRight,
   LogOut,
-  Power,
 } from 'lucide-react'
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 import { navItems, systemItems, debugItems, settingsItem } from '../../constants/navigation'
@@ -112,12 +111,86 @@ function MediaProvidersAccordion({ isOpen, onToggle, subItems, pathname, closeMo
 }
 
 /**
+ * Settings accordion with sub-items
+ */
+function SettingsAccordion({ isOpen, onToggle, subItems, pathname, closeMobile }) {
+  const Icon = settingsItem.icon
+  const isParentActive = pathname.startsWith('/settings')
+
+  return (
+    <div>
+      <button
+        onClick={onToggle}
+        className={twMerge(
+          clsx(
+            'w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-150',
+            isParentActive && !isOpen
+              ? 'bg-blue-600/20 text-blue-400'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50',
+          ),
+        )}
+      >
+        <Icon
+          size={16}
+          className={isParentActive ? 'text-blue-400' : 'text-zinc-500'}
+        />
+        <span className="flex-1 text-left">Settings</span>
+        {isOpen ? (
+          <ChevronDown size={14} className="text-zinc-500" />
+        ) : (
+          <ChevronRight size={14} className="text-zinc-500" />
+        )}
+      </button>
+
+      {isOpen && (
+        <div className="ml-3 pl-3 border-l border-zinc-800 mt-1 space-y-0.5">
+          {subItems.map((sub) => {
+            const SubIcon = sub.icon
+            const isSubActive = pathname === sub.path
+            return (
+              <Link
+                key={sub.path}
+                to={sub.path}
+                onClick={closeMobile}
+                className={twMerge(
+                  clsx(
+                    'flex items-center gap-3 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-150',
+                    isSubActive
+                      ? 'bg-blue-600/20 text-blue-400'
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50',
+                  ),
+                )}
+              >
+                <SubIcon
+                  size={14}
+                  className={isSubActive ? 'text-blue-400' : 'text-zinc-500'}
+                />
+                <span>{sub.label}</span>
+              </Link>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
  * Full sidebar content (shared between desktop and mobile)
  */
 function SidebarContent({ pathname, closeMobile, user, logout }) {
   const [mediaAccordionOpen, setMediaAccordionOpen] = useState(
-    pathname.startsWith('/media-providers')
+    pathname.startsWith('/media-providers'),
   )
+  const [settingsAccordionOpen, setSettingsAccordionOpen] = useState(
+    pathname.startsWith('/settings'),
+  )
+
+  useEffect(() => {
+    if (pathname.startsWith('/settings')) {
+      setSettingsAccordionOpen(true)
+    }
+  }, [pathname])
 
   const isActive = useCallback(
     (path) => {
@@ -201,16 +274,17 @@ function SidebarContent({ pathname, closeMobile, user, logout }) {
             onClick={closeMobile}
           />
         ))}
-      </nav>
 
-      {/* Settings link */}
-      <div className="px-3 pb-2">
-        <NavLink
-          item={settingsItem}
-          isActive={isActive(settingsItem.path)}
-          onClick={closeMobile}
+        <SectionLabel>Settings</SectionLabel>
+
+        <SettingsAccordion
+          isOpen={settingsAccordionOpen}
+          onToggle={() => setSettingsAccordionOpen(!settingsAccordionOpen)}
+          subItems={settingsItem.children}
+          pathname={pathname}
+          closeMobile={closeMobile}
         />
-      </div>
+      </nav>
 
       {/* User footer */}
       <div className="p-4 border-t border-zinc-800">
