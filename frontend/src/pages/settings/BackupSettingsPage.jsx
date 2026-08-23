@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Database, Download, Upload } from 'lucide-react'
+import { Database, Download, Search, Upload, X } from 'lucide-react'
 import { settingsApi } from '../../api/settings'
 import useCatalogStore from '../../stores/catalogStore'
 import { Section } from './settingsUi'
@@ -73,6 +73,7 @@ export default function BackupSettingsPage() {
   const [includeCatalog, setIncludeCatalog] = useState(true)
   const [includeQuota, setIncludeQuota] = useState(true)
   const [importMode, setImportMode] = useState('merge_providers')
+  const [providerSearch, setProviderSearch] = useState('')
 
   useEffect(() => {
     fetchCatalog()
@@ -83,9 +84,28 @@ export default function BackupSettingsPage() {
       .map(([id, meta]) => ({
         id,
         label: meta?.name || id,
+        alias: meta?.alias || '',
       }))
       .sort((a, b) => a.label.localeCompare(b.label))
   }, [catalog])
+
+  const filteredProviderOptions = useMemo(() => {
+    const q = providerSearch.trim().toLowerCase()
+    if (!q) return providerOptions
+    return providerOptions.filter(
+      (p) =>
+        p.label.toLowerCase().includes(q) ||
+        p.id.toLowerCase().includes(q) ||
+        p.alias.toLowerCase().includes(q),
+    )
+  }, [providerOptions, providerSearch])
+
+  const selectVisibleProviders = () => {
+    const ids = filteredProviderOptions.map((p) => p.id)
+    setSelectedProviders((prev) => [...new Set([...prev, ...ids])])
+  }
+
+  const clearProviderSelection = () => setSelectedProviders([])
 
   const downloadJson = (data, filename) => {
     const content = JSON.stringify(data, null, 2)
@@ -408,16 +428,70 @@ export default function BackupSettingsPage() {
             </div>
 
             <div>
-              <p className="text-xs text-zinc-500 mb-2">
-                Providers (empty = all matching filters above)
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <p className="text-xs text-zinc-500">
+                  Providers (empty = all matching filters above)
+                </p>
+                {providerOptions.length > 0 && (
+                  <span className="text-[11px] text-zinc-600">
+                    {filteredProviderOptions.length} of {providerOptions.length}
+                  </span>
+                )}
+              </div>
+              <div className="relative mb-2">
+                <Search
+                  size={14}
+                  className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500"
+                />
+                <input
+                  type="text"
+                  value={providerSearch}
+                  onChange={(e) => setProviderSearch(e.target.value)}
+                  placeholder="Search name, id, or alias..."
+                  className="w-full rounded-md border border-zinc-700 bg-zinc-800/50 pl-8 pr-8 py-2 text-xs text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                />
+                {providerSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setProviderSearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                    aria-label="Clear search"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              {filteredProviderOptions.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-2">
+                  <button
+                    type="button"
+                    onClick={selectVisibleProviders}
+                    className="text-[11px] text-primary-400 hover:text-primary-300"
+                  >
+                    Select visible
+                  </button>
+                  {selectedProviders.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={clearProviderSelection}
+                      className="text-[11px] text-zinc-500 hover:text-zinc-300"
+                    >
+                      Clear selection
+                    </button>
+                  )}
+                </div>
+              )}
               <div
-                className="max-h-40 overflow-y-auto rounded-lg border border-zinc-800 p-2 space-y-1"
+                className="max-h-64 overflow-y-auto rounded-lg border border-zinc-800 p-2 space-y-1"
               >
                 {providerOptions.length === 0 ? (
                   <p className="text-xs text-zinc-500">Loading providers...</p>
+                ) : filteredProviderOptions.length === 0 ? (
+                  <p className="text-xs text-zinc-500 px-2 py-1">
+                    No providers match &quot;{providerSearch.trim()}&quot;
+                  </p>
                 ) : (
-                  providerOptions.map((p) => (
+                  filteredProviderOptions.map((p) => (
                     <label
                       key={p.id}
                       className="flex items-center gap-2 text-xs text-zinc-300 hover:bg-zinc-800/50 rounded px-2 py-1"

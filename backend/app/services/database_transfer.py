@@ -130,6 +130,10 @@ def _connection_matches_health(conn: ProviderConnection, health: str) -> bool:
 
 
 def _row_dict(row: Any) -> dict[str, Any]:
+    """ORM model or SQLAlchemy row → plain dict for JSON export."""
+    table = getattr(row, "__table__", None)
+    if table is not None:
+        return {col.key: getattr(row, col.key) for col in table.columns}
     return dict(row)
 
 

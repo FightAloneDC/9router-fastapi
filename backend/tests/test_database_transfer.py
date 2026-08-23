@@ -1,5 +1,9 @@
 """Tests for FK-safe database export/import."""
 
+import uuid
+from datetime import datetime, timezone
+
+from app.models.provider import ProviderConnection
 from app.routers.providers.connection_filters import (
     ConnectionListFilters,
     build_export_filter_clause,
@@ -9,6 +13,7 @@ from app.services.database_transfer import (
     IMPORT_ORDER,
     ConnectionExportOptions,
     _providers_from_payload,
+    _row_dict,
     export_options_to_filters_dict,
 )
 
@@ -69,3 +74,24 @@ def test_providers_from_payload_falls_back_to_connections():
         ],
     }
     assert set(_providers_from_payload(tables, None)) == {"openai", "gemini"}
+
+
+def test_row_dict_serializes_provider_connection_model():
+    conn_id = uuid.uuid4()
+    row = ProviderConnection(
+        id=conn_id,
+        provider="openai",
+        auth_type="api_key",
+        name="test",
+        email=None,
+        priority=1,
+        is_active=True,
+        proxy_pool_id=None,
+        data="{}",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    payload = _row_dict(row)
+    assert payload["id"] == conn_id
+    assert payload["provider"] == "openai"
+    assert payload["name"] == "test"
