@@ -15,7 +15,7 @@ class CodexConfig(BaseProviderConfig):
     DEPRECATED: bool = True
     DEPRECATION_NOTICE: str = "Risk Notice: This provider uses a subscription/OAuth session not officially licensed for proxy/router use. Account may be restricted or banned. Use at your own risk."
     THINKING_CONFIG: dict | None = {"options": ["auto", "none", "low", "medium", "high"], "defaultMode": "auto"}
-    REQUIRES_PROXY: bool = True
+    REQUIRES_PROXY: bool = False
 
 
 class CodexMetadata(BaseMetadata):

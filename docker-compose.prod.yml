@@ -2,7 +2,7 @@
 # Usage: docker compose -f docker-compose.prod.yml up --build -d
 # Refresh UI on main first: ./scripts/release-prod.sh
 #
-# DB: external postgres_aidev_db on host :5432 (same as docker-compose-v1.yml).
+# DB: external postgres_aidev_db on host :5432.
 # App port: host 8013 → container 9000 (daily URL preserved).
 
 services:
@@ -15,7 +15,6 @@ services:
     restart: unless-stopped
     ports:
       - "8013:9000"
-      - "1455:1455"
     env_file:
       - ./backend/.env
     extra_hosts:

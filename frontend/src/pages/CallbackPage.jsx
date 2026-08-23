@@ -23,10 +23,7 @@ function CallbackContent() {
     let relayed = false
 
     // Trusted origins that may receive this callback
-    const expectedOrigins = [
-      window.location.origin,
-      'http://localhost:1455',
-    ]
+    const expectedOrigins = [window.location.origin]
 
     // Method 1: postMessage to opener (popup mode)
     if (window.opener) {

@@ -29,7 +29,6 @@ services:
     container_name: 9router-backend
     ports:
       - "9000:9000"
-      - "1455:1455"
     volumes:
       - ./backend:/app
     env_file:

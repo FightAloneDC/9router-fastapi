@@ -237,9 +237,7 @@ export default function OAuthModal({
 
       // Authorization code flow (with or without PKCE)
       const appPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80')
-      const redirectUri = requiresProxy
-        ? 'http://localhost:1455/auth/callback'
-        : `http://localhost:${appPort}/callback`
+      const redirectUri = `http://localhost:${appPort}/callback`
 
       const authorizeUrl = new URL(
         `/api/oauth/${provider}/authorize`,

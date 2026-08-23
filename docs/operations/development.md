@@ -3,15 +3,22 @@
 ## Primary workflow (recommended)
 
 1. Keep host Postgres available (`postgres_aidev_db` on `:5432`, or your own).
-2. Run backend on the host (`uvicorn` with reload) against `backend/.env`.
-3. Run Vite on the host:
+2. One terminal — backend + Vite on the host (hot reload, no Docker):
 
 ```bash
-cd frontend && npm run dev
+./scripts/dev-local.sh
 ```
 
 - UI: http://localhost:5173 (proxies `/api` and `/v1` to the backend)
-- Backend: typically http://localhost:9000
+- Backend: http://localhost:9000
+- Production on http://localhost:8013 is untouched (separate container)
+
+Manual split (two terminals) still works:
+
+```bash
+cd backend && uv run uvicorn app.main:app --host 0.0.0.0 --port 9000 --reload
+cd frontend && npm run dev
+```
 
 ## Compose fallback
 

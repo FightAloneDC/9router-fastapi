@@ -28,7 +28,6 @@ services:
     restart: unless-stopped
     ports:
       - "9000:9000"
-      - "1455:1455"
     env_file:
       - ./backend/.env
       - .env.docker
