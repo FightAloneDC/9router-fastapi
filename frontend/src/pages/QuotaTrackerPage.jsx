@@ -160,6 +160,82 @@ function getLowCount(quotas) {
   return quotas.filter((q) => (q.remaining_percentage ?? 100) <= 30).length
 }
 
+const MODEL_METRIC_SUFFIXES = [
+  ' free tokens',
+  ' requests (RPM)',
+  ' tokens (TPM)',
+  ' requests (today)',
+  ' inputs (IPM)',
+  ' inputs (today)',
+  ' RPM',
+  ' TPM',
+]
+
+const METRIC_ORDER = [
+  'free tokens',
+  'RPM',
+  'requests (RPM)',
+  'TPM',
+  'tokens (TPM)',
+  'inputs (IPM)',
+  'requests (today)',
+  'inputs (today)',
+]
+
+const METRIC_LABELS = {
+  'free tokens': 'Free tokens',
+  RPM: 'RPM',
+  'requests (RPM)': 'RPM',
+  TPM: 'TPM',
+  'tokens (TPM)': 'TPM',
+  'inputs (IPM)': 'IPM',
+  'requests (today)': 'Requests today',
+  'inputs (today)': 'Inputs today',
+}
+
+function splitQuotaName(name) {
+  const raw = String(name || '')
+  for (const suffix of MODEL_METRIC_SUFFIXES) {
+    if (raw.length > suffix.length && raw.endsWith(suffix)) {
+      return {
+        model: raw.slice(0, -suffix.length),
+        metric: suffix.trim(),
+      }
+    }
+  }
+  return { model: '', metric: raw }
+}
+
+function groupQuotasByModel(quotas) {
+  const groups = []
+  const index = new Map()
+  const ungrouped = []
+  for (const quota of quotas || []) {
+    const { model, metric } = splitQuotaName(quota.name)
+    if (!model) {
+      ungrouped.push(quota)
+      continue
+    }
+    let group = index.get(model)
+    if (!group) {
+      group = { model, items: [] }
+      index.set(model, group)
+      groups.push(group)
+    }
+    group.items.push({ quota, metric })
+  }
+  for (const group of groups) {
+    group.items.sort((a, b) => {
+      const ia = METRIC_ORDER.indexOf(a.metric)
+      const ib = METRIC_ORDER.indexOf(b.metric)
+      const oa = ia < 0 ? 99 : ia
+      const ob = ib < 0 ? 99 : ib
+      return oa - ob
+    })
+  }
+  return { groups, ungrouped }
+}
+
 // --- Skeleton ---
 
 function LoadingSkeleton() {
@@ -449,10 +525,7 @@ function ProviderQuotaCard({
 }) {
   const hasQuotas = provider.quotas && provider.quotas.length > 0
   const lowCount = getLowCount(provider.quotas)
-  const showModelDetails = (
-    provider.provider === 'alims-intl'
-    || provider.provider === 'cohere'
-  )
+  const showModelDetails = provider.supports_quota_details === true
 
   return (
     <Card className="hover:border-zinc-600/50 transition-colors">
@@ -491,7 +564,7 @@ function ProviderQuotaCard({
               <button
                 onClick={() => onModelDetails(provider)}
                 className="p-1 rounded-md hover:bg-zinc-800 transition-colors cursor-pointer"
-                title="Per-model RPM/TPM details"
+                title="Per-model quota details"
               >
                 <ListTree size={12} className="text-zinc-400" />
               </button>
@@ -563,6 +636,93 @@ function ProviderQuotaCard({
   )
 }
 
+function GroupedMetricRow({ quota, label }) {
+  const pct = quota.remaining_percentage ?? 0
+  const unlimited = !quota.total
+  const usedPct = unlimited
+    ? 0
+    : Math.min(100, Math.max(0, 100 - pct))
+  const colors = getBarColors(getQuotaColor(pct))
+  const countdown = formatCountdown(quota.reset_at)
+
+  return (
+    <div className="px-3 py-2">
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <span
+          className="text-[10px] font-medium uppercase
+            tracking-wide text-zinc-500"
+        >
+          {label}
+        </span>
+        <span className="text-[10px] text-zinc-400 tabular-nums">
+          {formatQuotaNum(quota.used)}
+          {' / '}
+          {unlimited ? '∞' : formatQuotaNum(quota.total)}
+        </span>
+      </div>
+      <div className="h-1 rounded-full overflow-hidden bg-zinc-800">
+        <div
+          className={`h-full rounded-full ${colors.bar}`}
+          style={{ width: `${usedPct}%` }}
+        />
+      </div>
+      <div className="flex items-center justify-between mt-1">
+        <span className={`text-[10px] font-medium ${colors.text}`}>
+          {unlimited ? 'No cap' : `${pct.toFixed(0)}% left`}
+        </span>
+        {countdown && (
+          <span className="text-[10px] text-zinc-600">
+            resets in {countdown}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ModelQuotaGroup({ group }) {
+  const worst = Math.min(
+    ...group.items.map((item) => (
+      item.quota.remaining_percentage ?? 100
+    )),
+  )
+  const colors = getBarColors(getQuotaColor(worst))
+
+  return (
+    <section
+      className="rounded-lg border border-zinc-800 bg-zinc-950/60"
+    >
+      <header
+        className="flex items-center justify-between gap-2
+          px-3 py-2 border-b border-zinc-800/80"
+      >
+        <h4
+          className="text-[12px] font-semibold text-zinc-100
+            font-mono truncate"
+          title={group.model}
+        >
+          {group.model}
+        </h4>
+        <span
+          className={`text-[10px] font-medium tabular-nums
+            ${colors.text}`}
+        >
+          {`${worst.toFixed(0)}%`}
+        </span>
+      </header>
+      <div className="divide-y divide-zinc-800/50">
+        {group.items.map(({ quota, metric }) => (
+          <GroupedMetricRow
+            key={quota.name}
+            quota={quota}
+            label={METRIC_LABELS[metric] || metric}
+          />
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function ModelDetailsModal({ provider, onClose }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -597,18 +757,30 @@ function ModelDetailsModal({ provider, onClose }) {
     return () => { cancelled = true }
   }, [provider.id])
 
+  const { groups, ungrouped } = groupQuotasByModel(rows)
   const q = filter.trim().toLowerCase()
-  const visible = q
-    ? rows.filter((r) =>
-      String(r.name || '').toLowerCase().includes(q))
-    : rows
+  const visibleGroups = q
+    ? groups.filter((group) => (
+      group.model.toLowerCase().includes(q)
+      || group.items.some((item) => (
+        item.metric.toLowerCase().includes(q)
+      ))
+    ))
+    : groups
+  const visibleUngrouped = q
+    ? ungrouped.filter((row) => (
+      String(row.name || '').toLowerCase().includes(q)
+    ))
+    : ungrouped
+  const empty = visibleGroups.length === 0
+    && visibleUngrouped.length === 0
 
   return (
     <Modal
       isOpen
       onClose={onClose}
       title={`Model limits — ${provider.name || provider.provider}`}
-      className="max-w-3xl"
+      className="max-w-4xl"
     >
       <div className="space-y-3">
         <div className="relative">
@@ -635,24 +807,28 @@ function ModelDetailsModal({ provider, onClose }) {
         ) : error ? (
           <p className="text-xs text-red-400 py-6 text-center">{error}</p>
         ) : (
-          <div className="max-h-[60vh] overflow-y-auto -mx-2">
-            <table className="w-full table-fixed text-left">
-              <thead className="sticky top-0 bg-zinc-900">
-                <tr className="border-b border-zinc-800/50 text-[9px] text-zinc-600 uppercase tracking-wider">
-                  <th className="py-1 px-2 font-normal w-[30%]">Quota</th>
-                  <th className="py-1 px-2 font-normal w-[40%]">Usage</th>
-                  <th className="py-1 px-2 font-normal w-[30%] text-right">
-                    Resets
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map((quota, idx) => (
-                  <QuotaRow key={quota.name || idx} quota={quota} />
-                ))}
-              </tbody>
-            </table>
-            {visible.length === 0 && (
+          <div className="max-h-[65vh] overflow-y-auto pr-1 space-y-3">
+            {visibleUngrouped.length > 0 && (
+              <table className="w-full table-fixed text-left">
+                <tbody>
+                  {visibleUngrouped.map((quota, idx) => (
+                    <QuotaRow
+                      key={quota.name || idx}
+                      quota={quota}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {visibleGroups.map((group) => (
+                <ModelQuotaGroup
+                  key={group.model}
+                  group={group}
+                />
+              ))}
+            </div>
+            {empty && (
               <p className="text-xs text-zinc-500 text-center py-6">
                 No models match the filter.
               </p>

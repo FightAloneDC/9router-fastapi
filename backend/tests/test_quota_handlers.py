@@ -69,6 +69,15 @@ from app.providers.cohere.quota import (
     quotas_from_headers as co_quotas_from_headers,
     summary_quota_rows as co_summary_quota_rows,
 )
+from app.providers.voyage_ai.quota import (
+    VoyageAiUsageHandler,
+    free_token_bars as voyage_free_token_bars,
+    lookup_free_tokens as voyage_lookup_free_tokens,
+    lookup_limits as voyage_lookup_limits,
+    model_detail_rows as voyage_model_detail_rows,
+    summary_quota_rows as voyage_summary_quota_rows,
+    tier1_minute_bars as voyage_tier1_minute_bars,
+)
 from app.providers.grok_cli.quota import (
     DEAD,
     EXHAUSTED,
@@ -108,7 +117,94 @@ def test_supported_providers():
     assert "mistral" in providers
     assert "alims-intl" in providers
     assert "cohere" in providers
+    assert "voyage-ai" in providers
     assert "morph" in providers
+
+
+def test_voyage_lookup_limits() -> None:
+    """Voyage card uses free-tier maxima; modal is per-model."""
+    from datetime import datetime, timezone
+
+    from app.providers.voyage_ai.quota import _default_card_caps
+
+    assert voyage_lookup_limits("voyage-4-lite") == {
+        "rpm": 2000,
+        "tpm": 16_000_000,
+    }
+    assert voyage_lookup_limits("voyage/voyage-4-large") == {
+        "rpm": 2000,
+        "tpm": 3_000_000,
+    }
+    assert voyage_lookup_limits("rerank-2.5") == {
+        "rpm": 2000,
+        "tpm": 2_000_000,
+    }
+    assert voyage_lookup_limits("voyage-3") == {}
+    assert voyage_lookup_free_tokens("voyage-4-large") == 200_000_000
+    assert voyage_lookup_free_tokens("voyage-4") == 200_000_000
+    assert voyage_lookup_free_tokens("voyage-finance-2") == 50_000_000
+    assert voyage_lookup_free_tokens("voyage-3.5") is None
+    assert "fetch_model_details" in VoyageAiUsageHandler.__dict__
+
+    caps = _default_card_caps()
+    assert caps["rpm"] == 2000
+    assert caps["tpm"] == 16_000_000
+    assert caps["free_tokens"] == 200_000_000
+
+    summary = voyage_summary_quota_rows(
+        {"voyage-4-lite": {"requests": 5, "tokens": 100}},
+        lifetime_tokens=1_500,
+        reset_at="2026-08-25T00:01:00+00:00",
+    )
+    by_name = {row["name"]: row for row in summary}
+    assert set(by_name) == {"free tokens", "RPM", "TPM"}
+    assert by_name["free tokens"]["used"] == 1_500
+    assert by_name["free tokens"]["total"] == 200_000_000
+    assert by_name["free tokens"]["unlimited"] is False
+    assert by_name["RPM"]["used"] == 5
+    assert by_name["RPM"]["total"] == 2000
+    assert by_name["TPM"]["used"] == 100
+    assert by_name["TPM"]["total"] == 16_000_000
+    assert all(not row["unlimited"] for row in summary)
+
+    grants = voyage_free_token_bars({"voyage-4-large": 1_000})
+    grant = next(
+        row for row in grants
+        if row["name"] == "voyage-4-large free tokens"
+    )
+    assert grant["total"] == 200_000_000
+    assert grant["used"] == 1_000
+    grant_names = {row["name"] for row in grants}
+    assert "voyage-3.5 free tokens" not in grant_names
+
+    now = datetime(2026, 8, 25, tzinfo=timezone.utc)
+    rows = voyage_tier1_minute_bars(
+        {"voyage-4-lite": {"requests": 5, "tokens": 100}},
+        now,
+    )
+    names = {row["name"] for row in rows}
+    assert "voyage-3 RPM" not in names
+    assert "requests (last 60s)" not in names
+    rpm = next(row for row in rows if row["name"] == "voyage-4-lite RPM")
+    tpm = next(row for row in rows if row["name"] == "voyage-4-lite TPM")
+    assert rpm["used"] == 5
+    assert rpm["total"] == 2000
+    assert tpm["used"] == 100
+    assert tpm["total"] == 16_000_000
+
+    grouped = voyage_model_detail_rows(
+        {"voyage-4-large": 1_000},
+        {"voyage-4-large": {"requests": 2, "tokens": 50}},
+        now,
+    )
+    grouped_names = [row["name"] for row in grouped]
+    start = grouped_names.index("voyage-4-large free tokens")
+    assert grouped_names[start:start + 3] == [
+        "voyage-4-large free tokens",
+        "voyage-4-large RPM",
+        "voyage-4-large TPM",
+    ]
+    assert "voyage-3.5 free tokens" not in grouped_names
 
 
 def test_get_handler_known():

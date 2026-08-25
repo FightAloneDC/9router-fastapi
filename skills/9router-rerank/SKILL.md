@@ -101,7 +101,7 @@ console.log(results);
 |---|---|
 | `cohere` | Native `POST /rerank`; default model `rerank-english-v2.0` if omitted |
 | `jina_ai` | Jina reranker API |
-| `voyage_ai` | Voyage rerank API |
+| `voyage_ai` | Handler maps unified `top_n` → Voyage `top_k` (Voyage rejects `top_n`) |
 | `alims-intl` | Alims international rerank |
 
 Need a connection for that provider in the dashboard. 401/403 from

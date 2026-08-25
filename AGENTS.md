@@ -110,8 +110,11 @@ Short rules only. Details: [`docs/architecture/handbook.md`](docs/architecture/h
    code only. Update after changes; missing FLOW.md beats a shared
    template. Process:
    [`docs/architecture/provider-optimization-sop.md`](docs/architecture/provider-optimization-sop.md).
-6. **ProviderDetailPage** — Providers menu features must work
-   end-to-end; verify in the running app.
+6. **Provider detail UI** — `/providers/:id`
+   (`ProviderDetailPage`) is canonical. `/media-providers/:kind/:id`
+   must follow that UI; only kind-scoped differences allowed.
+   Providers menu features must work end-to-end; verify in the
+   running app. See `.cursor/rules/provider-detail-ui.mdc`.
 7. **Optimistic UI** — Toggle state first, then API; rollback on
    failure.
 8. **Docker hot reload** — Do not rebuild containers for ordinary

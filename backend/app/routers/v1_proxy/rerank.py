@@ -56,11 +56,11 @@ async def rerank_endpoint(
             detail="Invalid JSON body",
         )
 
-    provider_id: str | None = body.get("model") or body.get("provider")
+    provider_raw: str | None = body.get("model") or body.get("provider")
     query: str | None = body.get("query")
     documents: list | None = body.get("documents")
 
-    if not provider_id:
+    if not provider_raw:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing required field: model or provider",
@@ -76,8 +76,14 @@ async def rerank_endpoint(
             detail="Missing required field: documents",
         )
 
-    # Resolve alias
-    provider_id = _resolve_provider_alias(provider_id)
+    # OpenAI-style "alias/model-id" → provider + upstream model.
+    upstream_model: str | None = None
+    if "/" in provider_raw:
+        prefix, rest = provider_raw.split("/", 1)
+        provider_id = _resolve_provider_alias(prefix)
+        upstream_model = rest or None
+    else:
+        provider_id = _resolve_provider_alias(provider_raw)
 
     # Check provider supports rerank via handler
     rerank_handler = None
@@ -103,6 +109,8 @@ async def rerank_endpoint(
         "instruct": body.get("instruct"),
         "provider_options": body.get("provider_options"),
     }
+    if upstream_model:
+        rerank_params["model"] = upstream_model
 
     request_id: str = str(uuid.uuid4())
 
@@ -172,13 +180,26 @@ async def rerank_endpoint(
     elapsed_ms: int = int((time.time() - start_time) * 1000)
     rerank_result["metrics"]["response_time_ms"] = elapsed_ms
 
-    # Track usage (rerank — no token counts unless provided)
+    usage: dict = rerank_result.get("usage") or {}
+    prompt_tokens = int(
+        usage.get("total_tokens")
+        or usage.get("prompt_tokens")
+        or 0
+    )
+    tracked_model = (
+        upstream_model
+        or usage.get("model")
+        or provider_id
+    )
     await save_request_tracking(
         db,
         provider=provider_id,
-        model=provider_id,
+        model=tracked_model,
         connection_id=str(conn.id) if conn else None,
         endpoint="/v1/rerank",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=0,
+        tokens_json=usage,
         latency_ttft=elapsed_ms,
         latency_total=elapsed_ms,
         request_body=body,

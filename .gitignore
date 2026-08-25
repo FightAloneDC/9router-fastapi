@@ -120,6 +120,7 @@ _bmad/
 .codex/
 .codegraph/
 .commandcode/
+.cursor/
 .hermes/
 .kimi-code/
 .openclaude/

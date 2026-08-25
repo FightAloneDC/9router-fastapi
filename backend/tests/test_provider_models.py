@@ -18,6 +18,7 @@ from app.providers import (
     PROVIDER_CEREBRAS,
     PROVIDER_GROQ,
     PROVIDER_OPENROUTER,
+    PROVIDER_VOYAGE_AI,
 )
 from app.providers.provider import Provider
 
@@ -26,7 +27,111 @@ _API_KEY_ENV_VARS: dict[str, str] = {
     PROVIDER_CEREBRAS: "CEREBRAS_API_KEY",
     PROVIDER_GROQ: "GROQ_API_KEY",
     PROVIDER_OPENROUTER: "OPENROUTER_API_KEY",
+    PROVIDER_VOYAGE_AI: "VOYAGE_AI_API_KEY",
 }
+
+
+def test_voyage_fetch_models_uses_documented_catalog() -> None:
+    """Voyage has no list-models API; fetch returns documented ids."""
+    import asyncio
+
+    from app.providers.voyage_ai import models
+    from app.providers.voyage_ai.config import VoyageAiConfig
+    from app.providers.voyage_ai.handler import VoyageAiHandler
+
+    result = asyncio.run(models.fetch_models(
+        "unused-key",
+        {"baseUrl": "https://example.test/v1"},
+    ))
+    ids = {item["id"] for item in result}
+    types = {item["id"]: item["type"] for item in result}
+
+    assert "voyage-4-large" in ids
+    assert "voyage-context-4" in ids
+    assert "voyage-multimodal-3.5" in ids
+    assert "rerank-2.5" in ids
+    assert "rerank-lite-1" in ids
+    assert "voyage-01" not in ids
+    assert "voyage-4-nano" not in ids
+    assert types["voyage-4-large"] == "embedding"
+    assert types["voyage-context-4"] == "embedding"
+    assert types["voyage-multimodal-3.5"] == "embedding"
+    assert types["rerank-2.5"] == "rerank"
+    assert types["voyage-code-2"] == "embedding"
+    cfg = VoyageAiConfig()
+    assert cfg.MODEL_TYPE_OVERRIDES.keys() == ids
+    assert "voyage-code-2" in ids
+    assert set(cfg.RATE_LIMITS).issubset(ids)
+    assert set(cfg.FREE_TOKENS).issubset(ids)
+
+    handler = VoyageAiHandler(VoyageAiConfig())
+    handled = asyncio.run(handler.fetch_models("unused-key"))
+    handled_ids = {item["id"] for item in handled}
+    assert handled_ids == ids
+    assert all(item.get("type") for item in handled)
+
+
+def test_voyage_embeddings_body_maps_dimensions() -> None:
+    """OpenAI dimensions → Voyage output_dimension."""
+    from app.providers.voyage_ai.config import VoyageAiConfig
+    from app.providers.voyage_ai.handler import VoyageAiHandler
+
+    handler = VoyageAiHandler(VoyageAiConfig())
+    mapped = handler.build_embeddings_body(
+        "voyage-4-lite",
+        {
+            "model": "voyage/voyage-4-lite",
+            "input": "ping",
+            "dimensions": 512,
+        },
+    )
+    assert mapped["model"] == "voyage-4-lite"
+    assert mapped["input"] == "ping"
+    assert mapped["output_dimension"] == 512
+    assert "dimensions" not in mapped
+
+    keep = handler.build_embeddings_body(
+        "voyage-4",
+        {
+            "model": "x",
+            "input": "ping",
+            "output_dimension": 256,
+            "dimensions": 512,
+        },
+    )
+    assert keep["output_dimension"] == 256
+    assert "dimensions" not in keep
+
+
+def test_voyage_rerank_body_maps_top_n_to_top_k() -> None:
+    """Unified top_n → Voyage top_k; never send top_n."""
+    from app.providers.voyage_ai.config import VoyageAiConfig
+    from app.providers.voyage_ai.handler import VoyageAiHandler
+
+    handler = VoyageAiHandler(VoyageAiConfig())
+    mapped = handler.build_rerank_body(
+        {
+            "model": "rerank-2.5",
+            "query": "capital of France",
+            "documents": ["Paris", "Berlin"],
+            "top_n": 3,
+            "return_documents": True,
+        },
+    )
+    assert mapped["model"] == "rerank-2.5"
+    assert mapped["top_k"] == 3
+    assert mapped["return_documents"] is True
+    assert "top_n" not in mapped
+
+    bare = handler.build_rerank_body(
+        {
+            "query": "q",
+            "documents": ["a"],
+        },
+    )
+    assert bare["model"] == "rerank-lite-1"
+    assert "top_k" not in bare
+    assert "return_documents" not in bare
 
 
 async def get_api_key(provider_id: str) -> str | None:

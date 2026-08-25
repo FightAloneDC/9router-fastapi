@@ -136,16 +136,28 @@ async def embeddings(
                     await clear_connection_error(db, target.connection_id, model)
                     await update_connection_usage(db, target.connection_id)
 
-                # Track usage
-                usage: dict = data.get("usage", {})
+                # Track usage. OpenAI embeddings use prompt_tokens;
+                # Voyage (and some others) only return total_tokens /
+                # text_tokens — map those into prompt_tokens so TPM
+                # and free-token bars stay accurate.
+                usage: dict = data.get("usage", {}) or {}
+                prompt_tokens = int(
+                    usage.get("prompt_tokens")
+                    or usage.get("total_tokens")
+                    or usage.get("text_tokens")
+                    or 0
+                )
+                completion_tokens = int(
+                    usage.get("completion_tokens") or 0
+                )
                 await save_request_tracking(
                     db,
                     provider=target.provider,
                     model=target.model,
                     connection_id=target.connection_id,
                     endpoint="/v1/embeddings",
-                    prompt_tokens=usage.get("prompt_tokens", 0),
-                    completion_tokens=usage.get("completion_tokens", 0),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
                     tokens_json=usage,
                     latency_ttft=total_latency_ms,
                     latency_total=total_latency_ms,

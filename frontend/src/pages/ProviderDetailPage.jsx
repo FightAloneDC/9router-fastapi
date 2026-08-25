@@ -35,6 +35,7 @@ import GitLabAuthModal from '../components/GitLabAuthModal'
 import BulkImportModal from '../components/modals/BulkImportModal'
 import { useAuthStore } from '../stores/authStore'
 import SearchableSelect from '../components/ui/SearchableSelect'
+import KindTestPlayground from '../components/media/KindTestPlaygrounds'
 
 const COMPATIBLE_TYPES = new Set(['openai-compatible', 'anthropic-compatible'])
 
@@ -1498,13 +1499,23 @@ function ChatTestPlayground({
 const _inflightLoads = new Map()
 
 function ProviderDetailPage() {
-  const { providerId: rawProviderId } = useParams()
+  const { providerId: rawProviderId, kind: routeKind } = useParams()
   const catalogStore = useCatalogStore()
   const [catalogReady, setCatalogReady] = useState(false)
 
   const providerId = catalogStore.resolveProviderId(rawProviderId)
   const navigate = useNavigate()
   const info = catalogStore.providers[providerId]
+  // Media route: /media-providers/:kind/:providerId
+  const kindConfig = routeKind
+    ? catalogStore.getKindConfig(routeKind)
+    : null
+  const backTo = routeKind
+    ? `/media-providers/${routeKind}`
+    : '/providers'
+  const backLabel = routeKind
+    ? `Back to ${kindConfig?.label || routeKind}`
+    : 'Back to Providers'
 
   // Provider auth type detection
   const isOAuth = info?.authType === 'oauth' || info?.authType === 'free'
@@ -1839,7 +1850,13 @@ function ProviderDetailPage() {
       // Do not gate on `cancelled` inside shared work — StrictMode
       // unmounts the first invoke while the second still needs results.
       pending = (async () => {
-        await useCatalogStore.getState().ensureProvider(rawProviderId)
+        const store = useCatalogStore.getState()
+        // Media detail needs mediaKinds for back-link labels.
+        if (routeKind && !store.mediaKinds?.length) {
+          await store.fetchCatalog()
+        } else {
+          await store.ensureProvider(rawProviderId)
+        }
         await fetchConnections(connectionPage)
         await fetchAliases()
       })().finally(() => {
@@ -1859,6 +1876,7 @@ function ProviderDetailPage() {
     }
   }, [
     rawProviderId,
+    routeKind,
     connectionPage,
     connectionFilterSignature,
     fetchConnections,
@@ -1994,8 +2012,10 @@ function ProviderDetailPage() {
       const fetchedList = res.data?.models || res.data || []
       const fetchedArray = fetchedList.map(m => typeof m === 'string' ? m : m.id)
 
-      // Sync models to every connection in one request
-      await providersApi.setProviderModels(providerId, fetchedArray)
+      // Catalog providers are persisted by the fetch endpoint itself.
+      if (!info?.modelCatalogTable) {
+        await providersApi.setProviderModels(providerId, fetchedArray)
+      }
 
       try {
         if (info?.syncDisabledWithModelList) {
@@ -2691,6 +2711,14 @@ function ProviderDetailPage() {
       )
     }
 
+    // Media route: only show models matching :kind
+    const modelsScoped = routeKind
+      ? models.filter((m) => {
+          const mid = typeof m === 'string' ? m : m.id
+          return getModelType(mid) === routeKind
+        })
+      : models
+
     const searchQ = modelSearchQuery.trim().toLowerCase()
     const disabledSet = new Set(disabledModelIds)
 
@@ -2702,25 +2730,26 @@ function ProviderDetailPage() {
     // Display (active) models: non-disabled models from the known list.
     // When tracking is active, only models in enabledModelIds qualify.
     // When tracking is inactive, all non-disabled models qualify.
-    const activeModels = models.filter((m) => {
+    const activeModels = modelsScoped.filter((m) => {
       const mid = typeof m === 'string' ? m : m.id
       if (disabledSet.has(mid)) return false
       if (!hasEnabledTracking) return true
       return enabledModelIds.has(mid)
     })
     // Disabled models: in models list AND in disabledModelIds
-    const disabledDisplayModels = models.filter((m) => disabledSet.has(typeof m === 'string' ? m : m.id))
+    const disabledDisplayModels = modelsScoped.filter((m) => disabledSet.has(typeof m === 'string' ? m : m.id))
     // Suggestion models: models NOT in active list (disabled + not-yet-enabled go to suggestions)
     const activeModelIds = new Set(activeModels.map(m => typeof m === 'string' ? m : m.id))
-    const suggestionModels = models.filter((m) => {
+    const suggestionModels = modelsScoped.filter((m) => {
       const mid = typeof m === 'string' ? m : m.id
       return !activeModelIds.has(mid)
     })
     // API-fetched suggested models from provider's public API (not already in the display list)
     const addedFullModels = new Set(Object.values(modelAliases))
-    const knownModelIds = new Set(models.map((m) => typeof m === 'string' ? m : m.id))
+    const knownModelIds = new Set(modelsScoped.map((m) => typeof m === 'string' ? m : m.id))
     const apiSuggestedModels = (suggestedModels || []).filter((m) => {
       const mid = typeof m === 'string' ? m : m.id
+      if (routeKind && getModelType(mid) !== routeKind) return false
       return !addedFullModels.has(`${providerStorageAlias}/${mid}`) && !knownModelIds.has(mid)
     })
     // Custom models added by user (stored as aliases)
@@ -2729,7 +2758,8 @@ function ProviderDetailPage() {
         const prefix = `${providerStorageAlias}/`
         if (!fullModel.startsWith(prefix)) return false
         const modelId = fullModel.slice(prefix.length)
-        return !models.some((m) => (typeof m === 'string' ? m : m.id) === modelId) && alias === modelId
+        if (routeKind && getModelType(modelId) !== routeKind) return false
+        return !modelsScoped.some((m) => (typeof m === 'string' ? m : m.id) === modelId) && alias === modelId
       })
       .map(([alias, fullModel]) => ({
         id: fullModel.slice(`${providerStorageAlias}/`.length),
@@ -2804,7 +2834,7 @@ function ProviderDetailPage() {
         ))}
 
         {/* Search input - applies to all lists */}
-        {(models.length > 0) && (
+        {(modelsScoped.length > 0) && (
           <div className="w-full">
             <div className="relative">
               <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500" />
@@ -2899,8 +2929,8 @@ function ProviderDetailPage() {
     return (
       <div className="text-center py-20">
         <p className="text-zinc-400">Provider not found</p>
-        <Link to="/providers" className="text-primary-400 hover:underline text-sm mt-2 inline-block">
-          Back to Providers
+        <Link to={backTo} className="text-primary-400 hover:underline text-sm mt-2 inline-block">
+          {backLabel}
         </Link>
       </div>
     )
@@ -2952,12 +2982,12 @@ function ProviderDetailPage() {
       {/* ── Header ── */}
       <div className="min-w-0">
         <Link
-          to="/providers"
+          to={backTo}
           className="inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-primary-400 transition-colors mb-4"
         >
-          <ArrowLeft size={16} /> Back to Providers
+          <ArrowLeft size={16} /> {backLabel}
         </Link>
-        <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+        <div className="flex min-w-0 items-start gap-3 sm:gap-4">
           {headerImgError ? (
             <div
               className="flex size-12 shrink-0 items-center justify-center rounded-lg text-base font-bold"
@@ -2978,18 +3008,47 @@ function ProviderDetailPage() {
           <div className="min-w-0">
             <div className="flex items-center gap-3 flex-wrap">
               <h1 className="truncate text-2xl font-semibold tracking-tight text-zinc-100 sm:text-3xl">{displayInfo.name}</h1>
-              {info?.apiKeyUrl && (
-                <a href={info.apiKeyUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary-400 hover:underline inline-flex items-center gap-1">
+              {info?.website && (
+                <a
+                  href={info.website}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary-400 hover:underline inline-flex items-center gap-1"
+                >
+                  <ExternalLink size={12} /> Visit site
+                </a>
+              )}
+              {(info?.notice?.apiKeyUrl || info?.apiKeyUrl) && (
+                <a
+                  href={info.notice?.apiKeyUrl || info.apiKeyUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary-400 hover:underline inline-flex items-center gap-1"
+                >
                   <ExternalLink size={12} /> Get API Key
                 </a>
               )}
               {allServiceKinds.length > 0 && (
                 <div className="flex flex-wrap gap-1">
-                  {allServiceKinds.map(kind => (
-                    <span key={kind} className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${TYPE_BADGE_STYLES[kind] || TYPE_BADGE_STYLES.llm}`}>
-                      {kind}
-                    </span>
-                  ))}
+                  {allServiceKinds.map((kind) => {
+                    const badge = (
+                      TYPE_BADGE_STYLES[kind] || TYPE_BADGE_STYLES.llm
+                    )
+                    const active = routeKind === kind
+                      ? ' ring-1 ring-primary-400/60'
+                      : ''
+                    return (
+                      <span
+                        key={kind}
+                        className={
+                          'inline-flex items-center rounded px-1.5 '
+                          + `py-0.5 text-[10px] font-medium ${badge}${active}`
+                        }
+                      >
+                        {kind}
+                      </span>
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -3502,7 +3561,16 @@ function ProviderDetailPage() {
       <Card>
         <CardContent>
           <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="text-lg font-semibold text-zinc-100">Available Models</h2>
+            <div>
+              <h2 className="text-lg font-semibold text-zinc-100">Available Models</h2>
+              <p className="mt-0.5 text-xs text-zinc-500">
+                {routeKind
+                  ? `Models for kind "${kindConfig?.label || routeKind}"`
+                  : info?.modelCatalogTable
+                    ? 'Shared provider catalog'
+                    : 'Connection model list'}
+              </p>
+            </div>
             {models.length > 0 && (() => {
               const disabledSet = new Set(disabledModelIds)
               const activeIds = models.filter((m) => !disabledSet.has(typeof m === 'string' ? m : m.id))
@@ -3543,13 +3611,27 @@ function ProviderDetailPage() {
         </CardContent>
       </Card>
 
-      {/* ── Chat Test Playground ── */}
-      <ChatTestPlayground
-        providerId={providerId}
-        providerAlias={providerDisplayAlias}
-        models={models}
-        disabledModelIds={disabledModelIds}
-      />
+      {/* ── Test Playground ── */}
+      {routeKind ? (
+        <KindTestPlayground
+          kind={routeKind}
+          providerId={providerId}
+          providerAlias={providerDisplayAlias}
+          connections={connections}
+          models={models.map((m) => {
+            const id = typeof m === 'string' ? m : m.id
+            return { id, type: getModelType(id) }
+          })}
+          disabledModelIds={disabledModelIds}
+        />
+      ) : (
+        <ChatTestPlayground
+          providerId={providerId}
+          providerAlias={providerDisplayAlias}
+          models={models}
+          disabledModelIds={disabledModelIds}
+        />
+      )}
 
       {/* ── Bulk Proxy Modal ── */}
       <Modal

@@ -93,6 +93,7 @@ class ProviderQuota(BaseModel):
     is_active: bool
     quotas: list[QuotaItem] = []
     plan: Optional[str] = None
+    supports_quota_details: bool = False
 
 
 class QuotaListResponse(BaseModel):
@@ -248,6 +249,10 @@ async def get_quota(
     items: list[ProviderQuota] = []
     for conn, quotas, plan in page_rows:
         handler = get_usage_handler(conn.provider)
+        supports_details = (
+            handler is not None
+            and hasattr(handler, "fetch_model_details")
+        )
         # Local-state handlers (grok-cli, …) are cheap DB sums —
         # refresh the visible page so the list is not stuck on
         # stale header snapshots (used always 0).
@@ -294,6 +299,7 @@ async def get_quota(
                 is_active=conn.is_active,
                 quotas=quotas,
                 plan=plan,
+                supports_quota_details=supports_details,
             )
         )
 
