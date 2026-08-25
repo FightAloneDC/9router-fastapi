@@ -113,12 +113,19 @@ async def execute_search(
         provider_data=provider_data,
     )
 
+    usage: dict[str, Any] = {"queries_used": 1}
+    raw_usage = normalized.get("usage")
+    if isinstance(raw_usage, dict):
+        for key in ("total_tokens", "prompt_tokens", "completion_tokens"):
+            if key in raw_usage and raw_usage[key] is not None:
+                usage[key] = int(raw_usage[key])
+
     return {
         "provider": provider_id,
         "query": params["query"],
         "results": normalized["results"],
         "answer": None,
-        "usage": {"queries_used": 1},
+        "usage": usage,
         "metrics": {
             "total_results_available": normalized.get("totalResults"),
         },

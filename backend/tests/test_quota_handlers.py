@@ -78,6 +78,12 @@ from app.providers.voyage_ai.quota import (
     summary_quota_rows as voyage_summary_quota_rows,
     tier1_minute_bars as voyage_tier1_minute_bars,
 )
+from app.providers.jina_ai.quota import (
+    JinaAiUsageHandler,
+    lookup_limits as jina_lookup_limits,
+    resolve_plan as jina_resolve_plan,
+    summary_quota_rows as jina_summary_quota_rows,
+)
 from app.providers.grok_cli.quota import (
     DEAD,
     EXHAUSTED,
@@ -205,6 +211,61 @@ def test_voyage_lookup_limits() -> None:
         "voyage-4-large TPM",
     ]
     assert "voyage-3.5 free tokens" not in grouped_names
+
+
+def test_jina_quota_endpoint_caps_and_free_tokens() -> None:
+    """Jina: endpoint RPM/TPM + operator free tokens from RATE_LIMITS."""
+    from app.providers.jina_ai.config import JinaAiConfig
+    from app.providers.jina_ai.quota import free_token_grant
+
+    cfg = JinaAiConfig()
+    assert "FREE_TOKENS" not in JinaAiConfig.model_fields
+    assert free_token_grant() == cfg.RATE_LIMITS["free"]["tokens"]
+    assert free_token_grant() == 10_000_000
+
+    assert jina_resolve_plan(None) == "free"
+    assert jina_resolve_plan({"accountType": "premium"}) == "premium"
+    assert jina_resolve_plan({"accountType": "payg"}) == "premium"
+    assert jina_resolve_plan({"accountType": "subscribe"}) == "premium"
+    assert jina_resolve_plan({"accountType": "paid"}) == "free"
+    assert jina_lookup_limits("free") == {
+        "rpm": 500,
+        "tpm": 1_000_000,
+    }
+    assert jina_lookup_limits("premium") == {
+        "rpm": 2000,
+        "tpm": 5_000_000,
+    }
+    assert JinaAiUsageHandler.USES_UPSTREAM is False
+    assert "fetch_model_details" not in JinaAiUsageHandler.__dict__
+
+    rows = jina_summary_quota_rows(
+        lifetime_tokens=12_000,
+        minute_requests=3,
+        minute_tokens=400,
+        plan="free",
+        reset_at="2026-08-25T00:01:00+00:00",
+    )
+    by_name = {row["name"]: row for row in rows}
+    assert set(by_name) == {"free tokens", "RPM", "TPM"}
+    assert by_name["free tokens"]["total"] == free_token_grant()
+    assert by_name["free tokens"]["used"] == 12_000
+    assert by_name["RPM"]["total"] == 500
+    assert by_name["RPM"]["used"] == 3
+    assert by_name["TPM"]["total"] == 1_000_000
+    assert by_name["TPM"]["used"] == 400
+
+    premium = jina_summary_quota_rows(
+        lifetime_tokens=0,
+        minute_requests=0,
+        minute_tokens=0,
+        plan="premium",
+        reset_at=None,
+    )
+    prem = {row["name"]: row for row in premium}
+    assert set(prem) == {"RPM", "TPM"}
+    assert prem["RPM"]["total"] == 2000
+    assert prem["TPM"]["total"] == 5_000_000
 
 
 def test_get_handler_known():

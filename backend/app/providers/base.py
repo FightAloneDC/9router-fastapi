@@ -67,6 +67,9 @@ class BaseProviderConfig(BaseModel):
     SYNC_DISABLED_WITH_MODEL_LIST: bool = False
     # When True, model list lives in provider_models (not connection blobs).
     MODEL_CATALOG_TABLE: bool = False
+    # Former provider ids / aliases that resolve to this provider
+    # (one connection, one API key — never split by service kind).
+    LEGACY_IDS: list[str] = []
 
     # ── Runtime (from DB connection, not .env) ──────────────────────────
     API_KEY: str = ""

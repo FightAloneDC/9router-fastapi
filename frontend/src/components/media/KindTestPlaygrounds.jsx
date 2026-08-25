@@ -5,7 +5,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import {
   Play, Copy, Check, Volume2, Mic, Upload, FileAudio, ImageIcon,
-  Download, Search, Loader2,
+  Download, Search, Loader2, Globe,
 } from 'lucide-react'
 import Card, { CardContent, CardHeader, CardTitle } from '../ui/Card'
 import Button from '../ui/Button'
@@ -14,6 +14,12 @@ import { copyToClipboard } from '../../utils/clipboard'
 
 function inferPlaygroundModelType(modelId) {
   const mid = (modelId || '').toLowerCase()
+  if (mid === 'search' || mid === 'websearch' || mid === 'web-search') {
+    return 'webSearch'
+  }
+  if (mid === 'reader' || mid === 'webfetch' || mid === 'web-fetch') {
+    return 'webFetch'
+  }
   // rerank before embedding — e.g. gte-rerank-v2
   if (/rerank/.test(mid)) return 'rerank'
   if (/embed|e5-|bge-|gte-|nomic|cohere-embed|voyage-/.test(mid)) {
@@ -1185,6 +1191,182 @@ function ImageTestPlayground({
 }
 
 
+/* ════════════════════════════════════════════════════════════════
+   WebFetchTestPlayground — real API test for webFetch providers
+   ════════════════════════════════════════════════════════════════ */
+function WebFetchTestPlayground({ providerId }) {
+  const token = useAuthStore(s => s.token)
+  const [url, setUrl] = useState('https://example.com')
+  const [format, setFormat] = useState('markdown')
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState('')
+  const [latency, setLatency] = useState(null)
+  const [copiedCurl, setCopiedCurl] = useState(false)
+  const [copiedRes, setCopiedRes] = useState(false)
+
+  const buildBody = () => ({
+    provider: providerId,
+    url: url.trim(),
+    format,
+  })
+
+  const endpoint = typeof window !== 'undefined'
+    ? window.location.origin
+    : 'http://localhost:9000'
+  const curlBody = JSON.stringify(buildBody(), null, 2)
+    .replace(/'/g, "'\\''")
+  const curlSnippet = (
+    `curl -X POST ${endpoint}/v1/web/fetch \\\n` +
+    `  -H "Content-Type: application/json" \\\n` +
+    `  -H "Authorization: Bearer ${token || 'YOUR_TOKEN'}" \\\n` +
+    `  -d '${curlBody}'`
+  )
+
+  const handleRun = async () => {
+    if (!url.trim()) return
+    setRunning(true)
+    setError('')
+    setResult(null)
+    setLatency(null)
+    const start = Date.now()
+    try {
+      const res = await fetch('/v1/web/fetch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token || ''}`,
+        },
+        body: JSON.stringify(buildBody()),
+      })
+      const data = await res.json()
+      setLatency(Date.now() - start)
+      if (!res.ok) {
+        throw new Error(
+          data.error?.message || `HTTP ${res.status}`,
+        )
+      }
+      setResult(data)
+    } catch (e) {
+      setError(e.message)
+      setLatency(Date.now() - start)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const preview = (() => {
+    if (!result) return ''
+    if (typeof result.content === 'string') return result.content
+    if (result.content?.text) return result.content.text
+    return JSON.stringify(result, null, 2)
+  })()
+
+  return (
+    <Card className="bg-zinc-900/50 border-zinc-800">
+      <CardHeader>
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Globe size={16} className="text-primary-400" />
+          Web Fetch Test Playground
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2 sm:col-span-1">
+            <label className="text-xs text-zinc-400 mb-1 block">
+              URL
+            </label>
+            <input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://…"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200"
+              onKeyDown={(e) => e.key === 'Enter' && handleRun()}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">
+              Format
+            </label>
+            <select
+              value={format}
+              onChange={(e) => setFormat(e.target.value)}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200"
+            >
+              <option value="markdown">markdown</option>
+              <option value="text">text</option>
+              <option value="html">html</option>
+            </select>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            onClick={handleRun}
+            disabled={running || !url.trim()}
+          >
+            {running ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <Play size={14} />
+            )}
+            <span className="ml-1.5">Run</span>
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={async () => {
+              await copyToClipboard(curlSnippet)
+              setCopiedCurl(true)
+              setTimeout(() => setCopiedCurl(false), 1500)
+            }}
+          >
+            {copiedCurl ? <Check size={14} /> : <Copy size={14} />}
+            <span className="ml-1.5">cURL</span>
+          </Button>
+          {latency != null && (
+            <span className="text-xs text-zinc-500 self-center">
+              {latency} ms
+            </span>
+          )}
+        </div>
+        {error && (
+          <div className="text-sm text-red-400 break-words">
+            {error}
+          </div>
+        )}
+        {result && (
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs text-zinc-400">Response</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={async () => {
+                  await copyToClipboard(
+                    typeof result === 'string'
+                      ? result
+                      : JSON.stringify(result, null, 2),
+                  )
+                  setCopiedRes(true)
+                  setTimeout(() => setCopiedRes(false), 1500)
+                }}
+              >
+                {copiedRes ? <Check size={14} /> : <Copy size={14} />}
+              </Button>
+            </div>
+            <pre className="max-h-64 overflow-auto rounded-lg bg-zinc-950 border border-zinc-800 p-3 text-xs text-zinc-300 whitespace-pre-wrap break-words">
+              {preview.slice(0, 8000)}
+              {preview.length > 8000 ? '\n…' : ''}
+            </pre>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+
 export default function KindTestPlayground({
   kind,
   providerId,
@@ -1203,6 +1385,9 @@ export default function KindTestPlayground({
   if (kind === 'tts') return <TtsTestPlayground {...props} />
   if (kind === 'stt') return <SttTestPlayground {...props} />
   if (kind === 'webSearch') return <SearchTestPlayground {...props} />
+  if (kind === 'webFetch') {
+    return <WebFetchTestPlayground {...props} />
+  }
   if (kind === 'image') return <ImageTestPlayground {...props} />
   if (kind === 'embedding') {
     return <EmbeddingTestPlayground {...props} />

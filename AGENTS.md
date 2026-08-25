@@ -103,12 +103,19 @@ Short rules only. Details: [`docs/architecture/handbook.md`](docs/architecture/h
    `provider_connections`.
 3. **PS Rule** — Provider-specific logic lives in
    `backend/app/providers/<id>/` only. No hardcoded provider checks
-   in routers, services, or frontend.
+   in routers, services, or frontend. **Static constants** for that
+   provider (hosts, default models, format maps, plan maps,
+   synthetic catalog rows, `RATE_LIMITS`, …) live in that folder's
+   `config.py` — do not scatter module-level `_FOO` maps across
+   `handler.py` / `models.py` / `quota.py`. Names intended for
+   import from outside that file must **not** use a leading `_`
+   (`_` means private in Python).
 4. **catalogStore** — Frontend provider metadata comes from
    `/providers/catalog`. Do not hardcode provider lists.
 5. **Provider FLOW.md** — Per-provider flow from that provider's
-   code only. Update after changes; missing FLOW.md beats a shared
-   template. Process:
+   code only. Do not generalize peers (each vendor differs in
+   character and request/response fields). Update after changes;
+   missing FLOW.md beats a shared template. Process:
    [`docs/architecture/provider-optimization-sop.md`](docs/architecture/provider-optimization-sop.md).
 6. **Provider detail UI** — `/providers/:id`
    (`ProviderDetailPage`) is canonical. `/media-providers/:kind/:id`
@@ -146,6 +153,10 @@ Short rules only. Details: [`docs/architecture/handbook.md`](docs/architecture/h
 - Max 80 characters per line
 - Guard clause pattern (early return)
 - snake_case / UPPER_CASE for constants
+- Leading `_` = **private** to that module only. If a function or
+  module-level name must be imported / called from another file
+  (including tests that treat it as API), **do not** prefix it
+  with `_`. Public names stay unprefixed; private helpers keep `_`.
 - One function = one responsibility
 - Import order: stdlib, third-party, local (blank line between)
 - async/await for DB and HTTP

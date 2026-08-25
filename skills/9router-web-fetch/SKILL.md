@@ -1,6 +1,6 @@
 ---
 name: 9router-web-fetch
-description: Fetch URL → markdown / text / HTML via 9Router /v1/web/fetch using Firecrawl / Jina Reader / Tavily Extract / Exa Contents. Use when the user wants to scrape a webpage or convert a URL to markdown.
+description: Fetch URL → markdown / text / HTML via 9Router /v1/web/fetch using Firecrawl / Jina AI / Tavily Extract / Exa Contents. Use when the user wants to scrape a webpage or convert a URL to markdown.
 ---
 
 # 9Router — Web Fetch
@@ -32,16 +32,22 @@ curl $NINEROUTER_URL/v1/models/webFetch | jq '.data[].id'
 curl -X POST $NINEROUTER_URL/v1/web/fetch \
   -H "Authorization: Bearer $NINEROUTER_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"jina-reader","url":"https://example.com","format":"markdown"}'
+  -d '{"model":"jina-ai","url":"https://example.com","format":"markdown"}'
 ```
 
 ## Response shape
 
 ```json
 {
-  "provider": "jina-reader",
+  "provider": "jina-ai",
   "url": "https://example.com",
   "title": "...",
   "content": { "format": "markdown", "text": "...", "length": 1234 }
 }
 ```
+
+## Quirks
+
+- `jina-ai` / `jina` (also legacy `jina-reader`): GET
+  `https://r.jina.ai/{url}` with `X-Return-Format`. Same API key
+  as embed/rerank/search. Catalog row `reader`.

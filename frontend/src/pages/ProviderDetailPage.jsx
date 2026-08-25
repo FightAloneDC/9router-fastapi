@@ -131,6 +131,13 @@ const TYPE_BADGE_STYLES = {
 
 function inferModelType(modelId) {
   const mid = (modelId || '').toLowerCase()
+  // Exact synthetic ids used by multi-kind providers (e.g. jina-ai)
+  if (mid === 'search' || mid === 'websearch' || mid === 'web-search') {
+    return 'webSearch'
+  }
+  if (mid === 'reader' || mid === 'webfetch' || mid === 'web-fetch') {
+    return 'webFetch'
+  }
   // rerank must precede embedding — e.g. gte-rerank-v2 contains "gte-"
   if (/rerank/.test(mid)) return 'rerank'
   if (/embed|e5-|bge-|gte-|nomic|cohere-embed|voyage-/.test(mid)) return 'embedding'
@@ -1694,7 +1701,16 @@ function ProviderDetailPage() {
       const modelTypes = ps.modelTypes || {}
       if (modelTypes[modelId]) return modelTypes[modelId]
     }
-    // Try to get from model objects with type field
+    // Catalog / connection model objects with type field
+    for (const m of models) {
+      if (
+        typeof m === 'object'
+        && m?.id === modelId
+        && m.type
+      ) {
+        return m.type
+      }
+    }
     for (const conn of connections) {
       const connModels = conn.models || []
       const found = connModels.find(m => (typeof m === 'string' ? m : m.id) === modelId)
@@ -1702,7 +1718,7 @@ function ProviderDetailPage() {
     }
     // Fallback to client-side inference
     return inferModelType(modelId)
-  }, [connections])
+  }, [connections, models])
 
   // ── Fetch model aliases ──
   const fetchAliases = useCallback(async () => {
@@ -1760,11 +1776,33 @@ function ProviderDetailPage() {
       )
       setProxyPools((proxyRes.data || []).filter((p) => p.is_active !== false))
 
-      // Models returned once (union), not duplicated per connection
-      const mergedModels = (payload.models || []).map((m) =>
-        typeof m === 'string' ? m : m.id
-      )
-      const modelsList = [...new Set(mergedModels)]
+      // Models returned once (union), not duplicated per connection.
+      // Keep {id, type} when present — media kind filter needs type
+      // (e.g. jina-ai ``search`` → webSearch). Stripping to bare ids
+      // made inferModelType fall back to ``llm`` and empty the list.
+      const mergedModels = []
+      const seenIds = new Set()
+      for (const m of payload.models || []) {
+        if (typeof m === 'string') {
+          if (!m || seenIds.has(m)) continue
+          seenIds.add(m)
+          mergedModels.push(m)
+          continue
+        }
+        const mid = m?.id
+        if (!mid || seenIds.has(mid)) continue
+        seenIds.add(mid)
+        if (m.type) {
+          mergedModels.push({
+            id: mid,
+            type: m.type,
+            ...(m.name ? { name: m.name } : {}),
+          })
+        } else {
+          mergedModels.push(mid)
+        }
+      }
+      const modelsList = mergedModels
       setModels(modelsList)
 
       if (filtered.length > 0 || modelsList.length > 0) {
@@ -1783,7 +1821,9 @@ function ProviderDetailPage() {
         if (fetchGen !== connFetchGen.current) return
 
         const disabledSet = new Set(disabledIds)
-        const enabledIds = modelsList.filter((m) => !disabledSet.has(m))
+        const enabledIds = modelsList
+          .map((m) => (typeof m === 'string' ? m : m.id))
+          .filter((mid) => !disabledSet.has(mid))
         setEnabledModelIds(new Set(enabledIds))
       } else {
         setModels([])
@@ -1967,7 +2007,8 @@ function ProviderDetailPage() {
     const trimmed = (model || newModel).trim()
     if (!trimmed) return
     const prefixed = trimmed.includes('/') ? trimmed : `${providerId}/${trimmed}`
-    if (models.includes(prefixed) || models.includes(trimmed)) return
+    const knownIds = models.map((m) => (typeof m === 'string' ? m : m.id))
+    if (knownIds.includes(prefixed) || knownIds.includes(trimmed)) return
     if (info?.modelCatalogTable) {
       setNewModel('')
       try {

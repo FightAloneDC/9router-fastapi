@@ -28,6 +28,7 @@ def _build_alias_to_id() -> dict[str, str]:
 
     Each provider's config has an ALIAS field. Also includes provider ID itself
     as a key (for cases like "openrouter" → "openrouter").
+    ``LEGACY_IDS`` map old ids/aliases onto the current provider.
     When multiple providers share an alias (e.g. kilo-gateway + kilocode),
     the last one wins in this dict. Use ALIAS_TO_IDS for all matches.
     """
@@ -36,11 +37,16 @@ def _build_alias_to_id() -> dict[str, str]:
     for name in AVAILABLE_PROVIDERS:
         try:
             p = Provider(name)
-            alias: str = p.config().ALIAS
+            cfg = p.config()
+            alias: str = cfg.ALIAS
             if alias:
                 mapping[alias] = name
             # Also map provider ID to itself (for "openrouter" → "openrouter")
             mapping[name] = name
+            for legacy in getattr(cfg, "LEGACY_IDS", None) or []:
+                key = str(legacy).strip()
+                if key:
+                    mapping[key] = name
         except (ValueError, ModuleNotFoundError):
             pass
     return mapping
@@ -57,10 +63,18 @@ def _build_alias_to_ids() -> dict[str, list[str]]:
     for name in AVAILABLE_PROVIDERS:
         try:
             p = Provider(name)
-            alias: str = p.config().ALIAS
+            cfg = p.config()
+            alias: str = cfg.ALIAS
             if alias:
                 mapping.setdefault(alias, []).append(name)
             mapping.setdefault(name, []).append(name)
+            for legacy in getattr(cfg, "LEGACY_IDS", None) or []:
+                key = str(legacy).strip()
+                if not key:
+                    continue
+                bucket = mapping.setdefault(key, [])
+                if name not in bucket:
+                    bucket.append(name)
         except (ValueError, ModuleNotFoundError):
             pass
     return mapping

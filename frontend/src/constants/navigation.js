@@ -42,7 +42,8 @@ export const mediaProviderKinds = [
   { path: '/media-providers/rerank', label: 'Rerank', icon: ArrowUpDown, description: 'Reranking models' },
   { path: '/media-providers/tts', label: 'Text to Speech', icon: Volume2, description: 'Text-to-speech providers' },
   { path: '/media-providers/stt', label: 'Speech to Text', icon: Mic, description: 'Speech-to-text providers' },
-  { path: '/media-providers/webSearch', label: 'Web', icon: Search, description: 'Web search & fetch providers' },
+  { path: '/media-providers/webSearch', label: 'Search', icon: Search, description: 'Web search providers' },
+  { path: '/media-providers/webFetch', label: 'Fetch', icon: Globe, description: 'Web fetch / extract providers' },
   { path: '/media-providers/image', label: 'Images', icon: Image, description: 'Image generation providers' },
 ]
 
@@ -91,7 +92,8 @@ export const pageTitles = {
   '/media-providers/rerank': { title: 'Rerank', description: 'Reranking models', icon: ArrowUpDown },
   '/media-providers/tts': { title: 'Text to Speech', description: 'Text-to-speech providers', icon: Volume2 },
   '/media-providers/stt': { title: 'Speech to Text', description: 'Speech-to-text providers', icon: Mic },
-  '/media-providers/webSearch': { title: 'Web', description: 'Web search & fetch providers', icon: Search },
+  '/media-providers/webSearch': { title: 'Search', description: 'Web search providers', icon: Search },
+  '/media-providers/webFetch': { title: 'Fetch', description: 'Web fetch / extract providers', icon: Globe },
   '/media-providers/image': { title: 'Images', description: 'Image generation providers', icon: Image },
   '/combos': { title: 'Combos', description: 'Manage provider combos and routing strategies', icon: Combine },
   '/proxy-pools': { title: 'Proxy Pools', description: 'Manage proxy pool configurations', icon: Network },

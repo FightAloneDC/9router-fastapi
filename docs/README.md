@@ -13,7 +13,7 @@ under [`archives/`](archives/).
 | [Production ops](operations/production.md) | Deploy, UI release, recreate app |
 | [Development ops](operations/development.md) | Local/host workflow and tests |
 | [Gotchas](gotchas/spa-routing.md) | SPA vs API collisions, icons, DEBUG docs |
-| [Provider optimization SOP](architecture/provider-optimization-sop.md) | Per-vendor catalog/quota/FLOW.md process (not a template) |
+| [Provider optimization SOP](architecture/provider-optimization-sop.md) | Per-vendor full-path research; do not generalize peers |
 
 Agent behavioral rules: [`AGENTS.md`](../AGENTS.md) (not project detail).
 

@@ -169,13 +169,23 @@ async def search_endpoint(
     elapsed_ms: int = int((time.time() - start_time) * 1000)
     search_result["metrics"]["response_time_ms"] = elapsed_ms
 
-    # Track usage (search — no token counts)
+    usage = search_result.get("usage") or {}
+    prompt_tokens = int(
+        usage.get("prompt_tokens")
+        or usage.get("total_tokens")
+        or 0
+    )
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+
     await save_request_tracking(
         db,
         provider=provider_id,
         model=provider_id,
         connection_id=str(conn.id) if conn else None,
         endpoint="/v1/search",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        tokens_json=usage if isinstance(usage, dict) else None,
         latency_ttft=elapsed_ms,
         latency_total=elapsed_ms,
         request_body=body,

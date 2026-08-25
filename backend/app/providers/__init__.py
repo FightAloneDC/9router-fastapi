@@ -54,7 +54,7 @@ PROVIDER_VERTEX_PARTNER = "vertex-partner"
 PROVIDER_ASSEMBLYAI = "assemblyai"
 PROVIDER_NANOBANANA = "nanobanana"
 
-# Embedding providers
+# Embedding / Jina multi-kind (embed+rerank+search+fetch)
 PROVIDER_JINA_AI = "jina-ai"
 PROVIDER_VOYAGE_AI = "voyage-ai"
 
@@ -72,7 +72,6 @@ PROVIDER_GOOGLE_PSE = "google-pse"
 # Web fetch providers
 PROVIDER_FIRECRAWL = "firecrawl"
 PROVIDER_CRAWL4AI = "crawl4ai"
-PROVIDER_JINA_READER = "jina-reader"
 
 # Image providers
 PROVIDER_FAL_AI = "fal-ai"
@@ -188,7 +187,6 @@ AVAILABLE_PROVIDERS: list[str] = [
     # Web fetch
     PROVIDER_FIRECRAWL,
     PROVIDER_CRAWL4AI,
-    PROVIDER_JINA_READER,
     # Image
     PROVIDER_FAL_AI,
     PROVIDER_STABILITY_AI,

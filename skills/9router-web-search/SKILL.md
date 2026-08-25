@@ -1,6 +1,6 @@
 ---
 name: 9router-web-search
-description: Web search via 9Router /v1/search using Tavily / Exa / Brave / Serper / SearXNG / Google PSE / You.com. Use when the user wants to search the web or look up current information.
+description: Web search via 9Router /v1/search using Tavily / Exa / Brave / Serper / SearXNG / Google PSE / You.com / Jina AI. Use when the user wants to search the web or look up current information.
 ---
 
 # 9Router — Web Search
@@ -47,3 +47,10 @@ curl -X POST $NINEROUTER_URL/v1/search \
   "usage": { "queries_used": 1 }
 }
 ```
+
+## Quirks
+
+- `jina-ai` / `jina` (also legacy `jina-search`): POST
+  `https://s.jina.ai/`; unified `query` → body `q`;
+  `country`→`gl`, `language`→`hl`, `max_results`→`num`.
+  Same API key as embed/rerank/reader. Catalog row `search`.

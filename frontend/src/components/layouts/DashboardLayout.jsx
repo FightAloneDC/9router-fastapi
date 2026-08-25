@@ -84,7 +84,10 @@ function MediaProvidersAccordion({ isOpen, onToggle, subItems, pathname, closeMo
         <div className="ml-3 pl-3 border-l border-zinc-800 mt-1 space-y-0.5">
           {subItems.map((sub) => {
             const SubIcon = sub.icon
-            const isSubActive = pathname === sub.path
+            const isSubActive = (
+              pathname === sub.path
+              || pathname.startsWith(`${sub.path}/`)
+            )
             return (
               <Link
                 key={sub.path}

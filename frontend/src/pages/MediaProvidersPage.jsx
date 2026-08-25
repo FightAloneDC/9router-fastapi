@@ -160,24 +160,11 @@ export default function MediaProvidersPage() {
   const fetchTabProviders = useCallback(async (kind) => {
     setTabLoading(true)
     try {
-      if (kind === 'webSearch' || kind === 'webFetch') {
-        // Web tab: fetch both webSearch and webFetch
-        const [searchRes, fetchRes] = await Promise.all([
-          providersApi.getMediaProviders('webSearch'),
-          providersApi.getMediaProviders('webFetch'),
-        ])
-        setTabProviders((prev) => ({
-          ...prev,
-          webSearch: searchRes.data || [],
-          webFetch: fetchRes.data || [],
-        }))
-      } else {
-        const res = await providersApi.getMediaProviders(kind)
-        setTabProviders((prev) => ({
-          ...prev,
-          [kind]: res.data || [],
-        }))
-      }
+      const res = await providersApi.getMediaProviders(kind)
+      setTabProviders((prev) => ({
+        ...prev,
+        [kind]: res.data || [],
+      }))
     } catch {
       // Keep existing data on error
     } finally {
@@ -207,7 +194,8 @@ export default function MediaProvidersPage() {
     { id: 'rerank', label: 'Rerank' },
     { id: 'tts', label: 'TTS' },
     { id: 'stt', label: 'STT' },
-    { id: 'webSearch', label: 'Web' },
+    { id: 'webSearch', label: 'Search' },
+    { id: 'webFetch', label: 'Fetch' },
     { id: 'image', label: 'Images' },
   ]
 
@@ -218,33 +206,6 @@ export default function MediaProvidersPage() {
   // Render content for active tab
   const renderContent = () => {
     if (tabLoading) return <Loading />
-
-    if (activeKind === 'webSearch' || activeKind === 'webFetch') {
-      // Web tab shows both search and fetch
-      const searchConfig = useCatalogStore.getState().mediaKinds.find((k) => k.id === 'webSearch')
-      const fetchConfig = useCatalogStore.getState().mediaKinds.find((k) => k.id === 'webFetch')
-      return (
-        <div className="space-y-6">
-          {searchConfig && (
-            <KindSection
-              kind={searchConfig}
-              providers={tabProviders.webSearch || []}
-              connections={connections}
-            />
-          )}
-          {fetchConfig && (
-            <>
-              <div className="border-t border-zinc-800" />
-              <KindSection
-                kind={fetchConfig}
-                providers={tabProviders.webFetch || []}
-                connections={connections}
-              />
-            </>
-          )}
-        </div>
-      )
-    }
 
     const kindConfig = useCatalogStore.getState().mediaKinds.find((k) => k.id === activeKind)
     if (!kindConfig) {
@@ -273,7 +234,7 @@ export default function MediaProvidersPage() {
             key={tab.id}
             onClick={() => handleTabClick(tab.id)}
             className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
-              activeKind === tab.id || (tab.id === 'webSearch' && (activeKind === 'webSearch' || activeKind === 'webFetch'))
+              activeKind === tab.id
                 ? 'border-blue-500 text-blue-400'
                 : 'border-transparent text-zinc-400 hover:text-zinc-200'
             }`}

@@ -155,6 +155,13 @@ function formatQuotaNum(n) {
   return n.toLocaleString('en-US')
 }
 
+/** Integer "% left" — floor so tiny usage never rounds up to 100. */
+function formatRemainingPct(pct) {
+  const n = Number(pct)
+  if (!Number.isFinite(n)) return 0
+  return Math.floor(Math.min(100, Math.max(0, n)))
+}
+
 function getLowCount(quotas) {
   if (!quotas) return 0
   return quotas.filter((q) => (q.remaining_percentage ?? 100) <= 30).length
@@ -352,7 +359,7 @@ function QuotaRow({ quota }) {
               {quota.total > 0 ? formatQuotaNum(quota.total) : '∞'}
             </span>
             <span className={`font-medium ${colors.text}`}>
-              {pct.toFixed(0)}% left
+              {formatRemainingPct(pct)}% left
             </span>
           </div>
         </div>
@@ -668,7 +675,9 @@ function GroupedMetricRow({ quota, label }) {
       </div>
       <div className="flex items-center justify-between mt-1">
         <span className={`text-[10px] font-medium ${colors.text}`}>
-          {unlimited ? 'No cap' : `${pct.toFixed(0)}% left`}
+          {unlimited
+            ? 'No cap'
+            : `${formatRemainingPct(pct)}% left`}
         </span>
         {countdown && (
           <span className="text-[10px] text-zinc-600">
@@ -707,7 +716,7 @@ function ModelQuotaGroup({ group }) {
           className={`text-[10px] font-medium tabular-nums
             ${colors.text}`}
         >
-          {`${worst.toFixed(0)}%`}
+          {`${formatRemainingPct(worst)}%`}
         </span>
       </header>
       <div className="divide-y divide-zinc-800/50">

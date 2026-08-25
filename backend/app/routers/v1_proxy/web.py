@@ -130,12 +130,26 @@ async def web_fetch(
 
             content: str = resp.text
 
-            # Track usage (web fetch — no token counts)
+            try:
+                prompt_tokens = int(
+                    resp.headers.get("x-usage-tokens") or 0
+                )
+            except (TypeError, ValueError):
+                prompt_tokens = 0
+
+            # Track usage (web fetch — tokens when upstream reports)
             await save_request_tracking(
                 db,
                 provider=provider_id,
                 model=provider_id,
+                connection_id=str(conn.id) if conn else None,
                 endpoint="/v1/web/fetch",
+                prompt_tokens=prompt_tokens,
+                tokens_json=(
+                    {"total_tokens": prompt_tokens}
+                    if prompt_tokens
+                    else None
+                ),
                 latency_ttft=total_latency_ms,
                 latency_total=total_latency_ms,
                 request_body=body,

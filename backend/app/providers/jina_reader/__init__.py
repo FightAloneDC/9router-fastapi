@@ -1,1 +1,0 @@
-"""Jina Reader provider."""
