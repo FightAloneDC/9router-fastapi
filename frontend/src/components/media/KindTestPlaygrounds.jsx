@@ -33,12 +33,43 @@ function inferPlaygroundModelType(modelId) {
   return 'llm'
 }
 
-function stripPlaygroundPrefix(id, alias, providerId) {
-  let raw = String(id || '')
-  for (const head of [alias, providerId]) {
-    const p = `${head}/`
-    if (head && raw.startsWith(p)) raw = raw.slice(p.length)
+function formatPlaygroundError(data, status) {
+  const flattenMsg = (msg) => {
+    if (typeof msg === 'string' && msg.trim()) return msg.trim()
+    if (Array.isArray(msg)) {
+      const parts = msg.map((item) => {
+        if (typeof item === 'string') return item
+        if (item && typeof item === 'object') {
+          return item.msg || item.message || JSON.stringify(item)
+        }
+        return ''
+      }).filter(Boolean)
+      if (parts.length) return parts.join('; ')
+    }
+    if (msg && typeof msg === 'object') {
+      if (Array.isArray(msg.detail)) return flattenMsg(msg.detail)
+      if (typeof msg.detail === 'string') return msg.detail.trim()
+      if (typeof msg.message === 'string') return msg.message.trim()
+    }
+    return ''
   }
+
+  const fromError = flattenMsg(data?.error?.message) || flattenMsg(data?.error)
+  if (fromError) return fromError
+  const fromMessage = flattenMsg(data?.message)
+  if (fromMessage) return fromMessage
+  const detail = flattenMsg(data?.detail)
+  if (detail) return detail
+  return `HTTP ${status}`
+}
+
+function stripPlaygroundPrefix(id, alias, _providerId) {
+  // Catalog ids may include a vendor path (e.g. nvidia/llama-…,
+  // Qwen/…, snowflake/…). Only strip the router alias if already
+  // present — never strip providerId when it differs from alias.
+  let raw = String(id || '')
+  const p = alias ? `${alias}/` : ''
+  if (p && raw.startsWith(p)) raw = raw.slice(p.length)
   return raw
 }
 
@@ -160,7 +191,7 @@ function EmbeddingTestPlayground({
       const res = await fetch('/v1/embeddings', { method: 'POST', headers, body: JSON.stringify(buildBody()) })
       const latencyMs = Date.now() - start
       const data = await res.json()
-      if (!res.ok) setError(data?.error?.message || data?.error || `HTTP ${res.status}`)
+      if (!res.ok) setError(formatPlaygroundError(data, res.status))
       else { setResult(data); setLatency(latencyMs) }
     } catch (e) { setError(e.message || 'Network error') }
     finally { setRunning(false) }
@@ -309,7 +340,7 @@ function RerankTestPlayground({
       const res = await fetch('/v1/rerank', { method: 'POST', headers, body: JSON.stringify(buildBody()) })
       const latencyMs = Date.now() - start
       const data = await res.json()
-      if (!res.ok) setError(data?.error?.message || data?.error || `HTTP ${res.status}`)
+      if (!res.ok) setError(formatPlaygroundError(data, res.status))
       else { setResult(data); setLatency(latencyMs) }
     } catch (e) { setError(e.message || 'Network error') }
     finally { setRunning(false) }
@@ -480,7 +511,7 @@ function TtsTestPlayground({
       setLatency(latencyMs)
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
-        setError(d?.error?.message || d?.error || `HTTP ${res.status}`)
+        setError(formatPlaygroundError(d, res.status))
         return
       }
       if (responseFormat === 'json') {
@@ -736,7 +767,7 @@ function SttTestPlayground({
         try {
           if (ct.includes('application/json')) {
             const d = await res.json()
-            msg = d?.error?.message || d?.detail || d?.error || msg
+            msg = formatPlaygroundError(d, res.status)
           } else {
             const t = await res.text()
             if (t) msg = t

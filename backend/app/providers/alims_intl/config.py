@@ -261,6 +261,25 @@ class AlimsIntlConfig(BaseProviderConfig):
         "qwen-plus-character-ja": {"rpm": 120, "tpm": 500000},
     }
 
+    # ── Rerank hosts ────────────────────────────────────────────────────
+    # Public DashScope uses compatible-api for rerank; chat stays on
+    # compatible-mode. Workspace MAAS hosts keep compatible-mode/v1.
+    # Docs: https://docs.qwencloud.com/api-reference/rerank/openai-rerank
+    RERANK_COMPAT_MODE_SUFFIX: str = "/compatible-mode/v1"
+    RERANK_COMPAT_API_SUFFIX: str = "/compatible-api/v1"
+    RERANK_PUBLIC_HOSTS: tuple[str, ...] = (
+        "https://dashscope-intl.aliyuncs.com",
+        "https://dashscope.aliyuncs.com",
+    )
+
+    # ── Catalog extras (not in compatible-mode GET /models) ───────────
+    # Text Rerank API docs — live /models omits these ids.
+    # https://www.alibabacloud.com/help/en/model-studio/text-rerank-api
+    MODEL_TYPE_OVERRIDES: dict[str, str] = {
+        "qwen3-rerank": "rerank",
+        "qwen3-vl-rerank": "rerank",
+        "gte-rerank-v2": "rerank",
+    }
 
     # ── Bulk Import ─────────────────────────────────────────────────────
     SUPPORTS_BULK_IMPORT: bool = True

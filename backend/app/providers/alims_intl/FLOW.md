@@ -43,6 +43,13 @@ third-party LLM, embedding, rerank, image, video, TTS, and STT.
 `MODEL_CATALOG_TABLE` is True. Rows in `provider_models`.
 Fetch/clear do not write catalogs back into connection blobs.
 
+Live `GET {BASE_URL}/models` does **not** list Text Rerank
+ids. `models.fetch_models` merges `MODEL_TYPE_OVERRIDES`
+(`qwen3-rerank`, `qwen3-vl-rerank`, `gte-rerank-v2`) so the
+rerank media page has Available Models after Fetch Models.
+Handler `fetch_models` delegates to that module (same pattern
+as jina-ai).
+
 ## Quota tracker
 
 `AlimsIntlUsageHandler` (`USES_UPSTREAM = False`):
@@ -65,10 +72,11 @@ opens a searchable modal for the detail request.
 - `prepare_request`: map `developer` → `system`; strip `think` /
   `thinking`; drop `reasoning_effort` outside
   `low|medium|high|xhigh|max` (and `reasoning` with it).
-- Rerank: `execute_rerank` POSTs
-  `{root}/compatible-mode/v1/reranks` where `root` is the
-  resolved baseUrl with a trailing `/compatible-mode/v1`
-  stripped (`rerank_url`). Default `BASE_URL`, workspace
-  SG/EU hosts that already end in that suffix, and a
-  host-root custom `baseUrl` all produce exactly one
-  compatible-mode segment.
+- Rerank: `execute_rerank` POSTs via `rerank_url(base)`:
+  - Public DashScope (`dashscope-intl` / `dashscope`):
+    `{host}/compatible-api/v1/reranks` (chat stays on
+    `compatible-mode`; that path 404s for rerank).
+  - Workspace MAAS / custom host:
+    `{root}/compatible-mode/v1/reranks` (trailing
+    `compatible-mode|api` stripped once).
+  Hosts/suffixes live on `config.RERANK_*`.

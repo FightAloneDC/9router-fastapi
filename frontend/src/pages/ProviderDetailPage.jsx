@@ -1250,12 +1250,12 @@ function ModelRow({ model, fullModel, alias, copied, onCopy, onSetAlias, onDelet
    ChatTestPlayground — real API test for chat completions
    ════════════════════════════════════════════════════════════════ */
 
-function _stripPlaygroundPrefix(id, alias, providerId) {
+function _stripPlaygroundPrefix(id, alias, _providerId) {
+  // Catalog ids may include a vendor path (e.g. nvidia/llama-…).
+  // Only strip the router alias if already present.
   let raw = String(id || '')
-  for (const head of [alias, providerId]) {
-    const p = `${head}/`
-    if (head && raw.startsWith(p)) raw = raw.slice(p.length)
-  }
+  const p = alias ? `${alias}/` : ''
+  if (p && raw.startsWith(p)) raw = raw.slice(p.length)
   return raw
 }
 

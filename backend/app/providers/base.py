@@ -355,13 +355,26 @@ class BaseProviderHandler:
 
     def _normalize_model(self, m) -> dict:
         """Normalize a model entry to {id, name, type}."""
-        from app.routers.providers.constants import infer_model_type, _get_model_type_overrides
+        from app.routers.providers.constants import (
+            resolve_model_type,
+        )
 
         if isinstance(m, str):
-            return {"id": m, "name": m, "type": infer_model_type(m)}
-        model_id = m.get("id") or m.get("name") or m.get("model", "")
-        name = m.get("name") or m.get("display_name") or m.get("displayName") or m.get("id", "")
-        model_type = m.get("type") or _get_model_type_overrides().get(model_id) or infer_model_type(model_id)
+            return {
+                "id": m,
+                "name": m,
+                "type": resolve_model_type(m),
+            }
+        model_id = (
+            m.get("id") or m.get("name") or m.get("model", "")
+        )
+        name = (
+            m.get("name")
+            or m.get("display_name")
+            or m.get("displayName")
+            or m.get("id", "")
+        )
+        model_type = resolve_model_type(model_id, m.get("type"))
         return {"id": model_id, "name": name, "type": model_type}
 
     def build_upstream_url(self, base_url: str, stream: bool = False, data: dict | None = None, model: str = "") -> str:

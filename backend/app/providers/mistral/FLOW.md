@@ -14,9 +14,10 @@ connection. Public docs do not publish numeric RPS/TPM tables
 | File | Role |
 |------|------|
 | `config.py` | Identity, catalog flag, empty `RATE_LIMITS`, embed override, bulk flags |
-| `handler.py` | sanitize request; capability-driven reasoning; unwrap/SSE flatten; no farm rotate on 422/429/labs |
+| `handler.py` | sanitize request; capability-driven reasoning; unwrap/SSE flatten; embeddings: drop OpenAI `dimensions` (mistral-embed fixed 1024); map → `output_dimension` for codestral-embed; no farm rotate on 422/429/labs |
 | `transform.py` | Drop client-only fields; reasoning via `capabilities.reasoning` cache; clamp effort to none|high; flatten thinking/text content for OpenAI clients |
-| `models.py` | `fetch_models` + cache `capabilities.reasoning` from `/models` |
+| `models.py` | `fetch_models` + cache `capabilities.reasoning`; upstream `type: base` is ignored — kinds come from overrides/infer |
+
 | `bulk.py` | Farm JSON → email + `token_data.apiKey` |
 | `quota.py` | `MistralUsageHandler`: local logs + optional headers |
 | `__init__.py` | Package marker |
@@ -32,7 +33,8 @@ SERVICE_KINDS        = llm, imageToText, embedding
 MODEL_CATALOG_TABLE  = True
 SUPPORTS_BULK_IMPORT = True
 BULK_IMPORT_FORMAT   = farm-json
-MODEL_TYPE_OVERRIDES = mistral-embed → embedding
+MODEL_TYPE_OVERRIDES = mistral-embed(+variants),
+                       codestral-embed(+variants) → embedding
 RATE_LIMITS          = free: {}, scale: {}
 ```
 

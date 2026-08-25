@@ -381,12 +381,14 @@ def test_alims_rerank_url_default_not_doubled() -> None:
     from app.providers.alims_intl.config import AlimsIntlConfig
     from app.providers.alims_intl.handler import rerank_url
 
+    # Public DashScope chat BASE_URL maps to compatible-api for
+    # rerank (compatible-mode/v1/reranks 404s on this host).
     url = rerank_url(AlimsIntlConfig().BASE_URL)
-    assert url.count("/compatible-mode/v1") == 1
-    assert url.endswith("/compatible-mode/v1/reranks")
+    assert url.count("/compatible-api/v1") == 1
+    assert "/compatible-mode/" not in url
     assert url == (
         "https://dashscope-intl.aliyuncs.com"
-        "/compatible-mode/v1/reranks"
+        "/compatible-api/v1/reranks"
     )
 
 
@@ -406,5 +408,15 @@ def test_alims_rerank_url_shapes() -> None:
     assert rerank_url(
         "https://dashscope-intl.aliyuncs.com"
         "/compatible-mode/v1/"
-    ).count("/compatible-mode/v1") == 1
+    ) == (
+        "https://dashscope-intl.aliyuncs.com"
+        "/compatible-api/v1/reranks"
+    )
+    assert rerank_url(
+        "https://dashscope-intl.aliyuncs.com"
+        "/compatible-api/v1"
+    ) == (
+        "https://dashscope-intl.aliyuncs.com"
+        "/compatible-api/v1/reranks"
+    )
     assert rerank_url("") == "/compatible-mode/v1/reranks"

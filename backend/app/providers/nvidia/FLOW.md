@@ -13,7 +13,7 @@ Success and 429 bodies often omit `X-RateLimit-*` and
 | File | Role |
 |------|------|
 | `config.py` | Identity, catalog flag, `RATE_LIMITS` (free RPM) |
-| `handler.py` | Validate `/models`; TTS `/audio/speech`; STT multipart |
+| `handler.py` | Validate `/models`; TTS; STT; embeddings body map |
 | `models.py` | Shared header-auth `/models` parse |
 | `quota.py` | Local RPM count + optional header overlay |
 | `__init__.py` | Package marker |
@@ -59,6 +59,16 @@ already call `observe_upstream_response`.
 Catalog rows in `provider_models` (`MODEL_CATALOG_TABLE`). Fetch /
 enable / disable follow the OpenRouter-style table path. TTS/STT/
 embedding ids also use `MODEL_TYPE_OVERRIDES` plus heuristics.
+
+## Embeddings (`build_embeddings_body`)
+
+OpenAI-compat clients (playground) often omit NIM-only fields:
+
+- Asymmetric models (`embed-vl`, `nv-embedqa`, `nemoretriever`,
+  `embed-qa`): default `input_type=query` when missing
+  (docs.api.nvidia.com llama-nemotron-embed-vl infer).
+- `nemotron-3-embed-*`: drop `dimensions` unless `2048` (native
+  only; reduced sizes → 400).
 
 ## Quota (`quota.py`)
 

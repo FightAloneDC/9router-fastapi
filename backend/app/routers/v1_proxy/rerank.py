@@ -153,9 +153,15 @@ async def rerank_endpoint(
                 client, provider_id, rerank_params, api_key, conn_data,
             )
     except httpx.HTTPStatusError as e:
+        upstream = (e.response.text or "").strip()[:500]
+        if not upstream:
+            upstream = (
+                f"Upstream HTTP {e.response.status_code} "
+                f"(empty body)"
+            )
         return JSONResponse(
             status_code=e.response.status_code,
-            content={"error": {"message": e.response.text[:500]}},
+            content={"error": {"message": upstream}},
             headers={"X-Request-Id": request_id},
         )
     except ValueError as e:

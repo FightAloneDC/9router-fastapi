@@ -8,21 +8,51 @@ from __future__ import annotations
 
 import httpx
 
+from app.providers.alims_intl.config import AlimsIntlConfig
 from app.providers.base import BaseProviderHandler
 
-_COMPAT_SUFFIX = "/compatible-mode/v1"
+_CONFIG = AlimsIntlConfig()
 
 
 def rerank_url(base_url: str) -> str:
-    """Compatible-mode rerank endpoint for any base URL shape."""
+    """Build the DashScope rerank endpoint for a chat-compatible base.
+
+    Public DashScope hosts use ``/compatible-api/v1/reranks``.
+    Workspace MAAS hosts keep ``/compatible-mode/v1/reranks``.
+    """
+    mode = _CONFIG.RERANK_COMPAT_MODE_SUFFIX
+    api = _CONFIG.RERANK_COMPAT_API_SUFFIX
     root = (base_url or "").rstrip("/")
-    if root.endswith(_COMPAT_SUFFIX):
-        root = root[: -len(_COMPAT_SUFFIX)]
-    return f"{root}{_COMPAT_SUFFIX}/reranks"
+    for suffix in (mode, api):
+        if root.endswith(suffix):
+            root = root[: -len(suffix)]
+            break
+    public = {
+        h.rstrip("/") for h in _CONFIG.RERANK_PUBLIC_HOSTS
+    }
+    if root in public:
+        return f"{root}{api}/reranks"
+    return f"{root}{mode}/reranks"
 
 
 class AlimsIntlHandler(BaseProviderHandler):
     """Adapt OpenAI developer messages for Alibaba Studio."""
+
+    async def fetch_models(
+        self,
+        api_key: str,
+        data: dict | None = None,
+    ) -> list[dict]:
+        """Live /models plus docs-only rerank rows."""
+        from app.providers.alims_intl.models import (
+            fetch_models as load_catalog,
+        )
+
+        models = await load_catalog(api_key, data)
+        normalized = [
+            self._normalize_model(item) for item in models
+        ]
+        return [item for item in normalized if item.get("id")]
 
     async def prepare_request(
         self,
@@ -30,7 +60,7 @@ class AlimsIntlHandler(BaseProviderHandler):
         body: dict,
         stream: bool = False,
     ) -> tuple[dict[str, str], dict]:
-        """Map the unsupported developer role to the supported system role."""
+        """Map the unsupported developer role to system."""
         messages = body.get("messages")
         if not isinstance(messages, list):
             return headers, body
@@ -65,19 +95,10 @@ class AlimsIntlHandler(BaseProviderHandler):
         params: dict,
         provider_data: dict | None = None,
     ) -> dict:
-        """DashScope Rerank API via MAAS (Model-as-a-Service).
+        """DashScope Text Rerank (OpenAI-compatible flat body).
 
-        Supports qwen3-rerank and gte-rerank-v2 models.
-        Reference: https://www.alibabacloud.com/help/en/model-studio/text-rerank-api
-
-        Regional endpoints differ by workspace ID:
-          - China (Beijing): https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1
-          - Singapore: https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
-          - EU Frankfurt: https://{WorkspaceId}.eu-central-1.maas.aliyuncs.com/compatible-mode/v1
-
-        For qwen3-rerank without workspace routing, use compatible-mode endpoints:
-          - Beijing: POST https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-api/v1/reranks
-          - Singapore: POST https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/reranks
+        Public intl host: POST …/compatible-api/v1/reranks.
+        Workspace MAAS: POST …/compatible-mode/v1/reranks.
         """
         query = params["query"]
         documents = params["documents"]
@@ -87,7 +108,6 @@ class AlimsIntlHandler(BaseProviderHandler):
 
         base_url = self._resolve_base_url(provider_data or {})
 
-        # Build request body for qwen3-rerank format (flat structure)
         body: dict = {
             "model": params.get("model", "qwen3-rerank"),
             "query": query,
@@ -97,7 +117,6 @@ class AlimsIntlHandler(BaseProviderHandler):
         if instruct:
             body["instruct"] = instruct
 
-        # Use compatible-mode endpoint for qwen3-rerank
         url = rerank_url(base_url)
 
         headers = {
@@ -110,7 +129,6 @@ class AlimsIntlHandler(BaseProviderHandler):
 
         data = resp.json()
 
-        # Normalize response to unified schema
         results = []
         for r in data.get("results", []):
             result_item = {
@@ -123,10 +141,16 @@ class AlimsIntlHandler(BaseProviderHandler):
 
         return {
             "results": results,
-            "usage": {"total_tokens": data.get("usage", {}).get("total_tokens", 0)},
+            "usage": {
+                "total_tokens": data.get("usage", {}).get(
+                    "total_tokens", 0,
+                ),
+            },
             "metrics": {
                 "response_time_ms": data.get("duration", 0),
-                "request_id": data.get("id", data.get("request_id")),
+                "request_id": data.get(
+                    "id", data.get("request_id"),
+                ),
             },
             "errors": [],
         }

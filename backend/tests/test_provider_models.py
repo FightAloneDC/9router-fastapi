@@ -188,6 +188,89 @@ def test_jina_fetch_models_calls_live_endpoint(
     }
 
 
+def test_alims_fetch_models_merges_docs_rerank(
+    monkeypatch,
+) -> None:
+    """compatible-mode /models omits rerank; merge docs overrides."""
+    import asyncio
+
+    from app.providers.alims_intl import models
+    from app.providers.alims_intl.config import AlimsIntlConfig
+    from app.providers.alims_intl.handler import AlimsIntlHandler
+
+    async def fake_fetch(config, api_key, parse_fn=None):
+        assert parse_fn is models.parse_response
+        return parse_fn(
+            {
+                "data": [
+                    {"id": "qwen3.5-flash"},
+                    {"id": "text-embedding-v4"},
+                ]
+            }
+        )
+
+    monkeypatch.setattr(
+        models,
+        "fetch_models_header_auth",
+        fake_fetch,
+    )
+    cfg = AlimsIntlConfig()
+    result = asyncio.run(models.fetch_models("k-test"))
+    by_id = {r["id"]: r["type"] for r in result}
+    assert by_id["qwen3.5-flash"] == "llm"
+    assert by_id["text-embedding-v4"] == "embedding"
+    for mid, kind in cfg.MODEL_TYPE_OVERRIDES.items():
+        assert by_id[mid] == kind
+
+    handler = AlimsIntlHandler(cfg)
+    handled = asyncio.run(handler.fetch_models("k-test"))
+    handled_ids = {r["id"] for r in handled}
+    assert "qwen3-rerank" in handled_ids
+    assert "qwen3-vl-rerank" in handled_ids
+    assert "gte-rerank-v2" in handled_ids
+    assert all(
+        r["type"] == "rerank"
+        for r in handled
+        if r["id"] in cfg.MODEL_TYPE_OVERRIDES
+    )
+
+
+def test_resolve_model_type_ignores_upstream_base() -> None:
+    """Mistral /models type=base is not a service kind."""
+    from app.providers.base import BaseProviderHandler
+    from app.providers.mistral.config import MistralConfig
+    from app.routers.providers.constants import (
+        normalize_models_list,
+        resolve_model_type,
+    )
+
+    assert resolve_model_type("mistral-embed", "base") == (
+        "embedding"
+    )
+    assert resolve_model_type(
+        "codestral-embed-2505", "fine-tuned",
+    ) == "embedding"
+    assert resolve_model_type(
+        "mistral-small-latest", "base",
+    ) == "llm"
+    assert resolve_model_type("x", "embedding") == "embedding"
+
+    rows = normalize_models_list([
+        {"id": "mistral-embed", "type": "base"},
+        {"id": "codestral-embed", "type": "base"},
+    ])
+    assert {r["id"]: r["type"] for r in rows} == {
+        "mistral-embed": "embedding",
+        "codestral-embed": "embedding",
+    }
+
+    handler = BaseProviderHandler(MistralConfig())
+    norm = handler._normalize_model(
+        {"id": "mistral-embed-2312", "type": "base"},
+    )
+    assert norm["type"] == "embedding"
+
+
 def test_jina_embeddings_body_maps_encoding_format() -> None:
     """OpenAI encoding_format → Jina embedding_type; wrap string input."""
     from app.providers.jina_ai.config import JinaAiConfig
@@ -335,6 +418,103 @@ def test_voyage_embeddings_body_maps_dimensions() -> None:
     )
     assert keep["output_dimension"] == 256
     assert "dimensions" not in keep
+
+
+def test_mistral_embeddings_body_maps_dimensions() -> None:
+    """OpenAI dimensions: drop for mistral-embed; map for codestral."""
+    from app.providers.mistral.config import MistralConfig
+    from app.providers.mistral.handler import MistralHandler
+
+    handler = MistralHandler(MistralConfig())
+    text = handler.build_embeddings_body(
+        "mistral-embed",
+        {
+            "model": "mi/mistral-embed",
+            "input": "ping",
+            "dimensions": 1024,
+        },
+    )
+    assert text["model"] == "mistral-embed"
+    assert text["input"] == "ping"
+    assert "dimensions" not in text
+    assert "output_dimension" not in text
+
+    code = handler.build_embeddings_body(
+        "codestral-embed",
+        {
+            "model": "mi/codestral-embed",
+            "input": "def f(): pass",
+            "dimensions": 512,
+        },
+    )
+    assert code["model"] == "codestral-embed"
+    assert code["output_dimension"] == 512
+    assert "dimensions" not in code
+
+    keep = handler.build_embeddings_body(
+        "codestral-embed-2505",
+        {
+            "model": "x",
+            "input": "x",
+            "output_dimension": 256,
+            "dimensions": 512,
+            "output_dtype": "int8",
+        },
+    )
+    assert keep["output_dimension"] == 256
+    assert keep["output_dtype"] == "int8"
+    assert "dimensions" not in keep
+
+
+def test_nvidia_embeddings_body_input_type_and_dims() -> None:
+    """Asymmetric: default input_type; nemotron-3: drop bad dims."""
+    from app.providers.nvidia.config import NvidiaConfig
+    from app.providers.nvidia.handler import NvidiaHandler
+
+    handler = NvidiaHandler(NvidiaConfig())
+    asym = handler.build_embeddings_body(
+        "nvidia/llama-nemotron-embed-vl-1b-v2",
+        {
+            "model": "nv/nvidia/llama-nemotron-embed-vl-1b-v2",
+            "input": "ping",
+            "dimensions": 1024,
+        },
+    )
+    assert asym["model"] == "nvidia/llama-nemotron-embed-vl-1b-v2"
+    assert asym["input_type"] == "query"
+    assert asym["dimensions"] == 1024
+
+    keep_type = handler.build_embeddings_body(
+        "nvidia/llama-nemotron-embed-vl-1b-v2",
+        {
+            "model": "x",
+            "input": "x",
+            "input_type": "passage",
+        },
+    )
+    assert keep_type["input_type"] == "passage"
+
+    fixed = handler.build_embeddings_body(
+        "nvidia/nemotron-3-embed-1b",
+        {
+            "model": "nv/nvidia/nemotron-3-embed-1b",
+            "input": "ping",
+            "dimensions": 1024,
+        },
+    )
+    assert fixed["model"] == "nvidia/nemotron-3-embed-1b"
+    assert "dimensions" not in fixed
+    assert "input_type" not in fixed
+
+    keep_dim = handler.build_embeddings_body(
+        "nvidia/nemotron-3-embed-1b",
+        {
+            "model": "x",
+            "input": "x",
+            "dimensions": 2048,
+        },
+    )
+    assert keep_dim["dimensions"] == 2048
 
 
 def test_voyage_rerank_body_maps_top_n_to_top_k() -> None:

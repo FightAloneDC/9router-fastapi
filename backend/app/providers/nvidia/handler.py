@@ -11,9 +11,60 @@ import httpx
 from app.providers.base import BaseProviderHandler, ValidateResult
 from app.services.outbound_proxy import create_upstream_client
 
+# Asymmetric NIM embedders require input_type (query|passage).
+# Docs: docs.api.nvidia.com/nim/reference/nvidia-llama-nemotron-embed-vl-1b-v2-infer
+_ASYMMETRIC_EMBED_MARKERS = (
+    "embed-vl",
+    "nv-embedqa",
+    "nemoretriever",
+    "embed-qa",
+)
+
+# Native-only size; reduced dims rejected with
+# "dimensions must be one of 2048".
+# Docs: docs.nvidia.com/nim/nemo-retriever/text-embedding/2.3/reference.html
+_NATIVE_ONLY_DIMS: tuple[tuple[str, int], ...] = (
+    ("nemotron-3-embed", 2048),
+)
+
+
+def _needs_input_type(model: str) -> bool:
+    mid = (model or "").lower()
+    return any(m in mid for m in _ASYMMETRIC_EMBED_MARKERS)
+
+
+def _native_only_dim(model: str) -> int | None:
+    mid = (model or "").lower()
+    for marker, dim in _NATIVE_ONLY_DIMS:
+        if marker in mid:
+            return dim
+    return None
+
 
 class NvidiaHandler(BaseProviderHandler):
     """Handler for NVIDIA NIM provider."""
+
+    def build_embeddings_body(self, model: str, body: dict) -> dict:
+        """Map OpenAI-compat embeddings body for NVIDIA NIM.
+
+        - Asymmetric models (e.g. llama-nemotron-embed-vl-*): inject
+          ``input_type=query`` when the client omits it (playground /
+          OpenAI SDKs do not send it).
+        - ``nemotron-3-embed-*``: drop ``dimensions`` unless it is the
+          native 2048 (reduced sizes are not supported).
+        """
+        out: dict = {**body, "model": model}
+        if not out.get("input_type") and _needs_input_type(model):
+            out["input_type"] = "query"
+        native = _native_only_dim(model)
+        dims = out.get("dimensions")
+        if (
+            native is not None
+            and dims is not None
+            and dims != native
+        ):
+            out.pop("dimensions", None)
+        return out
 
     async def execute_tts(
         self,

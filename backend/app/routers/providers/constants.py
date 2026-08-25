@@ -68,6 +68,22 @@ SUGGESTED_MODELS_FILTERS = {
 # Lazy-loaded aggregated overrides from all providers
 _MODEL_TYPE_OVERRIDES_CACHE: dict[str, str] | None = None
 
+# Values we store as model.type (media kinds + llm). Upstream fields
+# like Mistral's "base" / "fine-tuned" are NOT kinds — ignore them.
+MODEL_TYPE_KINDS: frozenset[str] = frozenset({
+    "llm",
+    "embedding",
+    "rerank",
+    "tts",
+    "stt",
+    "webSearch",
+    "webFetch",
+    "image",
+    "imageToText",
+    "video",
+    "music",
+})
+
 
 def _get_model_type_overrides() -> dict[str, str]:
     """Get aggregated MODEL_TYPE_OVERRIDES from all providers (cached)."""
@@ -110,10 +126,22 @@ def infer_model_type(model_id: str) -> str:
     return "llm"
 
 
+def resolve_model_type(
+    model_id: str,
+    raw_type: str | None = None,
+) -> str:
+    """Keep a known service kind; otherwise override/infer from id."""
+    if raw_type and raw_type in MODEL_TYPE_KINDS:
+        return raw_type
+    return infer_model_type(model_id or "")
+
+
 def normalize_models_list(models) -> list:
     """Normalize models list to always include type field (backward compat).
 
     Handles both old string format and new object format.
+    Ignores upstream type values that are not service kinds
+    (e.g. Mistral ``base`` / ``fine-tuned``).
     """
     if not models:
         return []
@@ -122,7 +150,7 @@ def normalize_models_list(models) -> list:
         if isinstance(m, str):
             result.append({"id": m, "type": infer_model_type(m)})
         elif isinstance(m, dict):
-            if "type" not in m:
-                m["type"] = infer_model_type(m.get("id", ""))
+            mid = m.get("id", "")
+            m["type"] = resolve_model_type(mid, m.get("type"))
             result.append(m)
     return result

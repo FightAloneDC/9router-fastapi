@@ -119,6 +119,24 @@ class MistralHandler(BaseProviderHandler):
             if self._normalize_model(m).get("id")
         ]
 
+    def build_embeddings_body(self, model: str, body: dict) -> dict:
+        """Map OpenAI-compat embeddings body to Mistral.
+
+        Docs (retrieved 2026-08-25):
+        - mistral-embed: fixed 1024-d; no size knobs
+          https://docs.mistral.ai/studio/knowledge-rag/embeddings/text_embeddings
+        - codestral-embed: ``output_dimension`` (≤3072) +
+          ``output_dtype``; OpenAI ``dimensions`` is rejected
+          https://docs.mistral.ai/studio/knowledge-rag/embeddings/code_embeddings
+        """
+        out: dict = {**body, "model": model}
+        dims = out.pop("dimensions", None)
+        mid = (model or "").lower()
+        if "codestral-embed" in mid and dims is not None:
+            if out.get("output_dimension") is None:
+                out["output_dimension"] = dims
+        return out
+
     async def build_request_body(
         self,
         model: str,

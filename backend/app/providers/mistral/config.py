@@ -33,6 +33,9 @@ class MistralConfig(BaseProviderConfig):
     # ── Model type overrides ────────────────────────────────────────────
     MODEL_TYPE_OVERRIDES: dict[str, str] = {
         "mistral-embed": "embedding",
+        "mistral-embed-2312": "embedding",
+        "codestral-embed": "embedding",
+        "codestral-embed-2505": "embedding",
     }
 
 
