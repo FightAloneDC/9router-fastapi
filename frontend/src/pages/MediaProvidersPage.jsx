@@ -8,21 +8,34 @@ function ProviderLogo({ providerId, provider, size = 40 }) {
     return (
       <div
         className="shrink-0 rounded-lg flex items-center justify-center text-sm font-bold"
-        style={{ width: size, height: size, backgroundColor: (provider.color || '#888') + '15', color: provider.color || '#888' }}
+        style={{
+          width: size,
+          height: size,
+          backgroundColor: (provider.color || '#888') + '15',
+          color: provider.color || '#888',
+        }}
       >
         {provider.textIcon || provider.icon || providerId.slice(0, 2).toUpperCase()}
       </div>
     )
   }
   return (
-    <img src={src} alt={provider.name || providerId} width={size} height={size}
-      className="shrink-0 rounded-lg object-contain" style={{ width: size, height: size }}
+    <img
+      src={src}
+      alt={provider.name || providerId}
+      width={size}
+      height={size}
+      className="shrink-0 rounded-lg object-contain"
+      style={{ width: size, height: size }}
       onError={() => setImgError(true)}
     />
   )
 }
 import { useParams, useNavigate } from 'react-router-dom'
-import { Binary, ArrowUpDown, Volume2, Mic, Search, Globe, Image, Eye, Video, Music, ChevronRight } from 'lucide-react'
+import {
+  Binary, ArrowUpDown, Volume2, Mic, Search, Globe, Image, Eye, Video,
+  Music, ChevronRight,
+} from 'lucide-react'
 import useCatalogStore from '../stores/catalogStore'
 import { providersApi } from '../api/providers'
 import Card, { CardContent } from '../components/ui/Card'
@@ -43,36 +56,37 @@ const KIND_ICONS = {
   music: Music,
 }
 
-function getEffectiveStatus(conn) {
-  const data = conn.data || {}
-  const isCooldown = Object.entries(data).some(
-    ([k, v]) => k.startsWith('modelLock_') && v && new Date(v).getTime() > Date.now()
-  )
-  return conn.test_status === 'unavailable' && !isCooldown ? 'active' : conn.test_status
+function emptyStats() {
+  return {
+    connected: 0,
+    error: 0,
+    total: 0,
+    allDisabled: false,
+  }
 }
 
-function ProviderCard({ provider, connections, kind }) {
+function ProviderCard({ provider, stats, kind }) {
   const navigate = useNavigate()
-  const providerConns = connections.filter((c) => c.provider === provider.id)
-  const connected = providerConns.filter((c) => {
-    const s = getEffectiveStatus(c)
-    return s === 'active' || s === 'success'
-  }).length
-  const errors = providerConns.filter((c) => {
-    const s = getEffectiveStatus(c)
-    return s === 'error' || s === 'expired' || s === 'unavailable'
-  }).length
-  const total = providerConns.length
-  const allDisabled = total > 0 && providerConns.every((c) => !c.is_active)
+  const { connected, error, total, allDisabled } = stats || emptyStats()
 
   const renderStatus = () => {
-    if (allDisabled) return <Badge variant="default" size="sm">Disabled</Badge>
-    if (total === 0) return <span className="text-xs text-zinc-500">No connections</span>
+    if (allDisabled) {
+      return <Badge variant="default" size="sm">Disabled</Badge>
+    }
+    if (total === 0) {
+      return <span className="text-xs text-zinc-500">No connections</span>
+    }
     return (
       <div className="flex items-center gap-1.5">
-        {connected > 0 && <Badge variant="success" size="sm">{connected} Active</Badge>}
-        {errors > 0 && <Badge variant="error" size="sm">{errors} Error</Badge>}
-        {connected === 0 && errors === 0 && <Badge variant="default" size="sm">{total} Added</Badge>}
+        {connected > 0 && (
+          <Badge variant="success" size="sm">{connected} Active</Badge>
+        )}
+        {error > 0 && (
+          <Badge variant="error" size="sm">{error} Error</Badge>
+        )}
+        {connected === 0 && error === 0 && (
+          <Badge variant="default" size="sm">{total} Added</Badge>
+        )}
       </div>
     )
   }
@@ -82,17 +96,28 @@ function ProviderCard({ provider, connections, kind }) {
       onClick={() => navigate(`/media-providers/${kind}/${provider.id}`)}
       className="group cursor-pointer"
     >
-      <Card className={`h-full hover:border-zinc-600/80 transition-all duration-150 hover:bg-zinc-800/20 cursor-pointer ${allDisabled ? 'opacity-50' : ''}`}>
+      <Card
+        className={`h-full hover:border-zinc-600/80 transition-all duration-150 hover:bg-zinc-800/20 cursor-pointer ${allDisabled ? 'opacity-50' : ''}`}
+      >
         <CardContent className="p-4">
           <div className="flex min-w-0 items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
-              <ProviderLogo providerId={provider.id} provider={provider} size={40} />
+              <ProviderLogo
+                providerId={provider.id}
+                provider={provider}
+                size={40}
+              />
               <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-semibold text-zinc-100 truncate">{provider.name}</h3>
+                <h3 className="text-sm font-semibold text-zinc-100 truncate">
+                  {provider.name}
+                </h3>
                 <div className="mt-0.5">{renderStatus()}</div>
               </div>
             </div>
-            <ChevronRight size={16} className="text-zinc-600 group-hover:text-zinc-400 transition-colors shrink-0" />
+            <ChevronRight
+              size={16}
+              className="text-zinc-600 group-hover:text-zinc-400 transition-colors shrink-0"
+            />
           </div>
         </CardContent>
       </Card>
@@ -100,7 +125,7 @@ function ProviderCard({ provider, connections, kind }) {
   )
 }
 
-function KindSection({ kind, providers, connections }) {
+function KindSection({ kind, providers, providerStats }) {
   const KindIcon = KIND_ICONS[kind.id] || Image
 
   if (!providers || providers.length === 0) {
@@ -122,14 +147,16 @@ function KindSection({ kind, providers, connections }) {
       <div className="flex items-center gap-2 mb-3">
         <KindIcon size={16} className="text-blue-400" />
         <h2 className="text-sm font-semibold text-zinc-200">{kind.label}</h2>
-        <span className="text-xs text-zinc-500">({providers.length} providers)</span>
+        <span className="text-xs text-zinc-500">
+          ({providers.length} providers)
+        </span>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
         {providers.map((provider) => (
           <ProviderCard
             key={provider.id}
             provider={provider}
-            connections={connections}
+            stats={providerStats[provider.id] || emptyStats()}
             kind={kind.id}
           />
         ))}
@@ -142,44 +169,42 @@ export default function MediaProvidersPage() {
   const { kind: urlKind } = useParams()
   const navigate = useNavigate()
   const activeKind = urlKind || 'embedding'
-  const [connections, setConnections] = useState([])
-  const [tabProviders, setTabProviders] = useState({})  // { [kind]: providers[] }
+  const [providerStats, setProviderStats] = useState({})
+  const [tabProviders, setTabProviders] = useState({})
   const [loading, setLoading] = useState(true)
   const [tabLoading, setTabLoading] = useState(false)
 
-  // Fetch connections (for status display) — once on mount
   useEffect(() => {
     useCatalogStore.getState().fetchCatalog()
-    providersApi.getProviders()
-      .then((res) => setConnections(res.data || []))
-      .catch(() => {})
-      .finally(() => setLoading(false))
   }, [])
 
-  // Fetch providers for active tab from API
-  const fetchTabProviders = useCallback(async (kind) => {
+  // Overview stats + kind catalog — not full /providers (multi-MB).
+  const fetchTabData = useCallback(async (kind) => {
     setTabLoading(true)
     try {
-      const res = await providersApi.getMediaProviders(kind)
+      const [overviewRes, mediaRes] = await Promise.all([
+        providersApi.getProvidersOverview({ kind }),
+        providersApi.getMediaProviders(kind),
+      ])
+      setProviderStats(overviewRes.data?.stats || {})
       setTabProviders((prev) => ({
         ...prev,
-        [kind]: res.data || [],
+        [kind]: mediaRes.data || [],
       }))
     } catch {
       // Keep existing data on error
     } finally {
       setTabLoading(false)
+      setLoading(false)
     }
   }, [])
 
-  // When active kind changes, fetch providers for that tab
   useEffect(() => {
     if (activeKind) {
-      fetchTabProviders(activeKind)
+      fetchTabData(activeKind)
     }
-  }, [activeKind, fetchTabProviders])
+  }, [activeKind, fetchTabData])
 
-  // Redirect /media-providers to default tab
   useEffect(() => {
     if (!urlKind) {
       navigate('/media-providers/embedding', { replace: true })
@@ -188,7 +213,6 @@ export default function MediaProvidersPage() {
 
   if (loading) return <Loading />
 
-  // Tab items for the tab bar
   const tabs = [
     { id: 'embedding', label: 'Embedding' },
     { id: 'rerank', label: 'Rerank' },
@@ -203,11 +227,12 @@ export default function MediaProvidersPage() {
     navigate(`/media-providers/${tabId}`)
   }
 
-  // Render content for active tab
   const renderContent = () => {
     if (tabLoading) return <Loading />
 
-    const kindConfig = useCatalogStore.getState().mediaKinds.find((k) => k.id === activeKind)
+    const kindConfig = useCatalogStore
+      .getState()
+      .mediaKinds.find((k) => k.id === activeKind)
     if (!kindConfig) {
       return (
         <div className="text-center py-12 text-zinc-500">
@@ -220,14 +245,13 @@ export default function MediaProvidersPage() {
       <KindSection
         kind={kindConfig}
         providers={tabProviders[activeKind] || []}
-        connections={connections}
+        providerStats={providerStats}
       />
     )
   }
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Tab bar */}
       <div className="flex items-center gap-1 border-b border-zinc-800 pb-0">
         {tabs.map((tab) => (
           <button
@@ -244,7 +268,6 @@ export default function MediaProvidersPage() {
         ))}
       </div>
 
-      {/* Content */}
       {renderContent()}
     </div>
   )
