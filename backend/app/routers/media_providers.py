@@ -27,7 +27,7 @@ def _get_provider_meta_from_config(provider_id: str) -> dict:
         return {"name": provider_id, "color": "#888888", "textIcon": provider_id[:2].upper()}
 
 
-VALID_KINDS: set[str] = {"embedding", "tts", "stt", "webSearch", "webFetch", "image", "imageToText", "video", "music"}
+VALID_KINDS: set[str] = {"embedding", "rerank", "tts", "stt", "webSearch", "webFetch", "image", "imageToText", "video", "music"}
 
 
 @router.get("/media-providers/{kind}")

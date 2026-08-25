@@ -22,7 +22,7 @@ function ProviderLogo({ providerId, provider, size = 40 }) {
   )
 }
 import { useParams, useNavigate } from 'react-router-dom'
-import { Binary, Volume2, Mic, Search, Globe, Image, Eye, Video, Music, ChevronRight } from 'lucide-react'
+import { Binary, ArrowUpDown, Volume2, Mic, Search, Globe, Image, Eye, Video, Music, ChevronRight } from 'lucide-react'
 import useCatalogStore from '../stores/catalogStore'
 import { providersApi } from '../api/providers'
 import Card, { CardContent } from '../components/ui/Card'
@@ -32,6 +32,7 @@ import Loading from '../components/ui/Loading'
 // Icon map for media kinds
 const KIND_ICONS = {
   embedding: Binary,
+  rerank: ArrowUpDown,
   tts: Volume2,
   stt: Mic,
   webSearch: Search,
@@ -203,6 +204,7 @@ export default function MediaProvidersPage() {
   // Tab items for the tab bar
   const tabs = [
     { id: 'embedding', label: 'Embedding' },
+    { id: 'rerank', label: 'Rerank' },
     { id: 'tts', label: 'TTS' },
     { id: 'stt', label: 'STT' },
     { id: 'webSearch', label: 'Web' },

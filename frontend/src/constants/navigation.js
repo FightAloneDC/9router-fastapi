@@ -6,6 +6,7 @@ import {
   Shield,
   Terminal,
   Binary,
+  ArrowUpDown,
   Volume2,
   Mic,
   Search,
@@ -38,6 +39,7 @@ export const navItems = [
 // Media provider sub-items (for sidebar accordion)
 export const mediaProviderKinds = [
   { path: '/media-providers/embedding', label: 'Embedding', icon: Binary, description: 'Text embedding models' },
+  { path: '/media-providers/rerank', label: 'Rerank', icon: ArrowUpDown, description: 'Reranking models' },
   { path: '/media-providers/tts', label: 'Text to Speech', icon: Volume2, description: 'Text-to-speech providers' },
   { path: '/media-providers/stt', label: 'Speech to Text', icon: Mic, description: 'Speech-to-text providers' },
   { path: '/media-providers/webSearch', label: 'Web', icon: Search, description: 'Web search & fetch providers' },
@@ -86,6 +88,7 @@ export const pageTitles = {
   '/cli-tools': { title: 'CLI Tools', description: 'Command-line utilities and tools', icon: Terminal },
   '/media-providers': { title: 'Media Providers', description: 'Configure media processing providers', icon: Image },
   '/media-providers/embedding': { title: 'Embedding', description: 'Text embedding models', icon: Binary },
+  '/media-providers/rerank': { title: 'Rerank', description: 'Reranking models', icon: ArrowUpDown },
   '/media-providers/tts': { title: 'Text to Speech', description: 'Text-to-speech providers', icon: Volume2 },
   '/media-providers/stt': { title: 'Speech to Text', description: 'Speech-to-text providers', icon: Mic },
   '/media-providers/webSearch': { title: 'Web', description: 'Web search & fetch providers', icon: Search },

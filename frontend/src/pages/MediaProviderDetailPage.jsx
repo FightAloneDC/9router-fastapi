@@ -861,6 +861,158 @@ function EmbeddingTestPlayground({ providerId, providerAlias, connections }) {
 
 
 /* ════════════════════════════════════════════════════════════════
+   RerankTestPlayground — real API test for rerank providers
+   ════════════════════════════════════════════════════════════════ */
+function RerankTestPlayground({ providerId, providerAlias, connections }) {
+  const token = useAuthStore(s => s.token)
+  const [selectedModel, setSelectedModel] = useState('')
+  const [query, setQuery] = useState('What is the capital of France?')
+  const [documentsText, setDocumentsText] = useState('Paris is the capital of France.\nBerlin is the capital of Germany.\nThe Eiffel Tower is in Paris.')
+  const [topN, setTopN] = useState('')
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState('')
+  const [latency, setLatency] = useState(null)
+  const [copiedCurl, setCopiedCurl] = useState(false)
+  const [copiedRes, setCopiedRes] = useState(false)
+  const [availableModels, setAvailableModels] = useState([])
+
+  useEffect(() => {
+    fetch(`/v1/models?kind=rerank`, {
+      headers: { 'Authorization': `Bearer ${token || ''}` },
+    })
+      .then(r => r.json())
+      .then(data => {
+        const allModels = data.data || []
+        const filtered = allModels.filter(m => {
+          const id = m.id || ''
+          return id.startsWith(`${providerAlias}/`) || id.startsWith(`${providerId}/`)
+        })
+        setAvailableModels(filtered)
+        if (filtered.length > 0 && !selectedModel) setSelectedModel(filtered[0].id)
+      })
+      .catch(() => {})
+  }, [providerId, providerAlias, token])
+
+  const documents = documentsText.split('\n').map(d => d.trim()).filter(Boolean)
+
+  const buildBody = () => {
+    const body = { model: selectedModel, query: query.trim(), documents }
+    const n = Number(topN)
+    if (topN && Number.isFinite(n) && n > 0) body.top_n = n
+    return body
+  }
+
+  const endpoint = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:9000'
+  const curlBody = JSON.stringify(buildBody(), null, 2).replace(/'/g, "'\\''")
+  const curlSnippet = `curl -X POST ${endpoint}/v1/rerank \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer ${token || 'YOUR_TOKEN'}" \\\n  -d '${curlBody}'`
+
+  const formatResult = (data) => {
+    if (!data) return '{\n  "results": [\n    { "index": 0, "relevance_score": 0.98, "document": "..." }\n  ],\n  "model": "..."\n}'
+    return JSON.stringify(data, null, 2)
+  }
+
+  const handleRun = async () => {
+    if (!selectedModel || !query.trim() || documents.length === 0) return
+    setRunning(true)
+    setError('')
+    setResult(null)
+    setLatency(null)
+    const start = Date.now()
+    try {
+      const headers = { 'Content-Type': 'application/json' }
+      if (token) headers['Authorization'] = `Bearer ${token}`
+      const res = await fetch('/v1/rerank', { method: 'POST', headers, body: JSON.stringify(buildBody()) })
+      const latencyMs = Date.now() - start
+      const data = await res.json()
+      if (!res.ok) setError(data?.error?.message || data?.error || `HTTP ${res.status}`)
+      else { setResult(data); setLatency(latencyMs) }
+    } catch (e) { setError(e.message || 'Network error') }
+    finally { setRunning(false) }
+  }
+
+  const activeConns = connections.filter(c => c.provider === providerId && c.is_active !== false)
+
+  return (
+    <Card>
+      <CardContent>
+        <h2 className="text-lg font-semibold text-zinc-100 mb-4">Test Playground</h2>
+        <div className="flex flex-col gap-3">
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1.5">Model</label>
+            {availableModels.length > 0 ? (
+              <select value={selectedModel} onChange={e => setSelectedModel(e.target.value)}
+                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-primary-500">
+                {availableModels.map(m => <option key={m.id} value={m.id}>{m.id}</option>)}
+              </select>
+            ) : (
+              <input value={selectedModel} onChange={e => setSelectedModel(e.target.value)}
+                placeholder={`${providerAlias}/model-name`}
+                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 font-mono focus:outline-none focus:border-primary-500" />
+            )}
+            {availableModels.length === 0 && <p className="text-[10px] text-zinc-600 mt-1">No models fetched. Type model ID manually.</p>}
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1.5">Query</label>
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="What is the capital of France?"
+              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-primary-500" />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1.5">Documents <span className="text-zinc-600">(one per line)</span></label>
+            <textarea value={documentsText} onChange={e => setDocumentsText(e.target.value)} rows={4}
+              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-primary-500 resize-y" />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-zinc-400 mb-1.5">Top N <span className="text-zinc-600">(optional)</span></label>
+            <input type="number" min="1" value={topN} onChange={e => setTopN(e.target.value)} placeholder="e.g. 3"
+              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-primary-500" />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Curl</span>
+              <button onClick={() => { copyToClipboard(curlSnippet).then(ok => { if (ok) { setCopiedCurl(true); setTimeout(() => setCopiedCurl(false), 2000) } }) }}
+                className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300">
+                {copiedCurl ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                {copiedCurl ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+            <pre className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 text-xs text-zinc-400 font-mono overflow-x-auto whitespace-pre-wrap break-all max-h-32">{curlSnippet}</pre>
+          </div>
+
+          <Button onClick={handleRun} loading={running} disabled={!selectedModel || !query.trim() || documents.length === 0 || activeConns.length === 0} icon={Play} className="w-full">
+            {running ? 'Running...' : 'Run'}
+          </Button>
+          {activeConns.length === 0 && <p className="text-xs text-amber-500 -mt-2">Add and enable a connection first.</p>}
+
+          {error && <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg p-3 break-words">{error}</div>}
+
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+                Response {latency != null && <span className="font-normal normal-case text-zinc-600">⚡ {latency}ms</span>}
+              </span>
+              {result && (
+                <button onClick={() => { copyToClipboard(formatResult(result)).then(ok => { if (ok) { setCopiedRes(true); setTimeout(() => setCopiedRes(false), 2000) } }) }}
+                  className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300">
+                  {copiedRes ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+                  {copiedRes ? 'Copied' : 'Copy'}
+                </button>
+              )}
+            </div>
+            <pre className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 text-xs text-zinc-300 font-mono overflow-x-auto max-h-60 overflow-y-auto whitespace-pre-wrap">{formatResult(result)}</pre>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+
+/* ════════════════════════════════════════════════════════════════
    TtsTestPlayground — Voice synthesis playground for /v1/audio/speech
    ════════════════════════════════════════════════════════════════ */
 function TtsTestPlayground({ providerId, providerAlias, connections }) {
@@ -2542,6 +2694,8 @@ export default function MediaProviderDetailPage() {
         <ImageTestPlayground providerId={providerId} providerAlias={providerAlias} connections={connections} />
       ) : kind === 'embedding' ? (
         <EmbeddingTestPlayground providerId={providerId} providerAlias={providerAlias} connections={connections} />
+      ) : kind === 'rerank' ? (
+        <RerankTestPlayground providerId={providerId} providerAlias={providerAlias} connections={connections} />
       ) : (
         <Card className="bg-zinc-900/50 border-zinc-800">
           <CardContent className="py-8 text-center text-sm text-zinc-500">
