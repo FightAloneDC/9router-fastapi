@@ -290,14 +290,17 @@ ERROR_RULES = [
     {"text": "improperly formed request", "cooldown_ms": 120_000},
     {"text": "rate limit", "backoff": True},
     {"text": "too many requests", "backoff": True},
-    {"text": "quota exceeded", "backoff": True},
-    {"text": "pricingurl", "backoff": True},
-    {"text": "qoder quota/pricing", "backoff": True},
+    # Quota / pricing exhaustion is not a short transient — backoff
+    # started at 2s and the same dead connection was reused on every
+    # "continue". Keep these accounts out for an hour.
+    {"text": "quota exceeded", "cooldown_ms": 3_600_000},
+    {"text": "pricingurl", "cooldown_ms": 3_600_000},
+    {"text": "qoder quota/pricing", "cooldown_ms": 3_600_000},
     {"text": "capacity", "backoff": True},
     {"text": "overloaded", "backoff": True},
     # Status-based (fallback when text doesn't match)
     {"status": 401, "cooldown_ms": 120_000},
-    {"status": 402, "cooldown_ms": 120_000},
+    {"status": 402, "cooldown_ms": 3_600_000},
     {"status": 403, "cooldown_ms": 120_000},
     {"status": 404, "cooldown_ms": 120_000},
     {"status": 429, "backoff": True},
@@ -424,6 +427,10 @@ async def mark_connection_unavailable(
     When *status_code* / *error_detail* are provided they are recorded as
     errorCode / lastError in the data blob — the health contract consumed by
     provider quota trackers and the farm CLI resort tiers.
+
+    Quota-exhausted errors (HTTP 402/403, pricing/quota text) also set
+    ``is_active=False`` so the connection is not selected again until
+    re-enabled manually or via bulk-enable-inactive.
     """
     result = await db.execute(
         select(ProviderConnection).where(ProviderConnection.id == connection_id)
@@ -453,8 +460,19 @@ async def mark_connection_unavailable(
     conn.data = json.dumps(data)
 
     from app.services.connection_health import (
+        EXHAUSTED,
+        classify_health,
         resort_provider_priorities,
     )
+    health_status, _ = classify_health(data)
+    if health_status == EXHAUSTED:
+        conn.is_active = False
+        logger.warning(
+            "Connection %s (%s): quota exhausted, auto-disabled",
+            connection_id,
+            conn.provider,
+        )
+
     await resort_provider_priorities(db, conn.provider)
 
     await db.commit()

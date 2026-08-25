@@ -347,3 +347,19 @@ def test_qoder_business_error_raises_before_stream():
         assert ei.value.response.status_code == 402
     finally:
         server.shutdown()
+
+
+def test_qoder_402_pricing_uses_long_cooldown() -> None:
+    """code 112 must not use 2s backoff (reuses dead accounts)."""
+    from app.services.proxy import calculate_cooldown
+
+    detail = (
+        "Qoder quota/pricing code=112: "
+        '{"pricingUrl":"https://qoder.com/pricing?client=qoder"}'
+    )
+    ms, new_level = calculate_cooldown(402, detail, backoff_level=0)
+    assert new_level is None
+    assert ms >= 3_600_000
+
+    ms2, _ = calculate_cooldown(402, "payment required", 0)
+    assert ms2 >= 3_600_000

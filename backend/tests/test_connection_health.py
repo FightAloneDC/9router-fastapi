@@ -584,5 +584,24 @@ def test_mark_unavailable_reindexes_exhausted_behind_healthy() -> None:
     assert session.committed is True
     blob = json.loads(exhausted.data)
     assert blob["errorCode"] == "402"
+    assert exhausted.is_active is False
+    assert healthy.is_active is True
     assert healthy.priority == 0
     assert exhausted.priority == 1
+
+
+def test_mark_unavailable_keeps_active_on_rate_limit() -> None:
+    from app.services.proxy import mark_connection_unavailable
+
+    limited = _conn("lim", 0, {"testStatus": "active"})
+    session = _MarkSession([limited])
+
+    asyncio.run(mark_connection_unavailable(
+        session,  # type: ignore[arg-type]
+        "lim",
+        cooldown_ms=5_000,
+        status_code=429,
+        error_detail="rate limit exceeded",
+    ))
+
+    assert limited.is_active is True

@@ -112,7 +112,11 @@ Client POST /v1/chat/completions  model="qd/qoder/auto"
 SSE unwrap lives in `transform.unwrap_qoder_sse_line` (also
 called from `v1_proxy/shared` for the streaming path). Business
 envelopes (e.g. code `112` pricing, `TOKEN_EXPIRE`) map to HTTP
-status via `qoder_envelope_http_error`.
+status via `qoder_envelope_http_error`. Chat peek raises 402 so
+the pool can rotate; `mark_connection_unavailable` classifies
+402 / pricing / quota as **exhausted** and sets
+`is_active=False` (plus 1h cooldown metadata via `ERROR_RULES`).
+Re-enable via Provider Detail or `POST /quota/bulk-enable-inactive`.
 
 ## Rate limits (Provider Detail table)
 

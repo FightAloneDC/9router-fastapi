@@ -40,6 +40,7 @@ HEALTH_RANK = {
 
 _EXHAUST_KEYWORDS = (
     "spending", "balance", "exhausted", "quota",
+    "pricingurl", "code=112",
 )
 _DEAD_KEYWORDS = ("invalid_grant", "revoked")
 _CONNECT_HINTS = (
