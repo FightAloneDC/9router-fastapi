@@ -264,8 +264,13 @@ async def get_quota(
             except (json.JSONDecodeError, TypeError):
                 data = {}
             try:
+                cred = (
+                    data.get("accessToken")
+                    or data.get("apiKey")
+                    or ""
+                )
                 result = await handler.fetch(
-                    access_token="",
+                    access_token=cred,
                     provider_data=data,
                     connection_id=str(conn.id),
                 )
@@ -470,13 +475,12 @@ async def get_connection_usage(
                 limit_reached=bool(cache.limit_reached),
             )
 
-    access_token = ""
+    access_token = (
+        data.get("accessToken")
+        or data.get("apiKey")
+        or ""
+    )
     if handler.USES_UPSTREAM:
-        access_token = (
-            data.get("accessToken")
-            or data.get("apiKey")
-            or ""
-        )
         if not access_token:
             return UsageResponse(
                 message="No access token or API key found"

@@ -155,6 +155,45 @@ function formatQuotaNum(n) {
   return n.toLocaleString('en-US')
 }
 
+function isUsdQuotaName(name) {
+  return String(name || '').toUpperCase().includes('(USD)')
+}
+
+function formatUsdFromCents(cents) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(cents || 0) / 100)
+}
+
+function isUsdWalletQuota(quota) {
+  if (!isUsdQuotaName(quota?.name)) return false
+  const label = String(quota.name || '').toLowerCase()
+  return (
+    (quota.used || 0) === 0
+    && (label.includes('api balance') || label.includes('prepaid'))
+  )
+}
+
+function formatQuotaUsage(quota) {
+  if (isUsdWalletQuota(quota)) {
+    const left = quota.remaining ?? quota.total ?? 0
+    return `${formatUsdFromCents(left)} left`
+  }
+  if (isUsdQuotaName(quota.name)) {
+    return (
+      `${formatUsdFromCents(quota.used)} / `
+      + `${formatUsdFromCents(quota.total)}`
+    )
+  }
+  return (
+    `${formatQuotaNum(quota.used)} / `
+    + `${quota.total > 0 ? formatQuotaNum(quota.total) : '∞'}`
+  )
+}
+
 /** Integer "% left" — floor so tiny usage never rounds up to 100. */
 function formatRemainingPct(pct) {
   const n = Number(pct)
@@ -325,7 +364,10 @@ function EmptyConnectionsState() {
 
 function QuotaRow({ quota }) {
   const pct = quota.remaining_percentage ?? 0
-  const usedPct = Math.min(100, Math.max(0, 100 - pct))
+  const wallet = isUsdWalletQuota(quota)
+  const usedPct = wallet
+    ? 0
+    : Math.min(100, Math.max(0, 100 - pct))
   const color = getQuotaColor(pct)
   const colors = getBarColors(color)
   const emoji = getEmoji(pct)
@@ -355,12 +397,13 @@ function QuotaRow({ quota }) {
           </div>
           <div className="flex items-center justify-between text-[10px]">
             <span className="text-zinc-500">
-              {formatQuotaNum(quota.used)} /{' '}
-              {quota.total > 0 ? formatQuotaNum(quota.total) : '∞'}
+              {formatQuotaUsage(quota)}
             </span>
-            <span className={`font-medium ${colors.text}`}>
-              {formatRemainingPct(pct)}% left
-            </span>
+            {!wallet && (
+              <span className={`font-medium ${colors.text}`}>
+                {formatRemainingPct(pct)}% left
+              </span>
+            )}
           </div>
         </div>
       </td>

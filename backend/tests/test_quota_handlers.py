@@ -101,6 +101,14 @@ from app.providers.morph.quota import (
     count_requests_since as morph_count_requests_since,
     monthly_bar as morph_monthly_bar,
 )
+from app.providers.deepseek.config import DeepseekConfig
+from app.providers.deepseek.quota import (
+    DeepseekUsageHandler,
+    balance_quota_rows,
+    lookup_concurrency,
+    resolve_plan,
+    signup_token_grant,
+)
 
 
 # ──────────────────────────────────────────────
@@ -125,6 +133,7 @@ def test_supported_providers():
     assert "cohere" in providers
     assert "voyage-ai" in providers
     assert "morph" in providers
+    assert "deepseek" in providers
 
 
 def test_voyage_lookup_limits() -> None:
@@ -1644,3 +1653,177 @@ def test_morph_count_requests_since_local_db() -> None:
             "abc-123",
         ))
     assert used == 12
+
+
+# ──────────────────────────────────────────────
+# DeepSeek
+# ──────────────────────────────────────────────
+
+
+def test_deepseek_config_signup_grant() -> None:
+    limits = DeepseekConfig().RATE_LIMITS
+    assert limits["signup_grant"] == {
+        "tokens": 5_000_000,
+        "days": 30,
+        "value_usd_cents": 840,
+    }
+    assert lookup_concurrency("deepseek-v4-flash") == 2500
+    assert lookup_concurrency("ds/deepseek-v4-pro") == 500
+    assert "rpm" not in limits["signup_grant"]
+    assert resolve_plan(None) == "free"
+    assert resolve_plan({"accountType": "free"}) == "free"
+    assert resolve_plan({"accountType": "payg"}) == "payg"
+
+
+def test_deepseek_balance_rows() -> None:
+    reset_at = "2026-09-25T00:00:00+00:00"
+    rows = balance_quota_rows({
+        "is_available": True,
+        "balance_infos": [{
+            "currency": "USD",
+            "total_balance": "6.12",
+            "granted_balance": "6.12",
+            "topped_up_balance": "0.00",
+        }],
+    }, reset_at=reset_at)
+    assert len(rows) == 1
+    granted = rows[0]
+    assert granted["name"] == "Granted balance (USD)"
+    assert granted["remaining"] == 612
+    assert granted["total"] == 840
+    assert granted["used"] == 228
+    assert granted["reset_at"] == reset_at
+
+    wallet = balance_quota_rows({
+        "balance_infos": [{
+            "currency": "USD",
+            "total_balance": "3.15",
+            "granted_balance": "0.00",
+            "topped_up_balance": "3.15",
+        }],
+    }, free_summary=True)
+    assert len(wallet) == 1
+    assert wallet[0]["name"] == "API balance (USD)"
+    assert wallet[0]["remaining"] == 315
+
+    topped = balance_quota_rows({
+        "balance_infos": [{
+            "currency": "USD",
+            "total_balance": "10.50",
+            "granted_balance": "0.00",
+            "topped_up_balance": "10.50",
+        }],
+    })
+    assert topped[0]["name"] == "API balance (USD)"
+    assert topped[0]["remaining"] == 1050
+
+
+def test_deepseek_usage_fetch() -> None:
+    handler = DeepseekUsageHandler()
+    mock_resp = _mock_response(200, {
+        "is_available": True,
+        "balance_infos": [{
+            "currency": "USD",
+            "total_balance": "6.12",
+            "granted_balance": "6.12",
+            "topped_up_balance": "0.00",
+        }],
+    })
+
+    async def _run() -> None:
+        with patch.object(
+            handler, "_get", new_callable=AsyncMock,
+            return_value=mock_resp,
+        ), patch(
+            "app.providers.deepseek.quota.lifetime_tokens",
+            new_callable=AsyncMock,
+            return_value=1_250_000,
+        ), patch(
+            "app.providers.deepseek.quota.grant_expires_at",
+            new_callable=AsyncMock,
+            return_value="2026-09-25T00:00:00+00:00",
+        ):
+            return await handler.fetch(
+                "sk-test",
+                provider_data={"accountType": "free"},
+                connection_id="c1",
+            )
+
+    result = asyncio.run(_run())
+    assert result.plan == "free"
+    assert result.limit_reached is False
+    assert len(result.quotas) == 2
+    tokens = result.quotas[0]
+    assert tokens.name == "Signup grant tokens"
+    assert tokens.used == 1_250_000
+    assert tokens.total == signup_token_grant()
+    assert tokens.reset_at == "2026-09-25T00:00:00+00:00"
+    assert result.quotas[1].name == "API balance (USD)"
+
+
+def test_deepseek_usage_reads_api_key_from_provider_data() -> None:
+    handler = DeepseekUsageHandler()
+    mock_resp = _mock_response(200, {
+        "is_available": True,
+        "balance_infos": [{
+            "currency": "USD",
+            "granted_balance": "1.00",
+            "topped_up_balance": "0.00",
+        }],
+    })
+
+    async def _run() -> None:
+        with patch.object(
+            handler, "_get", new_callable=AsyncMock,
+            return_value=mock_resp,
+        ) as get_mock, patch(
+            "app.providers.deepseek.quota.lifetime_tokens",
+            new_callable=AsyncMock,
+            return_value=0,
+        ), patch(
+            "app.providers.deepseek.quota.grant_expires_at",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            result = await handler.fetch(
+                "",
+                provider_data={
+                    "accountType": "free",
+                    "apiKey": "sk-from-blob",
+                },
+                connection_id="c1",
+            )
+            get_mock.assert_called_once()
+            headers = get_mock.call_args[0][1]
+            assert headers["Authorization"] == "Bearer sk-from-blob"
+            return result
+
+    result = asyncio.run(_run())
+    assert result.plan == "free"
+    assert len(result.quotas) >= 1
+
+
+def test_deepseek_usage_missing_api_key() -> None:
+    handler = DeepseekUsageHandler()
+
+    async def _run() -> UsageResponse:
+        with patch(
+            "app.providers.deepseek.quota.lifetime_tokens",
+            new_callable=AsyncMock,
+            return_value=42,
+        ), patch(
+            "app.providers.deepseek.quota.grant_expires_at",
+            new_callable=AsyncMock,
+            return_value="2026-09-25T00:00:00+00:00",
+        ):
+            return await handler.fetch(
+                "",
+                provider_data={"accountType": "free"},
+                connection_id="c1",
+            )
+
+    result = asyncio.run(_run())
+    assert result.plan == "free"
+    assert result.message == "No API key found on this connection."
+    assert len(result.quotas) == 1
+    assert result.quotas[0].used == 42
