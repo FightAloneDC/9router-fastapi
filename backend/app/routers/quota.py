@@ -16,6 +16,7 @@ from app.models.provider import ProviderConnection
 from app.models.quota_cache import QuotaCache
 from app.routers.auth import get_current_user
 from app.services.proxy import invalidate_connection_cache
+from app.routers.providers.helpers import normalize_studio_plan_for_provider
 from app.services.quota import (
     QuotaItem as ServiceQuotaItem,
     UsageResponse,
@@ -93,6 +94,8 @@ class ProviderQuota(BaseModel):
     is_active: bool
     quotas: list[QuotaItem] = []
     plan: Optional[str] = None
+    studio_plan: Optional[str] = None
+    usage_message: Optional[str] = None
     supports_quota_details: bool = False
 
 
@@ -108,6 +111,27 @@ class QuotaListResponse(BaseModel):
 
 
 # --- Helpers ---
+
+
+def _connection_data(conn: ProviderConnection) -> dict:
+    try:
+        return json.loads(conn.data) if conn.data else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _studio_plan_from_connection(
+    provider_id: str,
+    data: dict,
+) -> str | None:
+    """Canonical studioPlan from connection data, when supported."""
+    raw = data.get("studioPlan")
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        return normalize_studio_plan_for_provider(provider_id, raw)
+    except ValueError:
+        return None
 
 
 def _parse_cached_quotas(raw: str | None) -> list[QuotaItem]:
@@ -253,49 +277,51 @@ async def get_quota(
             handler is not None
             and hasattr(handler, "fetch_model_details")
         )
+        usage_message: str | None = None
         # Local-state handlers (grok-cli, …) are cheap DB sums —
         # refresh the visible page so the list is not stuck on
         # stale header snapshots (used always 0).
+        conn_data = _connection_data(conn)
+        studio_plan = _studio_plan_from_connection(
+            conn.provider,
+            conn_data,
+        )
         if handler is not None and not handler.USES_UPSTREAM:
             try:
-                data = (
-                    json.loads(conn.data) if conn.data else {}
-                )
-            except (json.JSONDecodeError, TypeError):
-                data = {}
-            try:
                 cred = (
-                    data.get("accessToken")
-                    or data.get("apiKey")
+                    conn_data.get("accessToken")
+                    or conn_data.get("apiKey")
                     or ""
                 )
                 result = await handler.fetch(
                     access_token=cred,
-                    provider_data=data,
+                    provider_data=conn_data,
                     connection_id=str(conn.id),
                 )
-                if result.quotas:
-                    await _store_quota_cache(db, conn, result)
-                    quotas = [
-                        QuotaItem(
-                            name=q.name,
-                            used=q.used,
-                            total=q.total,
-                            reset_at=q.reset_at,
-                            remaining_percentage=(
-                                q.remaining_percentage
-                            ),
-                        )
-                        for q in result.quotas
-                    ]
-                    if result.plan:
-                        plan = result.plan
+                usage_message = result.message
+                plan = result.plan
+                quotas = [
+                    QuotaItem(
+                        name=q.name,
+                        used=q.used,
+                        total=q.total,
+                        reset_at=q.reset_at,
+                        remaining_percentage=(
+                            q.remaining_percentage
+                        ),
+                    )
+                    for q in result.quotas
+                ]
+                await _store_quota_cache(db, conn, result)
             except Exception as e:
                 logger.warning(
                     "Local quota refresh failed for %s: %s",
                     conn.id,
                     e,
                 )
+                plan = studio_plan
+        elif studio_plan:
+            plan = studio_plan
         items.append(
             ProviderQuota(
                 id=str(conn.id),
@@ -304,6 +330,8 @@ async def get_quota(
                 is_active=conn.is_active,
                 quotas=quotas,
                 plan=plan,
+                studio_plan=studio_plan,
+                usage_message=usage_message,
                 supports_quota_details=supports_details,
             )
         )
@@ -432,11 +460,7 @@ async def get_connection_usage(
             )
         )
 
-    # Extract access token from connection data
-    try:
-        data = json.loads(conn.data) if conn.data else {}
-    except (json.JSONDecodeError, TypeError):
-        data = {}
+    data = _connection_data(conn)
 
     want_models = (detail or "").strip().lower() == "models"
     if want_models:
@@ -499,7 +523,7 @@ async def get_connection_usage(
     )
     # Persist for all handlers (including local-state like grok-cli)
     # so GET /quota list stays accurate after refresh.
-    if result.quotas:
+    if result.quotas or not handler.USES_UPSTREAM:
         await _store_quota_cache(db, conn, result)
     return result
 
@@ -524,7 +548,7 @@ async def _store_quota_cache(
     cache.quotas = quotas_json
     cache.limit_reached = result.limit_reached
     cache.fetched_at = datetime.now(timezone.utc)
-    await db.commit()
+    await db.flush()
 
 
 async def _try_refresh_token(

@@ -19,6 +19,26 @@ from app.services.outbound_proxy import (
     create_upstream_client,
     proxy_for_connection,
 )
+from app.routers.v1_proxy.shared import (
+    _build_provider_request,
+    _handler_for,
+    _unwrap_qoder_sse_line,
+    upstream_format_flags,
+)
+from app.services.message_translator import (
+    OpenaiStreamTranslator,
+    openai_to_claude_request,
+)
+from app.services.proxy import (
+    _resolve_provider_alias,
+    resolve_model_to_targets,
+)
+from app.services.provider_models_store import (
+    catalog_initialized,
+    enable_all_models,
+    list_disabled_ids,
+    set_models_enabled,
+)
 
 router = APIRouter(prefix="/models", tags=["models"])
 
@@ -54,7 +74,6 @@ async def get_model_availability(
 
     models = []
     for conn in connections:
-        import json
         data = json.loads(conn.data) if conn.data else {}
 
         locks = _get_active_locks(data)
@@ -109,7 +128,6 @@ async def clear_model_cooldown(
     lock_key = f"{MODEL_LOCK_PREFIX}{body.model}"
 
     for conn in connections:
-        import json
         data = json.loads(conn.data) if conn.data else {}
         if lock_key in data:
             data.pop(lock_key, None)
@@ -210,11 +228,6 @@ async def get_disabled_models(
     _user=Depends(get_current_user),
 ):
     """Get disabled models, optionally filtered by provider alias."""
-    from app.services.proxy import _resolve_provider_alias
-    from app.services.provider_models_store import (
-        catalog_initialized,
-        list_disabled_ids,
-    )
     if providerAlias:
         provider = _resolve_provider_alias(providerAlias)
         ids = await list_disabled_ids(db, provider)
@@ -252,8 +265,6 @@ async def disable_models(
     disabled[body.providerAlias] = list(existing)
     data["disabledModels"] = disabled
     await _save_settings_data(db, data)
-    from app.services.proxy import _resolve_provider_alias
-    from app.services.provider_models_store import set_models_enabled
     provider = _resolve_provider_alias(body.providerAlias)
     await set_models_enabled(db, provider, body.ids, False)
     await db.commit()
@@ -286,11 +297,6 @@ async def enable_models(
         disabled[providerAlias] = []
     data["disabledModels"] = disabled
     await _save_settings_data(db, data)
-    from app.services.proxy import _resolve_provider_alias
-    from app.services.provider_models_store import (
-        enable_all_models,
-        set_models_enabled,
-    )
     provider = _resolve_provider_alias(providerAlias)
     if id:
         await set_models_enabled(db, provider, [id], True)
@@ -322,7 +328,6 @@ async def test_model(
         raise HTTPException(status_code=400, detail="Model required")
 
     # Resolve model to upstream target directly
-    from app.services.proxy import resolve_model_to_targets
     targets = await resolve_model_to_targets(db, body.model)
     if not targets:
         # Parse the model string to give a more helpful error
@@ -352,17 +357,9 @@ async def test_model(
     start = time.time()
 
     try:
-        # ── FORMAT=claude upstream: translate + handle streaming-only ──
-        is_claude_upstream: bool = False
-        is_responses_upstream: bool = False
-        try:
-            from app.providers.provider import Provider
-            pp = Provider(target.provider)
-            cc = pp.config()
-            is_claude_upstream = cc.FORMAT == "claude"
-            is_responses_upstream = cc.FORMAT == "openai-responses"
-        except (ValueError, ModuleNotFoundError):
-            pass
+        is_claude_upstream, is_responses_upstream = (
+            upstream_format_flags(target.provider, target.model)
+        )
 
         # Check if provider needs custom request encoding
         test_body = {
@@ -373,10 +370,6 @@ async def test_model(
         }
 
         if is_claude_upstream:
-            from app.services.message_translator import (
-                openai_to_claude_request,
-                OpenaiStreamTranslator,
-            )
             # Use 16 tokens — models often 503 on max_tokens=1
             test_body = openai_to_claude_request({
                 **test_body, "max_tokens": 16,
@@ -398,21 +391,20 @@ async def test_model(
 
         conn_data = json.loads(conn.data) if conn and conn.data else {}
 
-        from app.routers.v1_proxy.shared import _build_provider_request
-        raw_body, signed_headers = await _build_provider_request(target, test_body, conn_data)
+        raw_body, signed_headers = await _build_provider_request(
+            target, test_body, conn_data,
+        )
         if signed_headers:
             send_headers = signed_headers
 
-        # Call provider's prepare_request hook (e.g. mimo-free JWT bootstrap)
-        try:
-            from app.providers.provider import Provider
-            p = Provider(target.provider)
-            handler = p.handler()
-            send_headers, test_body = await handler.prepare_request(
-                send_headers, test_body, stream=False,
-            )
-        except (ValueError, ModuleNotFoundError):
-            pass
+        handler = _handler_for(target.provider)
+        if handler is not None:
+            try:
+                send_headers, test_body = await handler.prepare_request(
+                    send_headers, test_body, stream=False,
+                )
+            except Exception:
+                pass
 
         async with create_upstream_client(
             proxy=proxy,
@@ -428,7 +420,6 @@ async def test_model(
                 )
             elif raw_body is not None:
                 # Provider uses custom encoding (e.g. Qoder) — stream-read SSE response
-                from app.routers.v1_proxy.shared import _unwrap_qoder_sse_line
 
                 send_kwargs: dict = {"headers": send_headers, "content": raw_body}
                 provider_ok = False
@@ -565,9 +556,6 @@ async def _test_claude_stream(
 
     Reads the SSE stream. Returns (error_text, ok, status_code).
     """
-    import httpx
-    from app.services.message_translator import OpenaiStreamTranslator
-
     translator = OpenaiStreamTranslator(
         model=body.get("model", ""),
     )
@@ -607,8 +595,7 @@ async def _test_claude_stream(
                             continue
                         if ev.startswith("data: {"):
                             try:
-                                import json as _j
-                                p = _j.loads(ev[6:].strip())
+                                p = json.loads(ev[6:].strip())
                                 if p.get("choices", []):
                                     ok = True
                             except Exception:

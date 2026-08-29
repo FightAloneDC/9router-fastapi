@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.provider import ProviderConnection, ProviderNode
+from app.models.quota_cache import QuotaCache
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
 from app.routers.providers.connection_filters import (
@@ -33,6 +34,7 @@ from app.routers.providers.helpers import (
     _priorities_need_renumber,
     _renumber_provider_priorities,
     _sanitize_connection,
+    normalize_studio_plan_for_provider,
 )
 from app.routers.providers.validation import _validate_provider
 from app.services.outbound_proxy import proxy_for_connection, use_outbound_proxy
@@ -644,6 +646,17 @@ async def create_provider(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     data["accountType"] = account_type or DEFAULT_ACCOUNT_TYPE
 
+    if body.studioPlan is not None:
+        try:
+            studio_plan = normalize_studio_plan_for_provider(
+                body.provider,
+                body.studioPlan,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if studio_plan:
+            data["studioPlan"] = studio_plan
+
     # Store base URL if provided or use default
     if body.baseUrl:
         data["baseUrl"] = body.baseUrl
@@ -858,6 +871,23 @@ async def update_provider(
         data["accountType"] = (
             account_type or DEFAULT_ACCOUNT_TYPE
         )
+    studio_plan_changed = False
+    if body.studioPlan is not None:
+        try:
+            if str(body.studioPlan).strip() == "":
+                studio_plan_changed = "studioPlan" in data
+                data.pop("studioPlan", None)
+            else:
+                normalized = normalize_studio_plan_for_provider(
+                    conn.provider,
+                    body.studioPlan,
+                )
+                studio_plan_changed = (
+                    data.get("studioPlan") != normalized
+                )
+                data["studioPlan"] = normalized
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     if body.lastError is not None:
         data["lastError"] = body.lastError
     if body.lastErrorAt is not None:
@@ -878,6 +908,11 @@ async def update_provider(
             data["connectionNoProxy"] = proxy_config["connectionNoProxy"]
 
     conn.data = json.dumps(data)
+
+    if studio_plan_changed:
+        cache = await db.get(QuotaCache, conn.id)
+        if cache is not None:
+            await db.delete(cache)
 
     await db.flush()
     await _renumber_provider_priorities(db, conn.provider)

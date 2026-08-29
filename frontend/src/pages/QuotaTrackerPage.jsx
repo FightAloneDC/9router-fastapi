@@ -576,6 +576,7 @@ function ProviderQuotaCard({
   const hasQuotas = provider.quotas && provider.quotas.length > 0
   const lowCount = getLowCount(provider.quotas)
   const showModelDetails = provider.supports_quota_details === true
+  const planLabel = provider.studio_plan || provider.plan
 
   return (
     <Card className="hover:border-zinc-600/50 transition-colors">
@@ -592,9 +593,9 @@ function ProviderQuotaCard({
                 <h3 className="text-sm font-semibold text-zinc-100 truncate">
                   {provider.name || provider.provider}
                 </h3>
-                {provider.plan && (
+                {planLabel && (
                   <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-blue-600/20 text-blue-400 shrink-0">
-                    {provider.plan}
+                    {planLabel}
                   </span>
                 )}
                 {lowCount > 0 && (
@@ -1018,7 +1019,8 @@ export default function QuotaTrackerPage() {
                       q.remaining_percentage ?? 0,
                     reset_at: q.reset_at || null,
                   })),
-                  plan: usage.plan || p.plan,
+                  plan: usage.plan ?? p.plan,
+                  studio_plan: p.studio_plan,
                   usage_message: usage.message || null,
                 }
               : p

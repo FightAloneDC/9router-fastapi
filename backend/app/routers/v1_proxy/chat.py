@@ -44,6 +44,7 @@ from .shared import (
     _before_user_forward,
     _maybe_refresh_on_auth_error,
     _mark_conn_failed,
+    upstream_format_flags,
 )
 
 router = APIRouter()
@@ -118,16 +119,9 @@ async def chat_completions(
         proxy: str | None = None
 
         # ── FORMAT=claude / openai-responses: translated upstreams ──
-        is_claude_upstream: bool = False
-        is_responses_upstream: bool = False
-        try:
-            from app.providers.provider import Provider
-            p = Provider(target.provider)
-            c = p.config()
-            is_claude_upstream = c.FORMAT == "claude"
-            is_responses_upstream = c.FORMAT == "openai-responses"
-        except (ValueError, ModuleNotFoundError):
-            pass
+        is_claude_upstream, is_responses_upstream = (
+            upstream_format_flags(target.provider, target.model)
+        )
 
         if is_claude_upstream:
             forward_body = openai_to_claude_request(forward_body)

@@ -2,14 +2,23 @@
 
 import asyncio
 import json
+import re
 import time
+from pathlib import Path
 
 import httpx
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import async_session
 from app.models.provider import ProviderConnection
+from app.providers.base import BaseProviderHandler
+from app.providers.provider import Provider
+from app.providers.qoder.transform import (
+    qoder_envelope_http_error,
+    unwrap_qoder_sse_line,
+)
 from app.services.proxy import (
     calculate_cooldown,
     mark_connection_unavailable,
@@ -23,6 +32,15 @@ from app.services.outbound_proxy import create_upstream_client
 # Hard stop for farm burn (429 loops across thousands of keys).
 # If 5 healthy candidates also fail, stop — do not walk the pool.
 MAX_FALLBACK_ATTEMPTS = 5
+
+
+def _handler_for(provider_id: str) -> BaseProviderHandler | None:
+    """Return provider handler, or None if the id is unknown."""
+    try:
+        return Provider(provider_id).handler()
+    except (ValueError, ModuleNotFoundError):
+        return None
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared helper classes / types
@@ -59,18 +77,26 @@ def _should_fallback_on_error(
 ) -> bool:
     """Fallback to next connection? PS handler may override."""
     if provider_id:
-        try:
-            from app.providers.provider import Provider
-
-            handler = Provider(provider_id).handler()
+        handler = _handler_for(provider_id)
+        if handler is not None:
             decision = handler.should_fallback_on_error(
                 status_code, detail,
             )
             if decision is not None:
                 return decision
-        except (ValueError, ModuleNotFoundError):
-            pass
     return should_fallback_on_error(status_code, detail)
+
+
+def upstream_format_flags(
+    provider_id: str,
+    model: str,
+) -> tuple[bool, bool]:
+    """Return (is_claude_upstream, is_responses_upstream) for a target."""
+    handler = _handler_for(provider_id)
+    if handler is None:
+        return False, False
+    fmt = handler.resolve_upstream_format(model)
+    return fmt == "claude", fmt == "openai-responses"
 
 
 def _rewrite_body_after_error(
@@ -83,11 +109,8 @@ def _rewrite_body_after_error(
     """PS: optional same-connection body rewrite (no pool rotate)."""
     if not provider_id:
         return None
-    try:
-        from app.providers.provider import Provider
-
-        handler = Provider(provider_id).handler()
-    except (ValueError, ModuleNotFoundError):
+    handler = _handler_for(provider_id)
+    if handler is None:
         return None
     return handler.rewrite_body_after_error(
         status_code, detail, model, body,
@@ -114,8 +137,6 @@ async def _mark_upstream_stream_error(
     if not connection_id:
         return
     try:
-        from app.database import async_session
-
         async with async_session() as err_db:
             cooldown_ms, new_level = calculate_cooldown(status_code, error_detail)
             await mark_connection_unavailable(
@@ -148,13 +169,13 @@ async def _maybe_refresh_on_auth_error(
     if status_code is not None and status_code not in (401, 403):
         return False
     try:
-        from app.providers.provider import Provider
-
-        handler = Provider(target.provider).handler()
+        handler = _handler_for(target.provider)
+        if handler is None:
+            return False
         return await handler.try_refresh_on_auth_error(
             db, target.connection_id,
         )
-    except (ValueError, ModuleNotFoundError, Exception):
+    except Exception:
         return False
 
 
@@ -208,10 +229,8 @@ async def _build_provider_request(
         tokens or exclude the connection. Only Provider lookup failures are
         swallowed.
     """
-    try:
-        from app.providers.provider import Provider
-        handler = Provider(target.provider).handler()
-    except (ValueError, ModuleNotFoundError):
+    handler = _handler_for(target.provider)
+    if handler is None:
         return None, None
     if hasattr(handler, "build_request_body"):
         return await handler.build_request_body(
@@ -229,10 +248,8 @@ async def _before_user_forward(
 
     False means skip this connection (try the next candidate).
     """
-    try:
-        from app.providers.provider import Provider
-        handler = Provider(target.provider).handler()
-    except (ValueError, ModuleNotFoundError):
+    handler = _handler_for(target.provider)
+    if handler is None:
         return True
     hook = getattr(handler, "before_user_forward", None)
     if hook is None:
@@ -251,13 +268,13 @@ async def _before_user_forward(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Qoder SSE unwrapper
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def _unwrap_qoder_sse_line(line: str) -> str | None:
-    """Unwrap a single Qoder SSE line to OpenAI format.
-
-    Delegates to providers/qoder/transform (PS rule).
-    """
-    from app.providers.qoder.transform import unwrap_qoder_sse_line
-
+    """Unwrap a single Qoder SSE line to OpenAI format."""
     return unwrap_qoder_sse_line(line)
 
 
@@ -338,8 +355,6 @@ def _qoder_error_from_unwrapped(
     unwrapped: str,
 ) -> tuple[int, str] | None:
     """Parse ``[qoder error N: ...]`` marker from an unwrapped SSE line."""
-    import re
-
     if not unwrapped.startswith("data: "):
         return None
     try:
@@ -369,10 +384,6 @@ def _parse_qoder_line_business_error(
     line: str,
 ) -> tuple[int, str] | None:
     """Detect Qoder business-error envelope on one SSE/raw line."""
-    from app.providers.qoder.transform import (
-        qoder_envelope_http_error,
-    )
-
     stripped = line.strip()
     if not stripped:
         return None
@@ -428,17 +439,14 @@ async def _stream_response(
     encoding *body*.  This is required for Qoder's WAF-bypass encoding.
     """
     # Call provider's prepare_request hook (e.g. mimo-free JWT bootstrap)
-    stream_handler = None
-    try:
-        from app.providers.provider import Provider
-        p = Provider(target.provider)
-        handler = p.handler()
-        stream_handler = handler
-        target.headers, body = await handler.prepare_request(
-            target.headers, body, stream=True,
-        )
-    except (ValueError, ModuleNotFoundError):
-        pass
+    stream_handler = _handler_for(target.provider)
+    if stream_handler is not None:
+        try:
+            target.headers, body = await stream_handler.prepare_request(
+                target.headers, body, stream=True,
+            )
+        except Exception:
+            stream_handler = None
 
     # Determine send mode: raw bytes (Qoder) vs JSON (everything else)
     send_kwargs: dict = {"headers": target.headers}
@@ -518,7 +526,7 @@ async def _stream_response(
                 if biz is not None:
                     st, detail = biz
                     raise _http_status_error(st, detail, peek_req)
-                unwrapped = _unwrap_qoder_sse_line(line)
+                unwrapped = unwrap_qoder_sse_line(line)
                 if not unwrapped:
                     return False
                 marked = _qoder_error_from_unwrapped(unwrapped)
@@ -580,7 +588,7 @@ async def _stream_response(
                         raise _http_status_error(
                             st, detail, peek_req,
                         ) from exc
-                    unwrapped = _unwrap_qoder_sse_line(line)
+                    unwrapped = unwrap_qoder_sse_line(line)
                     marked = (
                         _qoder_error_from_unwrapped(unwrapped)
                         if unwrapped else None
@@ -667,7 +675,6 @@ async def _stream_response(
 
         def _flush_sniff(extra: dict | None = None) -> None:
             try:
-                from pathlib import Path
                 out_dir = Path(__file__).resolve().parents[3] / (
                     "tests/_stream_sniff"
                 )
@@ -728,7 +735,7 @@ async def _stream_response(
                         raise _http_status_error(
                             st, detail, resp.request,
                         )
-                    unwrapped = _unwrap_qoder_sse_line(line)
+                    unwrapped = unwrap_qoder_sse_line(line)
                     if not unwrapped:
                         continue
                     if unwrapped.strip() == "data: [DONE]":
@@ -757,7 +764,7 @@ async def _stream_response(
                     raise _http_status_error(
                         st, detail, resp.request,
                     )
-                unwrapped = _unwrap_qoder_sse_line(line)
+                unwrapped = unwrap_qoder_sse_line(line)
                 if unwrapped:
                     marked = _qoder_error_from_unwrapped(unwrapped)
                     if marked is not None:
@@ -1040,7 +1047,6 @@ async def _stream_response(
 
             if db and provider and request_start_time:
                 try:
-                    from app.database import async_session
                     async with async_session() as tracking_db:
                         total_latency_ms = int(
                             (time.time() - request_start_time) * 1000
@@ -1103,16 +1109,14 @@ async def _non_stream_response(
     Returns (JSONResponse, raw_data_dict) so callers can extract usage info.
     """
     # Call provider's prepare_request hook (e.g. mimo-free JWT bootstrap)
-    handler = None
-    try:
-        from app.providers.provider import Provider
-        p = Provider(target.provider)
-        handler = p.handler()
-        target.headers, body = await handler.prepare_request(
-            target.headers, body, stream=False,
-        )
-    except (ValueError, ModuleNotFoundError):
-        handler = None
+    handler = _handler_for(target.provider)
+    if handler is not None:
+        try:
+            target.headers, body = await handler.prepare_request(
+                target.headers, body, stream=False,
+            )
+        except Exception:
+            handler = None
 
     send_kwargs: dict = {"headers": target.headers}
     if raw_body is not None:
@@ -1133,8 +1137,7 @@ async def _non_stream_response(
         # per-request state (e.g. Morph apply-fast last_user) survives.
         try:
             if handler is None:
-                from app.providers.provider import Provider
-                handler = Provider(target.provider).handler()
+                handler = _handler_for(target.provider)
             data = handler.unwrap_response(resp.text)
         except Exception:
             # Fallback: standard JSON parse
@@ -1158,28 +1161,20 @@ async def _non_stream_response(
 
 def _build_embeddings_url(target: ProxyTarget) -> str:
     """Derive the embeddings endpoint URL using handler."""
-    try:
-        from app.providers.provider import Provider
-        p = Provider(target.provider)
-        handler = p.handler()
+    handler = _handler_for(target.provider)
+    if handler is not None:
         return handler.build_embeddings_url(target.url)
-    except (ValueError, ModuleNotFoundError):
-        # Fallback: standard OpenAI-compat
-        if target.url.endswith("/chat/completions"):
-            return target.url[:-len("/chat/completions")] + "/embeddings"
-        return target.url.rstrip("/") + "/embeddings"
+    if target.url.endswith("/chat/completions"):
+        return target.url[:-len("/chat/completions")] + "/embeddings"
+    return target.url.rstrip("/") + "/embeddings"
 
 
 def _build_embeddings_body(target: ProxyTarget, body: dict) -> dict:
     """Transform the embeddings request body using handler."""
-    try:
-        from app.providers.provider import Provider
-        p = Provider(target.provider)
-        handler = p.handler()
+    handler = _handler_for(target.provider)
+    if handler is not None:
         return handler.build_embeddings_body(target.model, body)
-    except (ValueError, ModuleNotFoundError):
-        # Fallback: standard OpenAI-compat
-        return {**body, "model": target.model}
+    return {**body, "model": target.model}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

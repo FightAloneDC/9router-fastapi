@@ -169,6 +169,9 @@ def _build_provider_entry(
             getattr(config, "MODEL_CATALOG_TABLE", False)
         ),
         "rateLimits": getattr(config, "RATE_LIMITS", None) or None,
+        "studioPlanOptions": (
+            getattr(config, "STUDIO_PLAN_OPTIONS", None) or None
+        ),
         "bulkImportFormat": config.BULK_IMPORT_FORMAT,
         "requiresProxy": config.REQUIRES_PROXY,
         "customModal": config.CUSTOM_MODAL or None,

@@ -1827,3 +1827,18 @@ def test_deepseek_usage_missing_api_key() -> None:
     assert result.message == "No API key found on this connection."
     assert len(result.quotas) == 1
     assert result.quotas[0].used == 42
+
+
+def test_commandcode_handler_registered() -> None:
+    from app.providers.commandcode.quota import CommandcodeUsageHandler
+
+    handler = get_usage_handler("commandcode")
+    assert handler is not None
+    assert isinstance(handler, CommandcodeUsageHandler)
+
+
+def test_commandcode_lookup_limits() -> None:
+    from app.providers.commandcode.quota import lookup_limits
+
+    assert lookup_limits("pro")["monthly"] == 80
+    assert lookup_limits("provider") == {}

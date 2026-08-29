@@ -15,6 +15,7 @@ _DATA_INTERNAL_KEYS = {
     "anomalyRequestId",
     "expiresAt", "lastUsedAt", "consecutiveUseCount",
     "accountType",
+    "studioPlan",
 }
 
 # Per-connection billing kind (JSON blob, not a DB column).

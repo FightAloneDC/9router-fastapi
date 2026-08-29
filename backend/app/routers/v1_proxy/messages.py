@@ -42,6 +42,7 @@ from .shared import (
     _mark_conn_failed,
     _build_provider_request,
     _before_user_forward,
+    upstream_format_flags,
 )
 
 router = APIRouter()
@@ -154,18 +155,9 @@ async def messages_endpoint(
             continue
 
         # Determine if the upstream is Claude-format or OpenAI-format
-        is_claude_upstream: bool = False
-        is_responses_upstream: bool = False
-        try:
-            from app.providers.provider import Provider
-            p = Provider(target.provider)
-            c = p.config()
-            is_claude_upstream = c.FORMAT == "claude"
-            is_responses_upstream = (
-                c.FORMAT == "openai-responses"
-            )
-        except (ValueError, ModuleNotFoundError):
-            pass
+        is_claude_upstream, is_responses_upstream = (
+            upstream_format_flags(target.provider, target.model)
+        )
 
         # Prepare the request body for the upstream
         raw_body: bytes | None = None

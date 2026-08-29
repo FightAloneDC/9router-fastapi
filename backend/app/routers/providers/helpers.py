@@ -31,6 +31,49 @@ async def _next_provider_priority(
     return int(max_pri) + 1
 
 
+def normalize_studio_plan_for_provider(
+    provider_id: str,
+    value: str | None,
+) -> str | None:
+    """Validate ``studioPlan`` against provider ``STUDIO_PLAN_OPTIONS``."""
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        cfg = Provider(provider_id).config()
+    except (ValueError, ModuleNotFoundError, AttributeError) as exc:
+        raise ValueError(
+            f"studioPlan is not supported for provider '{provider_id}'"
+        ) from exc
+
+    options = getattr(cfg, "STUDIO_PLAN_OPTIONS", None) or []
+    if not options:
+        raise ValueError(
+            f"studioPlan is not supported for provider '{provider_id}'"
+        )
+
+    from importlib import import_module
+
+    mod = import_module(cfg.__class__.__module__)
+    normalize = getattr(mod, "normalize_studio_plan", None)
+    if normalize is not None:
+        canonical = normalize(str(value).strip())
+    else:
+        raw = str(value).strip().lower()
+        aliases = getattr(cfg, "STUDIO_PLAN_ALIASES", {}) or {}
+        canonical = aliases.get(raw, raw)
+        valid = {
+            opt["id"]
+            for opt in options
+            if isinstance(opt, dict) and opt.get("id")
+        }
+        if canonical not in valid:
+            canonical = None
+
+    if not canonical:
+        raise ValueError(f"Invalid studioPlan: {value}")
+    return canonical
+
+
 async def _renumber_provider_priorities(
     db: AsyncSession,
     provider: str,
@@ -146,6 +189,7 @@ def _connection_to_out(conn: ProviderConnection) -> dict:
         "defaultModel": data.get("defaultModel"),
         "test_status": data.get("testStatus"),
         "accountType": data.get("accountType") or DEFAULT_ACCOUNT_TYPE,
+        "studioPlan": data.get("studioPlan"),
         "lastError": last_error,
         "lastErrorAt": last_error_at,
         "errorCode": error_code,
@@ -169,7 +213,7 @@ def _sanitize_connection(conn_dict: dict) -> dict:
     SAFE_FIELDS = [
         "id", "provider", "auth_type", "name", "email", "displayName",
         "priority", "globalPriority",         "is_active", "defaultModel",
-        "test_status", "accountType", "lastError", "lastErrorAt",
+        "test_status", "accountType", "studioPlan", "lastError", "lastErrorAt",
         "errorCode",
         "expiresAt", "lastUsedAt", "consecutiveUseCount",
         "proxyUsage",

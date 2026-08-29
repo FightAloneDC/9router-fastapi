@@ -257,7 +257,7 @@ function RateLimitsNote({ limits }) {
   )
 }
 
-function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onUpdateAccountType, onEdit, onDelete, onTest, testing, testResult, isOAuth = false, isSelected = false, onSelect = null }) {
+function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMoveDown, onToggleActive, onUpdateProxy, onUpdateAccountType, studioPlanOptions = null, onUpdateStudioPlan = null, onEdit, onDelete, onTest, testing, testResult, isOAuth = false, isSelected = false, onSelect = null }) {
   const [showProxyDropdown, setShowProxyDropdown] = useState(false)
   const [updatingProxy, setUpdatingProxy] = useState(false)
   const [showLastError, setShowLastError] = useState(false)
@@ -383,10 +383,26 @@ function ConnectionRow({ connection, proxyPools, isFirst, isLast, onMoveUp, onMo
                 onChange={(e) => onUpdateAccountType(e.target.value)}
                 onClick={(e) => e.stopPropagation()}
                 className="h-5 max-w-[110px] rounded border border-zinc-700 bg-zinc-900 px-1 text-[10px] text-zinc-300"
-                title="Account type"
+                title="9Router account type (farm routing)"
               >
                 {ACCOUNT_TYPE_OPTIONS.map((opt) => (
                   <option key={opt.value || 'unset'} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            )}
+            {onUpdateStudioPlan && studioPlanOptions?.length > 0 && (
+              <select
+                value={connection.studioPlan || ''}
+                onChange={(e) => onUpdateStudioPlan(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                className="h-5 max-w-[140px] rounded border border-zinc-700 bg-zinc-900 px-1 text-[10px] text-zinc-300"
+                title="Studio subscription plan (quota caps)"
+              >
+                <option value="">Studio plan…</option>
+                {studioPlanOptions.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
                     {opt.label}
                   </option>
                 ))}
@@ -2307,6 +2323,18 @@ function ProviderDetailPage() {
     }
   }
 
+  const handleUpdateStudioPlan = async (id, studioPlan) => {
+    setConnections((prev) => prev.map((c) => (
+      c.id === id ? { ...c, studioPlan: studioPlan || null } : c
+    )))
+    try {
+      await providersApi.updateProvider(id, { studioPlan: studioPlan || '' })
+    } catch (err) {
+      console.error('Failed to set studio plan:', err)
+      await fetchConnections()
+    }
+  }
+
   const handleSavePrefix = async () => {
     if (isCompatible) return
     const next = (prefixDraft || '').trim()
@@ -3520,6 +3548,12 @@ function ProviderDetailPage() {
                           onMoveDown={() => handleSwapPriority(conn.id, 'down')}
                           onToggleActive={(isActive) => handleToggleActive(conn.id, isActive)}
                           onUpdateAccountType={(accountType) => handleUpdateAccountType(conn.id, accountType)}
+                          studioPlanOptions={info?.studioPlanOptions}
+                          onUpdateStudioPlan={
+                            info?.studioPlanOptions?.length
+                              ? (studioPlan) => handleUpdateStudioPlan(conn.id, studioPlan)
+                              : null
+                          }
                           onUpdateProxy={async (proxyPoolId) => {
                             try {
                               await updateConnectionProxy(conn, proxyPoolId)

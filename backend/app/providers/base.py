@@ -353,6 +353,15 @@ class BaseProviderHandler:
             except Exception as e:
                 return ValidateResult(valid=False, error=str(e)[:200], latency_ms=int((time.monotonic() - start) * 1000))
 
+    def resolve_upstream_format(self, model: str = "") -> str:
+        """Effective upstream wire format for this request.
+
+        Default: ``config.FORMAT``. Override when one provider id
+        routes some models to Anthropic ``/messages`` and others to
+        OpenAI ``/chat/completions`` (Command Code).
+        """
+        return self.config.FORMAT
+
     def _normalize_model(self, m) -> dict:
         """Normalize a model entry to {id, name, type}."""
         from app.routers.providers.constants import (
