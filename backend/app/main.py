@@ -6,49 +6,45 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import database
 from app.config import settings
-from app.openapi_ui import openapi_ui_kwargs
 from app.middleware.api_prefix import StripApiPrefixMiddleware
 from app.middleware.request_logging import RequestLoggingMiddleware
-from app.static_ui import mount_provider_icons, mount_static_ui
-from app.routers import auth as auth_router
+from app.openapi_ui import openapi_ui_kwargs
 from app.routers import api_keys as api_keys_router
+from app.routers import auth as auth_router
 from app.routers import chat as chat_router
-from app.routers import settings as settings_router
-from app.routers import combos as combos_router
-from app.routers import providers as providers_router
-from app.routers import usage as usage_router
-from app.routers import quota as quota_router
-from app.routers import mitm as mitm_router
 from app.routers import cli_tools as cli_tools_router
-from app.routers import proxy_pools as proxy_pools_router
+from app.routers import combos as combos_router
 from app.routers import console as console_router
-from app.routers import v1_proxy as v1_proxy_router
+from app.routers import media_providers as media_providers_router
+from app.routers import mitm as mitm_router
 from app.routers import models as models_router
 from app.routers import oauth as oauth_router
-from app.routers import media_providers as media_providers_router
+from app.routers import providers as providers_router
+from app.routers import proxy_pools as proxy_pools_router
+from app.routers import quota as quota_router
+from app.routers import settings as settings_router
+from app.routers import usage as usage_router
 from app.routers import usage_stream as usage_stream_router
+from app.routers import v1_proxy as v1_proxy_router
+from app.services.connection_health import connection_health_loop
+from app.services.provider_aliases import refresh_from_db
+from app.services.token_refresh import token_refresh_loop
+from app.static_ui import mount_provider_icons, mount_static_ui
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: startup / shutdown hooks."""
     # Start background token refresh + connection health
-    from app.services.connection_health import (
-        connection_health_loop,
-    )
-    from app.services.token_refresh import token_refresh_loop
-
     refresh_task = asyncio.create_task(token_refresh_loop())
     health_task = asyncio.create_task(connection_health_loop())
 
-    from app.database import async_session, install_quiet_pool_terminate
-    from app.services.provider_aliases import refresh_from_db
-
-    install_quiet_pool_terminate()
+    database.install_quiet_pool_terminate()
 
     try:
-        async with async_session() as session:
+        async with database.async_session() as session:
             await refresh_from_db(session)
     except Exception:
         pass
@@ -64,9 +60,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-    from app.database import engine
-
-    await engine.dispose()
+    await database.engine.dispose()
 
 
 def create_app() -> FastAPI:

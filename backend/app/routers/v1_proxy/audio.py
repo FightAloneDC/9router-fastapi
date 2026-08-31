@@ -1,5 +1,6 @@
 """POST /v1/audio/* — TTS (speech), STT (transcriptions), and voice listing."""
 
+import base64
 import json
 import time
 import uuid
@@ -7,35 +8,37 @@ import uuid
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, Response
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.services.api_key_auth import validate_api_key
-from app.services.proxy import (
-    get_connections_cached,
-    get_provider_strategy,
-    select_connection_for_provider,
-    clear_connection_error,
-    update_connection_usage,
-    parse_tts_model,
-    _resolve_provider_alias,
-    _resolve_base_url,
-)
-from app.providers.provider import Provider
-from app.services.usage_tracking import save_request_tracking
 from app.models.provider import ProviderConnection
-from app.services.stt_adapters import resolve_audio_mime
+from app.providers.provider import Provider
+from app.services.api_key_auth import validate_api_key
 from app.services.outbound_proxy import (
     ProxyRequiredError,
     create_upstream_client,
     proxy_for_connection,
 )
+from app.services.proxy import (
+    _resolve_base_url,
+    _resolve_provider_alias,
+    clear_connection_error,
+    display_alias,
+    get_connections_cached,
+    get_provider_strategy,
+    parse_tts_model,
+    select_connection_for_provider,
+    update_connection_usage,
+)
+from app.services.stt_adapters import resolve_audio_mime
+from app.services.usage_tracking import save_request_tracking
+from app.services.voice_fetchers import fetch_voices_cached
 
 from .shared import (
     MAX_FALLBACK_ATTEMPTS,
-    _should_fallback_on_error,
     _mark_conn_failed,
+    _should_fallback_on_error,
 )
 
 router = APIRouter()
@@ -237,11 +240,10 @@ async def audio_speech(
 
             # Return audio (binary or json base64)
             if fmt == "json":
-                import base64 as _b64
                 return JSONResponse(
                     status_code=200,
                     content={
-                        "audio": _b64.b64encode(audio_bytes).decode("ascii"),
+                        "audio": base64.b64encode(audio_bytes).decode("ascii"),
                         "format": content_type.split("/")[-1],
                     },
                     headers={"X-Request-Id": request_id},
@@ -362,7 +364,6 @@ async def audio_transcriptions(
     # ── 2. Resolve handler ──
     stt_handler = None
     try:
-        from app.providers.provider import Provider
         p = Provider(provider_id)
         stt_handler = p.handler()
     except (ValueError, ModuleNotFoundError):
@@ -546,10 +547,6 @@ async def audio_voices(
 
     Plan: docs/plans/v1-audio-voices.md (Phase 4).
     """
-    from app.services.voice_fetchers import fetch_voices_cached
-    from app.services.proxy import display_alias
-    from app.providers.provider import Provider
-
     # Check if provider supports voice listing via handler
     handler = None
     try:

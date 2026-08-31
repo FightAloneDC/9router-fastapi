@@ -15,7 +15,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
+from sqlalchemy import select
 
+from app import database
+from app.models.provider import ProviderConnection
 from app.services.outbound_proxy import (
     create_upstream_client,
     normalize_upstream_timeout,
@@ -195,11 +198,11 @@ def is_connectivity_failure(data: dict) -> bool:
 
 def async_session() -> Any:
     """Indirection so tests can stub the DB session factory."""
-    from app.database import async_session as _factory
-    return _factory()
+    return database.async_session()
 
 
 def _base_url(provider: str, data: dict) -> str:
+    # Cycle: proxy.py imports this module at top level.
     from app.services.proxy import _resolve_base_url
     return _resolve_base_url(provider, data)
 
@@ -237,6 +240,7 @@ async def probe_connection(
 
 
 def _mark_recovered(data: dict) -> None:
+    # Cycle: proxy.py imports this module at top level.
     from app.services.proxy import build_clear_cooldown_update
 
     data.update(build_clear_cooldown_update())
@@ -259,10 +263,6 @@ async def resort_provider_priorities(
     provider: str,
 ) -> int:
     """Re-index one provider in the current session. No commit."""
-    from sqlalchemy import select
-
-    from app.models.provider import ProviderConnection
-
     result = await session.execute(
         select(ProviderConnection).where(
             ProviderConnection.provider == provider,
@@ -299,10 +299,6 @@ async def refresh_connection_health() -> dict:
     skipped = 0
     reindexed = 0
     resorted = 0
-
-    from sqlalchemy import select
-
-    from app.models.provider import ProviderConnection
 
     async with async_session() as session:
         result = await session.execute(select(ProviderConnection))
@@ -343,6 +339,7 @@ async def refresh_connection_health() -> dict:
 
         if probed or reindexed:
             await session.commit()
+            # Cycle: proxy.py imports this module at top level.
             from app.services.proxy import (
                 invalidate_connection_cache,
             )

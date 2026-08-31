@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import database
 from app.database import get_db
 from app.models.provider import ProviderConnection, ProviderNode
 from app.models.proxy_pool import ProxyPool
@@ -19,15 +20,7 @@ from app.routers.auth import get_current_user
 from app.routers.providers._router import router
 from app.routers.providers.helpers import _get_base_url
 from app.routers.providers.nodes import _build_node_handler
-from app.routers.providers.validation import _validate_provider, _validate_custom_openai
-from app.services.outbound_proxy import (
-    ProxyRequiredError,
-    create_upstream_client,
-    parse_proxy_usage,
-    proxy_for_connection,
-    resolve_proxy_url,
-    use_outbound_proxy,
-)
+from app.routers.providers.validation import _validate_custom_openai, _validate_provider
 from app.schemas.provider import (
     BatchTestRequest,
     BatchTestResponse,
@@ -36,6 +29,15 @@ from app.schemas.provider import (
     ProviderValidateRequest,
     ProviderValidateResponse,
 )
+from app.services.outbound_proxy import (
+    ProxyRequiredError,
+    create_upstream_client,
+    parse_proxy_usage,
+    proxy_for_connection,
+    resolve_proxy_url,
+    use_outbound_proxy,
+)
+from app.services.proxy import resolve_model_to_targets
 
 
 async def _test_provider_connection(conn: ProviderConnection, db: AsyncSession) -> dict:
@@ -111,16 +113,11 @@ async def validate_provider(
     _user=Depends(get_current_user),
 ):
     """Validate provider credentials using provider handler."""
-    import json as _json
-    from sqlalchemy import select
-    from app.models.provider import ProviderNode
-    from app.database import async_session
-
     # This pre-save payload has no connection or proxy pool to resolve.
     extra = body.providerSpecificData or {}
 
     # Check if this is a compatible provider node
-    async with async_session() as db:
+    async with database.async_session() as db:
         node_result = await db.execute(
             select(ProviderNode).where(ProviderNode.id == body.provider)
         )
@@ -129,8 +126,8 @@ async def validate_provider(
     if node:
         node_data = {}
         try:
-            node_data = _json.loads(node.data) if node.data else {}
-        except (_json.JSONDecodeError, TypeError):
+            node_data = json.loads(node.data) if node.data else {}
+        except (json.JSONDecodeError, TypeError):
             pass
 
         base_url = node_data.get("baseUrl", "")
@@ -246,8 +243,6 @@ async def test_connection_models(
     _user=Depends(get_current_user),
 ):
     """Test all models of a provider connection by making minimal chat completion calls."""
-    from app.services.proxy import resolve_model_to_targets
-
     result = await db.execute(
         select(ProviderConnection).where(ProviderConnection.id == connection_id)
     )

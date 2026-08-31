@@ -11,37 +11,48 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import database
 from app.database import get_db
 from app.models.provider import ProviderConnection
-from app.services.api_key_auth import validate_api_key
-from app.services.proxy import (
-    resolve_model_to_targets,
-    get_combo_strategy,
-    clear_connection_error,
-    update_connection_usage,
+from app.providers.grok_cli.anomaly import maybe_mark_phantom_write
+from app.providers.grok_cli.constants import PHANTOM_WRITE_RETRY
+from app.providers.grok_cli.debug_dump import (
+    ChatSseAssembler,
+    begin_dump,
+    finish_dump,
+    parse_upstream_body,
 )
+from app.providers.grok_cli.stream import ResponsesUpstreamTranslator
+from app.services.active_requests import track_request_end, track_request_start
+from app.services.api_key_auth import validate_api_key
 from app.services.message_translator import (
+    ClaudeStreamTranslator,
     claude_to_openai_request,
     openai_to_claude_response,
-    ClaudeStreamTranslator,
 )
-from app.services.usage_tracking import save_request_tracking
-from app.services.active_requests import track_request_start, track_request_end
 from app.services.outbound_proxy import (
     ProxyRequiredError,
     create_upstream_client,
     proxy_for_connection,
     purpose_from_header,
 )
+from app.services.proxy import (
+    clear_connection_error,
+    get_combo_strategy,
+    resolve_model_to_targets,
+    update_connection_usage,
+)
+from app.services.usage_tracking import save_request_tracking
 
+from .chat import _non_stream_grok_responses
 from .shared import (
     MAX_FALLBACK_ATTEMPTS,
-    _should_fallback_on_error,
-    _rewrite_body_after_error,
-    _maybe_refresh_on_auth_error,
-    _mark_conn_failed,
-    _build_provider_request,
     _before_user_forward,
+    _build_provider_request,
+    _mark_conn_failed,
+    _maybe_refresh_on_auth_error,
+    _rewrite_body_after_error,
+    _should_fallback_on_error,
     upstream_format_flags,
 )
 
@@ -232,7 +243,6 @@ async def messages_endpoint(
                 )
                 resp_data: dict = {}
             elif is_responses_upstream:
-                from .chat import _non_stream_grok_responses
                 _, resp_data = await _non_stream_grok_responses(
                     target, forward_body, request_id,
                     raw_body=raw_body, db=db, proxy=proxy,
@@ -531,16 +541,6 @@ async def _messages_stream_response(
 
     async def generate_responses_to_claude():  # type: ignore[no-untyped-def]
         """Responses SSE -> Chat SSE -> Claude SSE."""
-        from app.providers.grok_cli.debug_dump import (
-            ChatSseAssembler,
-            begin_dump,
-            finish_dump,
-            parse_upstream_body,
-        )
-        from app.providers.grok_cli.stream import (
-            ResponsesUpstreamTranslator,
-        )
-
         grok_tr = ResponsesUpstreamTranslator(
             model=model_str,
             request_id=f"chatcmpl-{request_id}",
@@ -625,12 +625,6 @@ async def _messages_stream_response(
                     error=dump_error,
                 )
                 if dump_status == "ok":
-                    from app.providers.grok_cli.constants import (
-                        PHANTOM_WRITE_RETRY,
-                    )
-                    from app.providers.grok_cli.anomaly import (
-                        maybe_mark_phantom_write,
-                    )
                     if PHANTOM_WRITE_RETRY:
                         await maybe_mark_phantom_write(
                             db,
@@ -656,8 +650,7 @@ async def _messages_stream_response(
             # After stream consumed, save usage tracking
             if db and provider and request_start_time:
                 try:
-                    from app.database import async_session
-                    async with async_session() as tracking_db:
+                    async with database.async_session() as tracking_db:
                         total_latency_ms = int(
                             (time.time() - request_start_time) * 1000
                         )

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.provider import ProviderConnection, ProviderNode
 from app.models.quota_cache import QuotaCache
+from app.providers.provider import Provider
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
 from app.routers.providers.connection_filters import (
@@ -25,9 +26,9 @@ from app.routers.providers.constants import (
     normalize_account_type,
     normalize_models_list,
 )
-from app.routers.providers.helpers import _get_provider_config
 from app.routers.providers.helpers import (
     _connection_to_out,
+    _get_provider_config,
     _next_provider_priority,
     _normalize_proxy_config,
     _normalize_proxy_pool_id,
@@ -36,16 +37,27 @@ from app.routers.providers.helpers import (
     _sanitize_connection,
     normalize_studio_plan_for_provider,
 )
+from app.routers.providers.testing import _test_provider_connection
 from app.routers.providers.validation import _validate_provider
-from app.services.outbound_proxy import proxy_for_connection, use_outbound_proxy
-from app.services.proxy import invalidate_connection_cache
 from app.schemas.provider import (
     ProviderConnectionCreate,
     ProviderConnectionOut,
     ProviderConnectionUpdate,
-    SuggestedModelsResponse,
     ProviderTestResponse,
+    SuggestedModelsResponse,
 )
+from app.services.outbound_proxy import proxy_for_connection, use_outbound_proxy
+from app.services.provider_aliases import upsert_alias
+from app.services.provider_models_store import (
+    clear_provider_models,
+    replace_provider_models,
+    upsert_custom_model,
+    uses_model_catalog_table,
+)
+from app.services.provider_models_store import (
+    list_provider_models as list_catalog,
+)
+from app.services.proxy import display_alias, invalidate_connection_cache
 
 
 def _models_union_from_data_blobs(data_blobs: list[str | None]) -> list:
@@ -195,10 +207,6 @@ async def list_provider_connections(
 
     models: list = []
     if include_models and total_all > 0:
-        from app.services.provider_models_store import (
-            list_provider_models as list_catalog,
-            uses_model_catalog_table,
-        )
         if uses_model_catalog_table(provider_id):
             models = await list_catalog(db, provider_id)
         else:
@@ -241,11 +249,6 @@ async def set_provider_models(
     """Set models: catalog table (flagged providers) or all blobs."""
     if "models" not in body:
         raise HTTPException(status_code=400, detail="models is required")
-    from app.providers.provider import Provider
-    from app.services.provider_models_store import (
-        replace_provider_models,
-        uses_model_catalog_table,
-    )
 
     models = normalize_models_list(body.get("models") or [])
     if uses_model_catalog_table(provider_id):
@@ -275,10 +278,6 @@ async def add_custom_provider_model(
     _user=Depends(get_current_user),
 ):
     """Add a user model to the catalog (survives fetch prune)."""
-    from app.services.provider_models_store import (
-        upsert_custom_model,
-        uses_model_catalog_table,
-    )
     if not uses_model_catalog_table(provider_id):
         raise HTTPException(
             status_code=400,
@@ -326,9 +325,6 @@ async def set_provider_prefix(
     _user=Depends(get_current_user),
 ):
     """Set public model prefix. Empty restores config.ALIAS."""
-    from app.services.provider_aliases import upsert_alias
-    from app.services.proxy import display_alias
-
     raw = body.get("prefix")
     if raw is None:
         raw = body.get("alias")
@@ -351,10 +347,6 @@ async def clear_provider_models_bulk(
     _user=Depends(get_current_user),
 ):
     """Clear catalog table or all connection blobs."""
-    from app.services.provider_models_store import (
-        clear_provider_models,
-        uses_model_catalog_table,
-    )
     result = await db.execute(
         select(ProviderConnection).where(
             ProviderConnection.provider == provider_id,
@@ -1009,8 +1001,6 @@ async def test_provider(
     _user=Depends(get_current_user),
 ):
     """Test a provider connection by making a lightweight API call."""
-    from app.routers.providers.testing import _test_provider_connection
-
     result = await db.execute(
         select(ProviderConnection).where(ProviderConnection.id == conn_id)
     )

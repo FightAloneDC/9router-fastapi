@@ -1,19 +1,20 @@
 """Provider credential validation — dispatches to provider handlers."""
 
+import json
+
+from sqlalchemy import select
+
+from app import database
+from app.models.provider import ProviderNode
+from app.providers.base import BaseProviderConfig, BaseProviderHandler
 from app.providers.provider import Provider
-from app.providers.base import ValidateResult
 from app.schemas.provider import ProviderValidateResponse
 
 
 async def _validate_provider(provider: str, api_key: str, data: dict | None = None) -> ProviderValidateResponse:
     """Validate provider credentials using provider handler."""
     # Check if this is a compatible provider node
-    import json as _json
-    from sqlalchemy import select
-    from app.models.provider import ProviderNode
-    from app.database import async_session
-
-    async with async_session() as db:
+    async with database.async_session() as db:
         node_result = await db.execute(
             select(ProviderNode).where(ProviderNode.id == provider)
         )
@@ -22,8 +23,8 @@ async def _validate_provider(provider: str, api_key: str, data: dict | None = No
     if node:
         node_data = {}
         try:
-            node_data = _json.loads(node.data) if node.data else {}
-        except (_json.JSONDecodeError, TypeError):
+            node_data = json.loads(node.data) if node.data else {}
+        except (json.JSONDecodeError, TypeError):
             pass
 
         base_url = node_data.get("baseUrl", "")
@@ -55,8 +56,6 @@ async def _validate_custom_openai(
     api_key: str, base_url: str, extra_headers: dict | None = None
 ) -> ProviderValidateResponse:
     """Validate a custom OpenAI-compatible endpoint (GET /models + Bearer auth)."""
-    from app.providers.base import BaseProviderConfig, BaseProviderHandler
-
     config = BaseProviderConfig(
         PROVIDER_NAME="custom",
         PROVIDER_ID="custom",
@@ -77,8 +76,6 @@ async def _validate_custom_anthropic(
     api_key: str, base_url: str
 ) -> ProviderValidateResponse:
     """Validate a custom Anthropic-compatible endpoint (GET /models + x-api-key)."""
-    from app.providers.base import BaseProviderConfig, BaseProviderHandler
-
     config = BaseProviderConfig(
         PROVIDER_NAME="custom-anthropic",
         PROVIDER_ID="custom-anthropic",

@@ -12,6 +12,9 @@ import json
 import time
 
 from app.providers.base import BaseProviderHandler, ValidateResult
+from app.providers.grok_cli import models as grok_models
+from app.providers.grok_cli import quality_gate, transform
+from app.providers.grok_cli.constants import QUALITY_GATE_407
 
 
 class GrokCliHandler(BaseProviderHandler):
@@ -60,7 +63,6 @@ class GrokCliHandler(BaseProviderHandler):
         """Validate by fetching /models with the full CLI fingerprint."""
         if not api_key:
             return ValidateResult(valid=False, error="No token configured")
-        from app.providers.grok_cli import models as grok_models
 
         start = time.monotonic()
         try:
@@ -84,8 +86,6 @@ class GrokCliHandler(BaseProviderHandler):
         Raises:
             httpx.HTTPStatusError: on non-2xx (e.g. 401 expired token).
         """
-        from app.providers.grok_cli import models as grok_models
-
         fetched = await grok_models.fetch_models(api_key, data)
         return [
             self._normalize_model(m)
@@ -102,8 +102,6 @@ class GrokCliHandler(BaseProviderHandler):
             (json_body_bytes, full_headers) — headers include the dynamic
             x-grok-session-id / req-id / turn-idx / agent-id fingerprint.
         """
-        from app.providers.grok_cli import transform
-
         if not model:
             raise ValueError("Grok CLI requires a resolved model")
 
@@ -138,9 +136,6 @@ class GrokCliHandler(BaseProviderHandler):
         connection_id: str | None = None,
     ) -> bool:
         """Probe this connection only; pass iff output is exactly 407."""
-        from app.providers.grok_cli.constants import QUALITY_GATE_407
-        from app.providers.grok_cli import quality_gate
-
         if not QUALITY_GATE_407:
             return True
         return await quality_gate.probe_literal_407(

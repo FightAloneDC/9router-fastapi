@@ -1,8 +1,8 @@
 # Inventory: Hoist Indented Imports — 2026-08-29
 
-**Status:** in progress (2026-08-31: quota.py batch + P0 hot
-paths hoisted; two documented cycles remain in `base.py` /
-`proxy.py`)
+**Status:** in progress (2026-09-01: quota.py + P0 + P1
+hoisted; documented cycles remain in `base.py` / `proxy.py` /
+`connection_health.py`)
 
 **Rule:** In production code under `backend/app/`, `import` /
 `from … import` must live at **module top level**. Imports inside
@@ -21,8 +21,9 @@ style, except:
 rg -c --glob '*.py' '^\s+(from|import)\s+' backend/app | sort -t: -k2 -nr
 ```
 
-**Snapshot:** 2026-08-31 re-scan — **65 files** remain
-(was 82 on 2026-08-29; 69 after quota.py batch). Match counts below.
+**Snapshot:** 2026-09-01 re-scan — **58 files** remain
+(was 82 on 2026-08-29; 69 after quota.py; 65 after P0). Match
+counts below.
 Re-run the command after each batch; uncheck rows as they go
 clean (count → 0, or only `TYPE_CHECKING` / documented exceptions
 remain).
@@ -55,20 +56,20 @@ relevant pytest green. Watch for new circular imports.
 
 | Done | Matches | Path |
 |------|--------:|------|
-| [ ] | 8 | `backend/app/services/connection_health.py` |
-| [ ] | 8 | `backend/app/routers/providers/connections.py` |
+| [x] | 3 | `backend/app/services/connection_health.py` |
+| [x] | 0 | `backend/app/routers/providers/connections.py` |
 | [x] | 0 | `backend/app/providers/grok_cli/quota.py` |
 | [x] | 0 | `backend/app/providers/cohere/quota.py` |
 | [x] | 0 | `backend/app/providers/cerebras/quota.py` |
-| [ ] | 6 | `backend/app/routers/v1_proxy/messages.py` |
-| [ ] | 6 | `backend/app/routers/providers/validation.py` |
+| [x] | 0 | `backend/app/routers/v1_proxy/messages.py` |
+| [x] | 0 | `backend/app/routers/providers/validation.py` |
 | [x] | 0 | `backend/app/providers/nvidia/quota.py` |
 | [x] | 0 | `backend/app/providers/mistral/quota.py` |
 | [x] | 0 | `backend/app/providers/deepseek/quota.py` |
-| [ ] | 5 | `backend/app/routers/v1_proxy/audio.py` |
-| [ ] | 5 | `backend/app/routers/providers/testing.py` |
-| [ ] | 5 | `backend/app/providers/grok_cli/handler.py` |
-| [ ] | 5 | `backend/app/main.py` |
+| [x] | 0 | `backend/app/routers/v1_proxy/audio.py` |
+| [x] | 0 | `backend/app/routers/providers/testing.py` |
+| [x] | 0 | `backend/app/providers/grok_cli/handler.py` |
+| [x] | 0 | `backend/app/main.py` |
 
 ## P2 — Low–medium (2–4 matches)
 
@@ -154,6 +155,10 @@ Keep these indented; splitting the module is the real fix.
 - `backend/app/services/proxy.py`
   - `provider_models_store` → `routers.providers` →
     `invalidate_connection_cache` on this module
+- `backend/app/services/connection_health.py`
+  - `proxy.py` imports this module at top level
+    (`_resolve_base_url`, `build_clear_cooldown_update`,
+    `invalidate_connection_cache`)
 
 ---
 
@@ -177,3 +182,5 @@ Keep these indented; splitting the module is the real fix.
 - 2026-08-31 P0: hoisted `v1_proxy/chat.py`, `v1_proxy/models.py`,
   `qoder/handler.py`, `qoder/auth.py`; `proxy.py` / `base.py`
   keep the cycles above.
+- 2026-09-01 P1: hoisted remaining P1 table rows in document
+  order. `connection_health.py` keeps the proxy cycle above.
