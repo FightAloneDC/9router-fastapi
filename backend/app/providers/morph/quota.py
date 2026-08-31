@@ -15,6 +15,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy import func, select
+
+from app.database import async_session
+from app.models.usage import UsageHistory
 from app.providers.morph.config import MorphConfig
 from app.services.quota.base import (
     BaseUsageHandler,
@@ -82,11 +86,6 @@ async def count_requests_since(
     connection_id: str | None,
 ) -> int:
     """Count this connection's morph requests in usage_history."""
-    from sqlalchemy import func, select
-
-    from app.database import async_session
-    from app.models.usage import UsageHistory
-
     cid = _cid_key(connection_id)
     async with async_session() as db:
         cond = [

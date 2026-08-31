@@ -16,6 +16,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import func, select
+
+from app.database import async_session
+from app.models.quota_cache import QuotaCache
+from app.models.usage import UsageHistory
 from app.providers.nvidia.config import NvidiaConfig
 from app.services.quota.base import (
     BaseUsageHandler,
@@ -292,11 +297,6 @@ async def _count_requests(
     connection_id: str | None,
 ) -> int:
     """Count NVIDIA chats since `since` (this key if known)."""
-    from sqlalchemy import func, select
-
-    from app.database import async_session
-    from app.models.usage import UsageHistory
-
     cid = _cid_key(connection_id)
     async with async_session() as db:
         cond = [
@@ -341,8 +341,6 @@ class NvidiaUsageHandler(BaseUsageHandler):
         rows = quotas_from_headers(headers)
         if not rows:
             return
-        from app.models.quota_cache import QuotaCache
-
         cache = await db.get(
             QuotaCache, uuid.UUID(connection_id),
         )
@@ -388,9 +386,6 @@ class NvidiaUsageHandler(BaseUsageHandler):
             today_reset=_next_utc_midnight_iso(),
         )
         if connection_id:
-            from app.database import async_session
-            from app.models.quota_cache import QuotaCache
-
             async with async_session() as db:
                 cache = await db.get(
                     QuotaCache, uuid.UUID(connection_id),

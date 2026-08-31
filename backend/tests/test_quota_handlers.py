@@ -1170,7 +1170,7 @@ async def test_nvidia_fetch_applies_fresh_overlay() -> None:
             return_value=2,
         ),
         patch(
-            "app.database.async_session",
+            "app.providers.nvidia.quota.async_session",
             return_value=session_cm,
         ),
     ):
@@ -1645,7 +1645,7 @@ def test_morph_count_requests_since_local_db() -> None:
     session_cm.__aenter__ = AsyncMock(return_value=fake_db)
     session_cm.__aexit__ = AsyncMock(return_value=False)
     with patch(
-        "app.database.async_session",
+        "app.providers.morph.quota.async_session",
         return_value=session_cm,
     ):
         used = asyncio.run(morph_count_requests_since(

@@ -18,6 +18,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import func, select
+
+from app.database import async_session
+from app.models.usage import UsageHistory
 from app.providers.jina_ai.config import JinaAiConfig
 from app.services.quota.base import (
     BaseUsageHandler,
@@ -126,11 +130,6 @@ async def _usage_totals(
     *,
     since: datetime | None = None,
 ) -> dict[str, int]:
-    from sqlalchemy import func, select
-
-    from app.database import async_session
-    from app.models.usage import UsageHistory
-
     conditions = [
         func.lower(UsageHistory.provider) == _CONFIG.PROVIDER_ID,
     ]

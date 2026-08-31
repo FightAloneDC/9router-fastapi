@@ -16,6 +16,11 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import func, select
+
+from app.database import async_session
+from app.models.provider import ProviderConnection
+from app.models.usage import UsageHistory
 from app.providers.deepseek.config import DeepseekConfig
 from app.services.quota.base import (
     BaseUsageHandler,
@@ -183,11 +188,6 @@ def _cid_key(value: str | None) -> str:
 
 async def lifetime_tokens(connection_id: str | None) -> int:
     """Token sum for this connection in usage_history."""
-    from sqlalchemy import func, select
-
-    from app.database import async_session
-    from app.models.usage import UsageHistory
-
     conditions = [
         func.lower(UsageHistory.provider) == _CONFIG.PROVIDER_ID,
     ]
@@ -287,11 +287,6 @@ async def grant_expires_at(
 
     if not connection_id:
         return None
-
-    from sqlalchemy import select
-
-    from app.database import async_session
-    from app.models.provider import ProviderConnection
 
     async with async_session() as db:
         result = await db.execute(

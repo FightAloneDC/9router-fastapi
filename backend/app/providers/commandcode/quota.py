@@ -11,6 +11,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import func, select
+
+from app.database import async_session
+from app.models.usage import UsageHistory
 from app.providers.commandcode.config import (
     PLANS_WITHOUT_PROVIDER_API,
     CommandcodeConfig,
@@ -73,11 +77,6 @@ async def _sum_cost_cents(
     since: datetime | None,
 ) -> int:
     """Sum proxy-estimated USD cost (cents) for this connection."""
-    from sqlalchemy import func, select
-
-    from app.database import async_session
-    from app.models.usage import UsageHistory
-
     conditions = [
         func.lower(UsageHistory.provider) == _CONFIG.PROVIDER_ID,
         UsageHistory.status == "ok",

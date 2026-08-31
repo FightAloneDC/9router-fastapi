@@ -12,6 +12,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import func, select
+
+from app.database import async_session
+from app.models.quota_cache import QuotaCache
+from app.models.usage import UsageHistory
 from app.providers.cohere.config import CohereConfig
 from app.services.quota.base import (
     BaseUsageHandler,
@@ -272,11 +277,6 @@ async def _usage_by_model(
     connection_id: str | None,
 ) -> dict[str, dict[str, int]]:
     """Requests and tokens per cohere model since `since`."""
-    from sqlalchemy import func, select
-
-    from app.database import async_session
-    from app.models.usage import UsageHistory
-
     cid = _cid_key(connection_id)
     async with async_session() as db:
         cond = [
@@ -323,11 +323,6 @@ async def _count_calls(
     connection_id: str | None,
 ) -> int:
     """Count Cohere API calls since `since` (this connection)."""
-    from sqlalchemy import func, select
-
-    from app.database import async_session
-    from app.models.usage import UsageHistory
-
     cid = _cid_key(connection_id)
     async with async_session() as db:
         cond = [
@@ -434,8 +429,6 @@ class CohereUsageHandler(BaseUsageHandler):
         )
         if not live_rows:
             return
-        from app.models.quota_cache import QuotaCache
-
         cache = await db.get(
             QuotaCache, uuid.UUID(connection_id),
         )

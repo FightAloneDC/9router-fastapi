@@ -15,6 +15,13 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import func, select
+
+from app.database import async_session
+from app.models.provider import ProviderConnection
+from app.models.quota_cache import QuotaCache
+from app.models.settings import KV
+from app.models.usage import UsageHistory
 from app.providers.openrouter.config import OpenrouterConfig
 from app.services.quota.base import (
     BaseUsageHandler,
@@ -231,11 +238,6 @@ def _next_utc_midnight_iso() -> str:
 
 async def _count_free_requests(since: datetime) -> int:
     """Count OpenRouter :free chats on this host since `since`."""
-    from sqlalchemy import func, select
-
-    from app.database import async_session
-    from app.models.usage import UsageHistory
-
     async with async_session() as db:
         result = await db.execute(
             select(func.count()).select_from(UsageHistory).where(
@@ -266,8 +268,6 @@ def _quota_items(raw: list) -> list[QuotaItem]:
 async def _account_type(
     db: Any, connection_id: str,
 ) -> str | None:
-    from app.models.provider import ProviderConnection
-
     conn = await db.get(
         ProviderConnection, uuid.UUID(connection_id),
     )
@@ -289,10 +289,6 @@ async def _save_ip_snapshot(
     rows: list[dict],
     limit_reached: bool,
 ) -> None:
-    from sqlalchemy import select
-
-    from app.models.settings import KV
-
     payload = json.dumps({
         "plan": plan,
         "quotas": rows,
@@ -316,12 +312,6 @@ async def _save_ip_snapshot(
 async def _load_ip_or_connection(
     connection_id: str | None,
 ) -> UsageResponse | None:
-    from sqlalchemy import select
-
-    from app.database import async_session
-    from app.models.quota_cache import QuotaCache
-    from app.models.settings import KV
-
     async with async_session() as db:
         ip = (
             await db.execute(
@@ -382,8 +372,6 @@ class OpenrouterUsageHandler(BaseUsageHandler):
         )
         if not rows:
             return
-        from app.models.quota_cache import QuotaCache
-
         cache = await db.get(
             QuotaCache, uuid.UUID(connection_id),
         )

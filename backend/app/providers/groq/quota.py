@@ -23,6 +23,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.database import async_session
+from app.models.quota_cache import QuotaCache
 from app.providers.groq.config import GroqConfig
 from app.services.quota.base import (
     BaseUsageHandler,
@@ -304,8 +306,6 @@ class GroqUsageHandler(BaseUsageHandler):
         live_rows = quotas_from_headers(headers, model)
         if not live_rows:
             return
-        from app.models.quota_cache import QuotaCache
-
         cache = await db.get(
             QuotaCache, uuid.UUID(connection_id),
         )
@@ -348,9 +348,6 @@ class GroqUsageHandler(BaseUsageHandler):
         data = provider_data or {}
         plan = "Groq org"
         if connection_id:
-            from app.models.quota_cache import QuotaCache
-            from app.database import async_session
-
             async with async_session() as db:
                 cache = await db.get(
                     QuotaCache, uuid.UUID(connection_id),

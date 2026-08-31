@@ -21,6 +21,12 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import func, select
+
+from app.database import async_session
+from app.models.provider import ProviderConnection
+from app.models.quota_cache import QuotaCache
+from app.models.usage import UsageHistory
 from app.providers.cerebras.config import CerebrasConfig
 from app.services.quota.base import (
     BaseUsageHandler,
@@ -283,11 +289,6 @@ async def _usage_by_model(
     connection_id: str | None,
 ) -> dict[str, dict[str, int]]:
     """Requests and tokens per Cerebras model since `since`."""
-    from sqlalchemy import func, select
-
-    from app.database import async_session
-    from app.models.usage import UsageHistory
-
     cid = _cid_key(connection_id)
     async with async_session() as db:
         cond = [
@@ -449,8 +450,6 @@ def overlay_live_on_published(
 
 
 async def _account_type(db: Any, connection_id: str) -> str:
-    from app.models.provider import ProviderConnection
-
     conn = await db.get(
         ProviderConnection, uuid.UUID(connection_id),
     )
@@ -489,8 +488,6 @@ class CerebrasUsageHandler(BaseUsageHandler):
         )
         if not live_rows:
             return
-        from app.models.quota_cache import QuotaCache
-
         cache = await db.get(
             QuotaCache, uuid.UUID(connection_id),
         )
@@ -549,9 +546,6 @@ class CerebrasUsageHandler(BaseUsageHandler):
             rpm_reset=(now + timedelta(seconds=60)).isoformat(),
         )
         if connection_id:
-            from app.database import async_session
-            from app.models.quota_cache import QuotaCache
-
             async with async_session() as db:
                 cache = await db.get(
                     QuotaCache, uuid.UUID(connection_id),

@@ -13,6 +13,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import func, select
+
+from app.database import async_session
+from app.models.quota_cache import QuotaCache
+from app.models.usage import UsageHistory
 from app.providers.mistral.config import MistralConfig
 from app.services.quota.base import (
     BaseUsageHandler,
@@ -274,11 +279,6 @@ async def _usage_totals(
     connection_id: str | None,
 ) -> tuple[int, int]:
     """Request count and token sum for this Mistral key."""
-    from sqlalchemy import func, select
-
-    from app.database import async_session
-    from app.models.usage import UsageHistory
-
     cid = _cid_key(connection_id)
     async with async_session() as db:
         cond = [
@@ -327,8 +327,6 @@ class MistralUsageHandler(BaseUsageHandler):
         rows = quotas_from_headers(headers)
         if not rows:
             return
-        from app.models.quota_cache import QuotaCache
-
         cache = await db.get(
             QuotaCache, uuid.UUID(connection_id),
         )
@@ -373,9 +371,6 @@ class MistralUsageHandler(BaseUsageHandler):
             ).isoformat(),
         )
         if connection_id:
-            from app.database import async_session
-            from app.models.quota_cache import QuotaCache
-
             async with async_session() as db:
                 cache = await db.get(
                     QuotaCache, uuid.UUID(connection_id),

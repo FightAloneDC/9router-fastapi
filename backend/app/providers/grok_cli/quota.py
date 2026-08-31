@@ -60,12 +60,26 @@ from typing import Any
 
 from sqlalchemy import func, select
 
+from app.database import async_session
+from app.models.quota_cache import QuotaCache
+from app.models.usage import UsageHistory
+from app.providers.grok_cli.config import GrokCliConfig
 from app.services.connection_health import (
     COOLDOWN as COOLDOWN,
+)
+from app.services.connection_health import (
     DEAD as DEAD,
+)
+from app.services.connection_health import (
     EXHAUSTED as EXHAUSTED,
+)
+from app.services.connection_health import (
     HEALTHY as HEALTHY,
+)
+from app.services.connection_health import (
     RATE_LIMITED as RATE_LIMITED,
+)
+from app.services.connection_health import (
     classify_health as classify_health,
 )
 from app.services.quota.base import (
@@ -79,24 +93,18 @@ logger = logging.getLogger(__name__)
 
 def published_daily_tokens_1m() -> int:
     """Default free daily cap (1M tier) from RATE_LIMITS."""
-    from app.providers.grok_cli.config import GrokCliConfig
-
     table = GrokCliConfig().RATE_LIMITS
     return int(table.get("free/1m", {}).get("tpd") or 1_000_000)
 
 
 def published_daily_tokens_500k() -> int:
     """Alternate free daily cap (500K tier) from RATE_LIMITS."""
-    from app.providers.grok_cli.config import GrokCliConfig
-
     table = GrokCliConfig().RATE_LIMITS
     return int(table.get("free/500k", {}).get("tpd") or 500_000)
 
 
 def published_request_cap() -> int:
     """Published Limit-Requests from RATE_LIMITS (both tiers)."""
-    from app.providers.grok_cli.config import GrokCliConfig
-
     table = GrokCliConfig().RATE_LIMITS
     row = table.get("free/1m") or table.get("free/500k") or {}
     return int(row.get("requests") or 21)
@@ -209,8 +217,6 @@ class GrokCliUsageHandler(BaseUsageHandler):
     ) -> None:
         """Snapshot upstream rate-limit headers into
         quota_cache (authoritative daily counters)."""
-        from app.models.quota_cache import QuotaCache
-
         limit = _hdr_int(headers, _LIMIT_TOKENS_HDR)
         remaining = _hdr_int(headers, _REMAIN_TOKENS_HDR)
         if limit is None or remaining is None:
@@ -255,8 +261,6 @@ class GrokCliUsageHandler(BaseUsageHandler):
         """Primary usage source: sum today's (UTC)
         prompt+completion tokens from usage_history (written by
         the proxy per request)."""
-        from app.models.usage import UsageHistory
-
         async with self._session() as db:
             result = await db.execute(
                 select(func.coalesce(func.sum(
@@ -276,9 +280,7 @@ class GrokCliUsageHandler(BaseUsageHandler):
         self, connection_id: str,
     ) -> tuple[list[dict], bool] | None:
         """Return today's header snapshot (quotas, limit_reached)
-        from quota_cache, or None when absent/stale."""
-        from app.models.quota_cache import QuotaCache
-
+        stored in quota_cache, or None when absent/stale."""
         async with self._session() as db:
             cache = await db.get(
                 QuotaCache, uuid.UUID(connection_id),
@@ -303,7 +305,6 @@ class GrokCliUsageHandler(BaseUsageHandler):
 
     @staticmethod
     def _session():
-        from app.database import async_session
         return async_session()
 
     async def fetch(
