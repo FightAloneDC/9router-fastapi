@@ -1,16 +1,9 @@
 """Provider class — unified accessor for per-provider config and models.
 
 Usage:
-    from app.providers import PROVIDER_CEREBRAS
-    from app.providers.provider import Provider
-
-    p = Provider(PROVIDER_CEREBRAS)
-    p.config()            # CerebrasConfig instance
-    p.metadata()          # CerebrasMetadata instance
-    p.base_url()          # "https://api.cerebras.ai/v1"
-    p.alias()             # "cb"
-    p.parse_response({})  # []
-    await p.fetch_models(api_key)
+    ``Provider("cerebras")`` then ``config()``, ``metadata()``,
+    ``base_url()``, ``alias()``, ``parse_response({})``,
+    ``await fetch_models(api_key)``.
 """
 
 import importlib

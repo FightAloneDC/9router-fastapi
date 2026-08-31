@@ -8,9 +8,12 @@ User-Agent, and session affinity.
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import logging
 import os
+import platform
 import random
 import string
 import time
@@ -66,9 +69,6 @@ def _reset_jwt_cache() -> None:
 
 def _parse_jwt_exp(jwt: str) -> float:
     """Derive expiry from JWT exp claim; fallback to fixed TTL."""
-    import base64
-    import json
-
     try:
         payload_b64 = jwt.split(".")[1]
         # Add padding if needed
@@ -83,8 +83,6 @@ def _parse_jwt_exp(jwt: str) -> float:
 
 def _generate_fingerprint() -> str:
     """Generate device fingerprint for bootstrap client."""
-    import platform
-
     try:
         username = os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown-user"
     except Exception:

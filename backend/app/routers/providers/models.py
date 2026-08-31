@@ -13,11 +13,10 @@ from app.models.settings import SettingsModel
 from app.providers.provider import Provider
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
-from app.services.proxy import _resolve_provider_alias
 from app.routers.providers.constants import normalize_models_list
 from app.routers.providers.nodes import _build_node_handler
 from app.services.outbound_proxy import proxy_for_connection, use_outbound_proxy
-
+from app.services.proxy import _resolve_provider_alias
 
 # ── Node-based model fetching ─────────────────────────────────────────────
 
@@ -88,7 +87,7 @@ async def list_provider_models(
 
     provider_id can be a provider ID or alias.
     """
-    from app.services.proxy import _resolve_provider_alias
+    # Cycle: store → routers.providers package → this module.
     from app.services.provider_models_store import (
         list_provider_models as list_catalog,
         uses_model_catalog_table,
@@ -169,7 +168,7 @@ async def fetch_provider_models(
         {"id": m.get("id"), "type": m.get("type", "llm")}
         for m in models if m.get("id")
     ]
-    from app.providers.provider import Provider as P
+    # Cycle: store → routers.providers package → this module.
     from app.services.provider_models_store import (
         replace_provider_models,
         uses_model_catalog_table,
@@ -178,7 +177,7 @@ async def fetch_provider_models(
         force = False
         try:
             force = bool(
-                P(provider).config().SYNC_DISABLED_WITH_MODEL_LIST
+                Provider(provider).config().SYNC_DISABLED_WITH_MODEL_LIST
             )
         except (ValueError, ModuleNotFoundError):
             force = False

@@ -48,15 +48,6 @@ from app.schemas.provider import (
 )
 from app.services.outbound_proxy import proxy_for_connection, use_outbound_proxy
 from app.services.provider_aliases import upsert_alias
-from app.services.provider_models_store import (
-    clear_provider_models,
-    replace_provider_models,
-    upsert_custom_model,
-    uses_model_catalog_table,
-)
-from app.services.provider_models_store import (
-    list_provider_models as list_catalog,
-)
 from app.services.proxy import display_alias, invalidate_connection_cache
 
 
@@ -207,6 +198,11 @@ async def list_provider_connections(
 
     models: list = []
     if include_models and total_all > 0:
+        # Cycle: store → routers.providers package → this module.
+        from app.services.provider_models_store import (
+            list_provider_models as list_catalog,
+            uses_model_catalog_table,
+        )
         if uses_model_catalog_table(provider_id):
             models = await list_catalog(db, provider_id)
         else:
@@ -251,6 +247,11 @@ async def set_provider_models(
         raise HTTPException(status_code=400, detail="models is required")
 
     models = normalize_models_list(body.get("models") or [])
+    # Cycle: store → routers.providers package → this module.
+    from app.services.provider_models_store import (
+        replace_provider_models,
+        uses_model_catalog_table,
+    )
     if uses_model_catalog_table(provider_id):
         force = False
         try:
@@ -278,6 +279,11 @@ async def add_custom_provider_model(
     _user=Depends(get_current_user),
 ):
     """Add a user model to the catalog (survives fetch prune)."""
+    # Cycle: store → routers.providers package → this module.
+    from app.services.provider_models_store import (
+        upsert_custom_model,
+        uses_model_catalog_table,
+    )
     if not uses_model_catalog_table(provider_id):
         raise HTTPException(
             status_code=400,
@@ -347,6 +353,11 @@ async def clear_provider_models_bulk(
     _user=Depends(get_current_user),
 ):
     """Clear catalog table or all connection blobs."""
+    # Cycle: store → routers.providers package → this module.
+    from app.services.provider_models_store import (
+        clear_provider_models,
+        uses_model_catalog_table,
+    )
     result = await db.execute(
         select(ProviderConnection).where(
             ProviderConnection.provider == provider_id,

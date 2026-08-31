@@ -1,8 +1,8 @@
 # Inventory: Hoist Indented Imports — 2026-08-29
 
-**Status:** in progress (2026-09-01: quota.py + P0 + P1
-hoisted; documented cycles remain in `base.py` / `proxy.py` /
-`connection_health.py`)
+**Status:** in progress (2026-09-01: quota.py + P0 + P1 +
+P2 hoisted; documented cycles remain in `base.py` / `proxy.py` /
+`connection_health.py` / `connections.py` / `models.py`)
 
 **Rule:** In production code under `backend/app/`, `import` /
 `from … import` must live at **module top level**. Imports inside
@@ -21,9 +21,9 @@ style, except:
 rg -c --glob '*.py' '^\s+(from|import)\s+' backend/app | sort -t: -k2 -nr
 ```
 
-**Snapshot:** 2026-09-01 re-scan — **58 files** remain
-(was 82 on 2026-08-29; 69 after quota.py; 65 after P0). Match
-counts below.
+**Snapshot:** 2026-09-01 re-scan — **41 files** remain
+(was 82 on 2026-08-29; 69 after quota.py; 65 after P0;
+58 after P1). Match counts below.
 Re-run the command after each batch; uncheck rows as they go
 clean (count → 0, or only `TYPE_CHECKING` / documented exceptions
 remain).
@@ -57,7 +57,7 @@ relevant pytest green. Watch for new circular imports.
 | Done | Matches | Path |
 |------|--------:|------|
 | [x] | 3 | `backend/app/services/connection_health.py` |
-| [x] | 0 | `backend/app/routers/providers/connections.py` |
+| [x] | 4 | `backend/app/routers/providers/connections.py` |
 | [x] | 0 | `backend/app/providers/grok_cli/quota.py` |
 | [x] | 0 | `backend/app/providers/cohere/quota.py` |
 | [x] | 0 | `backend/app/providers/cerebras/quota.py` |
@@ -75,29 +75,29 @@ relevant pytest green. Watch for new circular imports.
 
 | Done | Matches | Path |
 |------|--------:|------|
-| [ ] | 4 | `backend/app/services/provider_aliases.py` |
-| [ ] | 4 | `backend/app/routers/providers/models.py` |
+| [x] | 0 | `backend/app/services/provider_aliases.py` |
+| [x] | 2 | `backend/app/routers/providers/models.py` |
 | [x] | 0 | `backend/app/providers/alims_intl/quota.py` |
-| [ ] | 3 | `backend/app/services/oauth.py` |
-| [ ] | 3 | `backend/app/services/oauth_providers.py` |
-| [ ] | 3 | `backend/app/routers/v1_proxy/responses.py` |
-| [ ] | 3 | `backend/app/routers/quota.py` |
-| [ ] | 3 | `backend/app/routers/providers/nodes.py` |
+| [x] | 0 | `backend/app/services/oauth.py` |
+| [x] | 0 | `backend/app/services/oauth_providers.py` |
+| [x] | 0 | `backend/app/routers/v1_proxy/responses.py` |
+| [x] | 0 | `backend/app/routers/quota.py` |
+| [x] | 0 | `backend/app/routers/providers/nodes.py` |
 | [x] | 0 | `backend/app/providers/voyage_ai/quota.py` |
-| [ ] | 3 | `backend/app/providers/qoder/oauth.py` |
+| [x] | 0 | `backend/app/providers/qoder/oauth.py` |
 | [x] | 0 | `backend/app/providers/morph/quota.py` |
-| [ ] | 3 | `backend/app/providers/mimo_free/handler.py` |
+| [x] | 0 | `backend/app/providers/mimo_free/handler.py` |
 | [x] | 0 | `backend/app/providers/jina_ai/quota.py` |
 | [x] | 0 | `backend/app/providers/groq/quota.py` |
 | [x] | 0 | `backend/app/providers/commandcode/quota.py` |
-| [ ] | 2 | `backend/app/services/usage_tracking.py` |
-| [ ] | 2 | `backend/app/services/catalog.py` |
-| [ ] | 2 | `backend/app/routers/oauth.py` |
-| [ ] | 2 | `backend/app/providers/xiaomi_tokenplan/handler.py` |
-| [ ] | 2 | `backend/app/providers/provider.py` |
-| [ ] | 2 | `backend/app/providers/jina_ai/handler.py` |
-| [ ] | 2 | `backend/app/providers/gemini/handler.py` |
-| [ ] | 2 | `backend/app/providers/anthropic/handler.py` |
+| [x] | 0 | `backend/app/services/usage_tracking.py` |
+| [x] | 0 | `backend/app/services/catalog.py` |
+| [x] | 0 | `backend/app/routers/oauth.py` |
+| [x] | 0 | `backend/app/providers/xiaomi_tokenplan/handler.py` |
+| [x] | 0 | `backend/app/providers/provider.py` |
+| [x] | 0 | `backend/app/providers/jina_ai/handler.py` |
+| [x] | 0 | `backend/app/providers/gemini/handler.py` |
+| [x] | 0 | `backend/app/providers/anthropic/handler.py` |
 
 ## P3 — Single match (1)
 
@@ -159,6 +159,12 @@ Keep these indented; splitting the module is the real fix.
   - `proxy.py` imports this module at top level
     (`_resolve_base_url`, `build_clear_cooldown_update`,
     `invalidate_connection_cache`)
+- `backend/app/routers/providers/connections.py`
+  - `provider_models_store` → `routers.providers` package →
+    this module (same cycle as `proxy.py`)
+- `backend/app/routers/providers/models.py`
+  - same store → `routers.providers` package cycle as
+    `connections.py`
 
 ---
 
@@ -184,3 +190,9 @@ Keep these indented; splitting the module is the real fix.
   keep the cycles above.
 - 2026-09-01 P1: hoisted remaining P1 table rows in document
   order. `connection_health.py` keeps the proxy cycle above.
+- 2026-09-01 P2: hoisted remaining P2 table rows in document
+  order. `models.py` store import stays indented (same cycle
+  as `connections.py`). `provider.py` "matches" were docstring
+  lines, rewritten as prose. `testing.py` uses
+  `proxy_service.resolve_model_to_targets` so tests that patch
+  `app.services.proxy.resolve_model_to_targets` still apply.

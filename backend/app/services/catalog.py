@@ -12,7 +12,9 @@ import logging
 import pkgutil
 from typing import Any
 
+import app.providers as providers_pkg
 from app.providers.base import BaseMetadata, BaseProviderConfig
+from app.services.oauth import get_oauth_handler
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +48,6 @@ _AUTH_METHODS = {
 
 def _discover_provider_folders() -> list[str]:
     """Discover all provider sub-package names under app.providers."""
-    import app.providers as providers_pkg
-
     folders = []
     for _importer, modname, ispkg in pkgutil.iter_modules(providers_pkg.__path__):
         if ispkg:
@@ -94,7 +94,6 @@ def _load_provider_metadata(folder_name: str) -> BaseMetadata | None:
 def _try_get_oauth_flow_type(provider_id: str) -> str | None:
     """Try to get OAuth flow type for a provider (no error if not found)."""
     try:
-        from app.services.oauth import get_oauth_handler
         handler = get_oauth_handler(provider_id)
         return handler.flow_type
     except (ValueError, ModuleNotFoundError):

@@ -17,6 +17,7 @@ from typing import Any, Optional
 import httpx
 
 from app.config import settings
+from app.providers.qoder import auth as qoder_auth
 from app.utils.pkce import generate_pkce
 
 logger = logging.getLogger(__name__)
@@ -1158,9 +1159,7 @@ async def _refresh_codebuddy_token(config: dict, refresh_token: str) -> dict:
 
 async def _request_qoder_device_code(config: dict, code_challenge: str = "", options: Optional[dict] = None) -> dict:
     """Request device code for Qoder using custom device flow."""
-    from app.providers.qoder.auth import initiate_device_flow
-
-    flow = initiate_device_flow()
+    flow = qoder_auth.initiate_device_flow()
     # Match the device_code shape the OAuthModal expects
     return {
         "device_code": flow["nonce"],
@@ -1177,8 +1176,6 @@ async def _request_qoder_device_code(config: dict, code_challenge: str = "", opt
 
 async def _poll_qoder_token(config: dict, device_code: str, code_verifier: str = "", extra_data: Optional[dict] = None) -> dict:
     """Poll for Qoder device token."""
-    from app.providers.qoder.auth import poll_device_token
-
     nonce = device_code or (extra_data or {}).get("_qoderNonce")
     verifier = code_verifier or (extra_data or {}).get("_qoderVerifier")
 
@@ -1189,7 +1186,9 @@ async def _poll_qoder_token(config: dict, device_code: str, code_verifier: str =
         }
 
     try:
-        result = await poll_device_token(nonce=nonce, code_verifier=verifier)
+        result = await qoder_auth.poll_device_token(
+            nonce=nonce, code_verifier=verifier,
+        )
     except Exception as err:
         return {
             "ok": False,
@@ -1215,12 +1214,11 @@ async def _poll_qoder_token(config: dict, device_code: str, code_verifier: str =
 
 async def _post_exchange_qoder(tokens: dict) -> dict:
     """Fetch user info after device token poll (like PAT flow)."""
-    from app.providers.qoder.auth import fetch_user_info
     access_token = tokens.get("access_token")
     if not access_token:
         return {}
     try:
-        user_info = await fetch_user_info(access_token)
+        user_info = await qoder_auth.fetch_user_info(access_token)
         return {"userInfo": user_info}
     except Exception:
         return {}

@@ -15,10 +15,13 @@ from app.database import get_db
 from app.models.provider import ProviderConnection
 from app.models.quota_cache import QuotaCache
 from app.routers.auth import get_current_user
-from app.services.proxy import invalidate_connection_cache
 from app.routers.providers.helpers import normalize_studio_plan_for_provider
+from app.services.oauth import refresh_access_token
+from app.services.proxy import invalidate_connection_cache
 from app.services.quota import (
     QuotaItem as ServiceQuotaItem,
+)
+from app.services.quota import (
     UsageResponse,
     get_usage_handler,
     supported_providers,
@@ -561,8 +564,6 @@ async def _try_refresh_token(
     Returns the (possibly refreshed) access token.
     Falls back to the existing token on failure.
     """
-    from datetime import datetime, timezone
-
     expires_at_str = data.get("expiresAt", "")
     refresh_token = data.get("refreshToken", "")
 
@@ -574,8 +575,7 @@ async def _try_refresh_token(
             expires_at_str.replace("Z", "+00:00")
         )
         if expires_at.tzinfo is None:
-            from datetime import timezone as tz
-            expires_at = expires_at.replace(tzinfo=tz.utc)
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
         return data.get("accessToken", "")
 
@@ -585,8 +585,6 @@ async def _try_refresh_token(
 
     # Token expired — try refresh
     try:
-        from app.services.oauth import refresh_access_token
-
         result = await refresh_access_token(
             conn.provider, refresh_token
         )

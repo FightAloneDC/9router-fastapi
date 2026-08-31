@@ -1,8 +1,11 @@
 """Provider Node CRUD and validation endpoints."""
 
 import json
+import time
 import uuid as _uuid
+from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -269,7 +272,6 @@ async def validate_provider_node(
 
     # Validate URL format (matching original)
     try:
-        from urllib.parse import urlparse
         parsed = urlparse(body.baseUrl)
         if not parsed.scheme or not parsed.netloc:
             return ProviderNodeValidateResponse(valid=False, error="Invalid URL format")
@@ -281,9 +283,6 @@ async def validate_provider_node(
 
     async def _chat_fallback() -> ProviderNodeValidateResponse:
         """Fallback: validate via chat/completions using handler's auth headers."""
-        import time
-        import httpx
-
         start = time.monotonic()
         url = f"{handler.config.BASE_URL}/chat/completions"
         headers = handler.build_headers(body.apiKey)

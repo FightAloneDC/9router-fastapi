@@ -27,37 +27,43 @@ from app.providers import (
 from app.providers.alims_intl.bulk import (
     parse_farm_entry as parse_alims_farm_entry,
 )
-from app.providers.mistral.bulk import (
-    parse_farm_entry as parse_mistral_farm_entry,
-)
 from app.providers.blackbox.bulk import (
     mask_key as blackbox_mask_key,
+)
+from app.providers.blackbox.bulk import (
     parse_api_key_entry as parse_blackbox_key_entry,
 )
 from app.providers.codex.proxy import CodexProxy
+from app.providers.cursor.oauth import CursorImportRequest
+from app.providers.gitlab.oauth import GitLabPATRequest
 from app.providers.grok_cli.bulk import (
     is_expired,
+)
+from app.providers.grok_cli.bulk import (
     parse_farm_entry as parse_grok_farm_entry,
 )
+from app.providers.kiro.oauth import KiroImportRequest, KiroSocialExchangeRequest
+from app.providers.mistral.bulk import (
+    parse_farm_entry as parse_mistral_farm_entry,
+)
+from app.providers.provider import Provider
+from app.providers.qoder.auth import import_pat
 from app.providers.qoder.bulk import (
     parse_farm_entry as parse_qoder_farm_entry,
 )
-from app.providers.cursor.oauth import CursorImportRequest
-from app.providers.gitlab.oauth import GitLabPATRequest
-from app.providers.kiro.oauth import KiroImportRequest, KiroSocialExchangeRequest
-from app.providers.qoder.auth import import_pat
 from app.providers.qoder.oauth import QoderPATRequest
 from app.routers.providers.helpers import (
     _next_provider_priority,
     _renumber_provider_priorities,
 )
 from app.services.oauth import (
-    generate_auth_data,
     exchange_tokens,
-    request_device_code,
-    poll_for_token,
+    generate_auth_data,
     get_oauth_handler,
+    poll_for_token,
+    request_device_code,
 )
+from app.utils.pkce import generate_pkce
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +191,6 @@ async def _save_connection(
 
     # Auto-derive alias from provider config so models get correct prefix
     try:
-        from app.providers.provider import Provider
         p = Provider(provider)
         data["alias"] = p.alias()
     except (ValueError, ModuleNotFoundError):
@@ -478,7 +483,6 @@ async def kiro_social_authorize(provider: str = ""):
     try:
         if provider not in ("google", "github"):
             raise HTTPException(status_code=400, detail="Invalid provider. Use 'google' or 'github'")
-        from app.utils.pkce import generate_pkce
         pkce = generate_pkce()
         handler = get_oauth_handler("kiro")
         auth_url = handler.build_social_login_url(provider, pkce["codeChallenge"], pkce["state"])

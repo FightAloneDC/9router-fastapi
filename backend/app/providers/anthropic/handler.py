@@ -1,6 +1,11 @@
 """Anthropic provider handler — x-api-key auth + custom validation."""
 
-from app.providers.base import BaseProviderHandler, ValidateResult
+from app.providers.base import (
+    BaseProviderConfig,
+    BaseProviderHandler,
+    ValidateResult,
+)
+from app.providers.model_helpers import fetch_models_header_auth
 
 
 class AnthropicHandler(BaseProviderHandler):
@@ -17,9 +22,6 @@ class AnthropicHandler(BaseProviderHandler):
         return await self._validate_anthropic_compatible(api_key, base_url)
 
     async def fetch_models(self, api_key: str, data: dict | None = None) -> list[dict]:
-        from app.providers.model_helpers import fetch_models_header_auth
-        from app.providers.base import BaseProviderConfig
-
         if not api_key:
             raise ValueError("No API key configured")
 

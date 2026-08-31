@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from app.providers import PROVIDER_QODER
 from app.providers.oauth_base import DeviceCodeHandler
+from app.providers.qoder import auth as qoder_auth
 from app.services.outbound_proxy import create_upstream_client
 
 
@@ -37,9 +38,7 @@ class QoderOAuthHandler(DeviceCodeHandler):
     }
 
     async def request_device_code(self, code_challenge: str = "", options: Optional[dict] = None) -> dict:
-        from app.providers.qoder.auth import initiate_device_flow
-
-        flow = initiate_device_flow()
+        flow = qoder_auth.initiate_device_flow()
         return {
             "device_code": flow["nonce"],
             "user_code": flow["nonce"][:8].upper(),
@@ -55,8 +54,6 @@ class QoderOAuthHandler(DeviceCodeHandler):
     async def poll_token(
         self, device_code: str, code_verifier: str = "", extra_data: Optional[dict] = None,
     ) -> dict:
-        from app.providers.qoder.auth import poll_device_token
-
         nonce = device_code or (extra_data or {}).get("_qoderNonce")
         verifier = code_verifier or (extra_data or {}).get("_qoderVerifier")
 
@@ -67,7 +64,9 @@ class QoderOAuthHandler(DeviceCodeHandler):
             }
 
         try:
-            result = await poll_device_token(nonce=nonce, code_verifier=verifier)
+            result = await qoder_auth.poll_device_token(
+                nonce=nonce, code_verifier=verifier,
+            )
         except Exception as err:
             return {
                 "ok": False,
@@ -91,13 +90,11 @@ class QoderOAuthHandler(DeviceCodeHandler):
         return {"ok": False, "data": {"error": "authorization_pending"}}
 
     async def post_exchange(self, tokens: dict) -> dict:
-        from app.providers.qoder.auth import fetch_user_info
-
         access_token = tokens.get("access_token")
         if not access_token:
             return {}
         try:
-            user_info = await fetch_user_info(access_token)
+            user_info = await qoder_auth.fetch_user_info(access_token)
             return {"userInfo": user_info}
         except Exception:
             return {}

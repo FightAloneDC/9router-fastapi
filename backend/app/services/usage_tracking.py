@@ -8,6 +8,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.request_detail import RequestDetail
+from app.models.settings import SettingsModel
 from app.models.usage import UsageDaily, UsageHistory
 from app.routers.usage_stream import notify_usage_update
 from app.services.active_requests import push_recent_request
@@ -157,7 +158,6 @@ async def save_request_usage(
     try:
         # Fetch custom cost rates from Settings
         custom_rates: dict | None = None
-        from app.models.settings import SettingsModel
         result = await db.execute(select(SettingsModel).where(SettingsModel.id == 1))
         settings_row = result.scalar_one_or_none()
         if settings_row and settings_row.data:
@@ -364,7 +364,6 @@ async def save_request_tracking(
     try:
         # Fetch custom cost rates from Settings
         custom_rates: dict | None = None
-        from app.models.settings import SettingsModel
         result = await db.execute(select(SettingsModel).where(SettingsModel.id == 1))
         settings_row = result.scalar_one_or_none()
         if settings_row and settings_row.data:

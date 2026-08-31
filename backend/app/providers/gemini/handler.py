@@ -10,7 +10,12 @@ from typing import Any
 
 import httpx
 
-from app.providers.base import BaseProviderHandler, ValidateResult
+from app.providers.base import (
+    BaseProviderConfig,
+    BaseProviderHandler,
+    ValidateResult,
+)
+from app.providers.model_helpers import fetch_models_query_auth
 from app.services.outbound_proxy import create_upstream_client
 
 # Gemini has no voice list API — 30 prebuilt voices documented by Google.
@@ -206,9 +211,6 @@ class GeminiHandler(BaseProviderHandler):
         return {"text": text.strip()}
 
     async def fetch_models(self, api_key: str, data: dict | None = None) -> list[dict]:
-        from app.providers.model_helpers import fetch_models_query_auth
-        from app.providers.base import BaseProviderConfig
-
         if not api_key:
             raise ValueError("No API key configured")
 

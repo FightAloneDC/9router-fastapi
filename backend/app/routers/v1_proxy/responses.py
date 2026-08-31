@@ -10,38 +10,40 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import database
 from app.database import get_db
-from app.services.api_key_auth import validate_api_key
-from app.services.proxy import (
-    resolve_model_to_targets,
-    get_combo_strategy,
-    clear_connection_error,
-    update_connection_usage,
-)
-from app.services.responses_translator import (
-    responses_to_chat_completions,
-    chat_completions_to_responses,
-    ResponsesStreamTranslator,
-    build_incomplete_terminal_sse,
-)
-from app.services.usage_tracking import save_request_tracking
-from app.services.active_requests import track_request_start, track_request_end
 from app.models.provider import ProviderConnection
+from app.providers.provider import Provider
+from app.services.active_requests import track_request_end, track_request_start
+from app.services.api_key_auth import validate_api_key
 from app.services.outbound_proxy import (
     ProxyRequiredError,
     create_upstream_client,
     proxy_for_connection,
 )
+from app.services.proxy import (
+    clear_connection_error,
+    get_combo_strategy,
+    resolve_model_to_targets,
+    update_connection_usage,
+)
+from app.services.responses_translator import (
+    ResponsesStreamTranslator,
+    build_incomplete_terminal_sse,
+    chat_completions_to_responses,
+    responses_to_chat_completions,
+)
+from app.services.usage_tracking import save_request_tracking
 
 from .shared import (
     MAX_FALLBACK_ATTEMPTS,
-    _should_fallback_on_error,
-    _rewrite_body_after_error,
-    _build_provider_request,
-    _unwrap_qoder_sse_line,
-    _maybe_refresh_on_auth_error,
-    _mark_conn_failed,
     _before_user_forward,
+    _build_provider_request,
+    _mark_conn_failed,
+    _maybe_refresh_on_auth_error,
+    _rewrite_body_after_error,
+    _should_fallback_on_error,
+    _unwrap_qoder_sse_line,
 )
 
 router = APIRouter()
@@ -137,7 +139,6 @@ async def responses_endpoint(
         is_responses_upstream: bool = False
         provider_obj = None
         try:
-            from app.providers.provider import Provider
             provider_obj = Provider(target.provider)
             is_responses_upstream = (
                 provider_obj.config().FORMAT == "openai-responses"
@@ -515,8 +516,7 @@ async def _stream_responses(
             # Save usage tracking after stream consumed
             if db and provider and request_start_time:
                 try:
-                    from app.database import async_session
-                    async with async_session() as tracking_db:
+                    async with database.async_session() as tracking_db:
                         total_latency_ms = int(
                             (time.time() - request_start_time) * 1000
                         )
@@ -749,8 +749,7 @@ async def _stream_responses_passthrough(
             # Save usage tracking after stream consumed
             if db and provider and request_start_time:
                 try:
-                    from app.database import async_session
-                    async with async_session() as tracking_db:
+                    async with database.async_session() as tracking_db:
                         total_latency_ms = int(
                             (time.time() - request_start_time) * 1000
                         )

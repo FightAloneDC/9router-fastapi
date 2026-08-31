@@ -1,6 +1,7 @@
 """Xiaomi TokenPlan handler — region-aware base URL resolution."""
 
-from app.providers.base import BaseProviderHandler
+from app.providers.base import BaseProviderConfig, BaseProviderHandler
+from app.providers.model_helpers import fetch_models_header_auth
 
 
 class XiaomiTokenplanHandler(BaseProviderHandler):
@@ -24,9 +25,6 @@ class XiaomiTokenplanHandler(BaseProviderHandler):
         return super()._resolve_base_url(data)
 
     async def fetch_models(self, api_key: str, data: dict | None = None) -> list[dict]:
-        from app.providers.model_helpers import fetch_models_header_auth
-        from app.providers.base import BaseProviderConfig
-
         if not api_key:
             raise ValueError("No API key configured")
 

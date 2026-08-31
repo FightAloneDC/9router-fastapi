@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from sqlalchemy import delete, select
+
+from app.models.provider_alias import ProviderAlias
+
 _overrides: dict[str, str] = {}
 
 
@@ -17,10 +21,6 @@ def set_overrides(mapping: dict[str, str]) -> None:
 
 async def refresh_from_db(db: object) -> None:
     """Load provider_aliases into memory. No-op if table missing."""
-    from sqlalchemy import select
-
-    from app.models.provider_alias import ProviderAlias
-
     try:
         result = await db.execute(select(ProviderAlias))
     except Exception:
@@ -40,10 +40,6 @@ async def upsert_alias(
     alias: str | None,
 ) -> None:
     """Set or clear a DB prefix. Empty value deletes the row."""
-    from sqlalchemy import delete, select
-
-    from app.models.provider_alias import ProviderAlias
-
     pid = (provider or "").strip()
     val = (alias or "").strip()
     if not pid:

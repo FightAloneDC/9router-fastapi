@@ -8,7 +8,9 @@ from typing import Any
 import httpx
 
 from app.providers.base import BaseProviderHandler, ValidateResult
+from app.providers.jina_ai import models as jina_models
 from app.services.outbound_proxy import create_upstream_client
+from app.services.search_adapters import make_result
 
 
 class JinaAiHandler(BaseProviderHandler):
@@ -107,11 +109,7 @@ class JinaAiHandler(BaseProviderHandler):
         data: dict | None = None,
     ) -> list[dict]:
         """Live /models plus synthetic search/reader rows."""
-        from app.providers.jina_ai.models import (
-            fetch_models as load_catalog,
-        )
-
-        models = await load_catalog(api_key, data)
+        models = await jina_models.fetch_models(api_key, data)
         normalized = [
             self._normalize_model(item) for item in models
         ]
@@ -237,8 +235,6 @@ class JinaAiHandler(BaseProviderHandler):
     ) -> dict[str, Any]:
         """POST SEARCH_BASE_URL — ignore connection baseUrl (api)."""
         del provider_data
-        from app.services.search_adapters import make_result
-
         url = self._search_base() + "/"
         headers = self._json_headers(token)
         body = self.build_search_body(params)

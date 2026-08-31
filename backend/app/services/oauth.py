@@ -13,6 +13,10 @@ import logging
 import pkgutil
 from typing import Any, Optional
 
+import app.providers as providers_pkg
+from app.providers.oauth_base import BaseOAuthHandler
+from app.utils.pkce import generate_pkce
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,9 +29,6 @@ def _discover_oauth_handlers() -> dict[str, str]:
 
     Returns dict mapping provider_id → "module.path.ClassName".
     """
-    import app.providers as providers_pkg
-    from app.providers.oauth_base import BaseOAuthHandler
-
     registry: dict[str, str] = {}
     for importer, modname, ispkg in pkgutil.iter_modules(providers_pkg.__path__):
         if not ispkg:
@@ -95,8 +96,6 @@ def generate_auth_data(provider_name: str, redirect_uri: str, meta: Optional[dic
 
     Returns dict with: authUrl, state, codeVerifier, codeChallenge, redirectUri, flowType
     """
-    from app.utils.pkce import generate_pkce
-
     handler = get_oauth_handler(provider_name)
     pkce = generate_pkce()
 

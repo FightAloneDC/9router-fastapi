@@ -31,6 +31,7 @@ from app.schemas.provider import (
     ProviderValidateRequest,
     ProviderValidateResponse,
 )
+from app.services import proxy as proxy_service
 from app.services.outbound_proxy import (
     ProxyRequiredError,
     create_upstream_client,
@@ -39,7 +40,6 @@ from app.services.outbound_proxy import (
     resolve_proxy_url,
     use_outbound_proxy,
 )
-from app.services.proxy import resolve_model_to_targets
 
 
 async def _test_provider_connection(conn: ProviderConnection, db: AsyncSession) -> dict:
@@ -275,7 +275,9 @@ async def test_connection_models(
     async def ping_model(model_id: str) -> dict:
         start = time.monotonic()
         try:
-            targets = await resolve_model_to_targets(db, f"{alias}/{model_id}")
+            targets = await proxy_service.resolve_model_to_targets(
+                db, f"{alias}/{model_id}",
+            )
             if not targets:
                 return {
                     "modelId": model_id,
