@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,12 +20,14 @@ from app.routers.auth import get_current_user
 from app.routers.providers._router import router
 from app.routers.providers.helpers import _get_base_url
 from app.routers.providers.nodes import _build_node_handler
-from app.routers.providers.validation import _validate_custom_openai, _validate_provider
+from app.routers.providers.validation import (
+    _validate_custom_anthropic,
+    _validate_custom_openai,
+)
 from app.schemas.provider import (
     BatchTestRequest,
     BatchTestResponse,
     BatchTestResult,
-    ProviderTestResponse,
     ProviderValidateRequest,
     ProviderValidateResponse,
 )
