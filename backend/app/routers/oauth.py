@@ -610,8 +610,11 @@ async def qoder_pat_import(
             "providerSpecificData": {
                 "userId": result.get("user_id"),
                 "machineId": result.get("machine_id"),
-                "organizationId": result.get("organization_id"),
+                "organizationId": result.get(
+                    "organization_id",
+                ),
                 "loginMethod": "pat",
+                "personalToken": body.personalToken,
             },
         }
 

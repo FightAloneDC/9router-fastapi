@@ -556,46 +556,75 @@ async def import_pat(
     }
 
 
-async def try_refresh_connection(db, connection_id: str) -> bool:
-    """Try to refresh a Qoder connection's token using its refresh_token.
+def stored_personal_token(data: dict[str, Any]) -> str | None:
+    """PAT from connection data; None when absent."""
+    raw = data.get("personalToken") or data.get("personal_token")
+    if not isinstance(raw, str):
+        return None
+    token = raw.strip()
+    return token or None
 
-    Called by the proxy when a 401/403 is received from Qoder upstream.
-    Updates the connection's accessToken and refreshToken in the DB.
 
-    Args:
-        db: AsyncSession
-        connection_id: ProviderConnection UUID string
+async def recover_qoder_tokens(
+    data: dict[str, Any],
+) -> tuple[dict[str, Any] | None, int | None]:
+    """Refresh the job token, or re-exchange a stored PAT.
 
-    Returns:
-        True if refresh succeeded and DB was updated, False otherwise.
+    Status is the HTTP code from jobToken/refresh only (None
+    when that call is skipped).
     """
-    logger = logging.getLogger(__name__)
+    refresh_token = data.get("refreshToken")
+    status: int | None = None
+    if refresh_token and not refresh_token_unusable(data):
+        tokens, status = await refresh_job_token_result(
+            refresh_token,
+        )
+        if tokens:
+            return tokens, status
+    pat = stored_personal_token(data)
+    if not pat:
+        return None, status
+    try:
+        exchanged = await exchange_personal_token(pat)
+    except Exception as exc:
+        logger.warning("Qoder PAT re-exchange failed: %s", exc)
+        return None, status
+    if not exchanged.get("access_token"):
+        return None, status
+    return exchanged, status
 
+
+async def try_refresh_connection(db, connection_id: str) -> bool:
+    """Refresh job tokens; fall back to stored PAT exchange.
+
+    Called by the proxy when a 401/403 is received from Qoder
+    upstream. Updates accessToken and refreshToken in the DB.
+    personalToken is kept so later export can recover the
+    account after job tokens expire.
+    """
     result = await db.execute(
-        select(ProviderConnection).where(ProviderConnection.id == connection_id)
+        select(ProviderConnection).where(
+            ProviderConnection.id == connection_id,
+        )
     )
     conn = result.scalar_one_or_none()
     if not conn or not conn.data:
         return False
 
     data = json.loads(conn.data)
-    refresh_token = data.get("refreshToken")
-    if not refresh_token:
-        logger.warning(f"Qoder refresh: no refresh_token for connection {connection_id}")
-        return False
-
-    if refresh_token_unusable(data):
+    if (
+        not data.get("refreshToken")
+        and not stored_personal_token(data)
+    ):
         logger.warning(
-            "Qoder refresh: skipped dead refresh token for %s",
+            "Qoder refresh: no refresh_token or PAT for %s",
             connection_id,
         )
         return False
 
     proxy = await proxy_for_connection(db, conn, "oauthRefresh")
     async with use_outbound_proxy(proxy):
-        new_tokens, status = await refresh_job_token_result(
-            refresh_token,
-        )
+        new_tokens, status = await recover_qoder_tokens(data)
     if not new_tokens:
         if status in _DEAD_REFRESH_HTTP:
             mark_refresh_rejected(data, status)
@@ -603,7 +632,7 @@ async def try_refresh_connection(db, connection_id: str) -> bool:
             await db.flush()
             proxy_service.invalidate_connection_cache("qoder")
         logger.warning(
-            "Qoder refresh: jobToken/refresh failed for connection %s",
+            "Qoder refresh: recover failed for connection %s",
             connection_id,
         )
         return False
@@ -612,11 +641,11 @@ async def try_refresh_connection(db, connection_id: str) -> bool:
     conn.data = json.dumps(data)
 
     await db.flush()
-
-    # Invalidate proxy cache
     proxy_service.invalidate_connection_cache("qoder")
-
-    logger.info(f"Qoder refresh: token refreshed for connection {connection_id}")
+    logger.info(
+        "Qoder refresh: token refreshed for connection %s",
+        connection_id,
+    )
     return True
 
 
@@ -647,18 +676,22 @@ async def refresh_all_qoder_connections() -> dict[str, bool]:
         for conn in connections:
             data = json.loads(conn.data) if conn.data else {}
             refresh_token = data.get("refreshToken")
-            if not refresh_token:
+            pat = stored_personal_token(data)
+            if not refresh_token and not pat:
                 continue
 
             conn_id = str(conn.id)
-            if refresh_token_unusable(data):
+            if (
+                refresh_token_unusable(data)
+                and not pat
+            ):
                 skipped_dead += 1
                 continue
 
             proxy = await proxy_for_connection(db, conn, "oauthRefresh")
             async with use_outbound_proxy(proxy):
-                new_tokens, status = await refresh_job_token_result(
-                    refresh_token,
+                new_tokens, status = await recover_qoder_tokens(
+                    data,
                 )
             if not new_tokens:
                 if status in _DEAD_REFRESH_HTTP:

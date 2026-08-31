@@ -207,6 +207,62 @@ def test_try_refresh_skips_already_rejected_token(
     assert called is False
 
 
+def test_try_refresh_reexchanges_stored_pat_when_refresh_dead(
+    monkeypatch,
+) -> None:
+    import app.providers.qoder.auth as auth
+
+    refresh_called = False
+
+    async def _refresh(*_a: object, **_k: object) -> tuple:
+        nonlocal refresh_called
+        refresh_called = True
+        return None, 400
+
+    async def _exchange(pat: str, timeout: float = 30.0) -> dict:
+        assert pat == "pt-keep"
+        return {
+            "access_token": "jt-from-pat",
+            "refresh_token": "jrt-from-pat",
+            "expires_in": 3600,
+        }
+
+    async def _proxy(*_a: object, **_k: object) -> None:
+        return None
+
+    class _ProxyCtx:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+    monkeypatch.setattr(auth, "refresh_job_token_result", _refresh)
+    monkeypatch.setattr(auth, "exchange_personal_token", _exchange)
+    monkeypatch.setattr(auth, "proxy_for_connection", _proxy)
+    monkeypatch.setattr(
+        auth, "use_outbound_proxy", lambda _p: _ProxyCtx(),
+    )
+    monkeypatch.setattr(
+        "app.services.proxy.invalidate_connection_cache",
+        lambda *_a, **_k: None,
+    )
+
+    conn = _refresh_conn("jrt-dead")
+    blob = json.loads(conn.data)
+    blob["invalidRefreshToken"] = "jrt-dead"
+    blob["personalToken"] = "pt-keep"
+    conn.data = json.dumps(blob)
+
+    ok = asyncio.run(try_refresh_connection(_Db(conn), "conn-1"))
+    assert ok is True
+    assert refresh_called is False
+    out = json.loads(conn.data)
+    assert out["accessToken"] == "jt-from-pat"
+    assert out["refreshToken"] == "jrt-from-pat"
+    assert out["personalToken"] == "pt-keep"
+
+
 def test_background_marks_400_then_skips(
     monkeypatch,
 ) -> None:

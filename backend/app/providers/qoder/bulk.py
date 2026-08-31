@@ -1,8 +1,8 @@
 """Bulk import of grok-farm-modular Qoder account exports.
 
-Qoder farm entries mirror the Grok farm shape (``email`` + ``tokens``)
-but carry Qoder identity fields in ``tokens`` (user_id, machine_id,
-plan, display_name).
+Qoder farm entries mirror the Grok farm shape (``email`` +
+``tokens``) but carry Qoder identity and optional trial/quota
+snapshot fields in ``tokens``.
 """
 
 from __future__ import annotations
@@ -37,6 +37,32 @@ def parse_farm_entry(entry: Any) -> dict:
         raise ValueError("Missing email")
     email = email.strip().lower()
 
+    checked_quota = tokens.get("checked_quota")
+    if checked_quota is None:
+        checked_quota = entry.get("checked_quota")
+    psd = {
+        "loginMethod": "bulk_import",
+        "userId": tokens.get("user_id"),
+        "machineId": tokens.get("machine_id"),
+        "plan": tokens.get("plan"),
+        "userType": tokens.get("userType"),
+        "proTrialStartAt": parse_expires_at(
+            tokens.get("pro_trial_start_at"),
+        ),
+        "proTrialEndAt": parse_expires_at(
+            tokens.get("pro_trial_end_at"),
+        ),
+        "farmQuotaTotal": _optional_int(checked_quota),
+        "farmQuotaRemaining": _optional_int(
+            tokens.get("quota_remaining"),
+        ),
+        "farmQuotaExceeded": _optional_bool(
+            tokens.get("is_quota_exceeded"),
+        ),
+        "personalToken": _optional_pat(
+            tokens.get("personal_token"),
+        ),
+    }
     token_data = {
         "accessToken": access_token,
         "refreshToken": tokens.get("refresh_token"),
@@ -46,10 +72,9 @@ def parse_farm_entry(entry: Any) -> dict:
         # farm-provided display name
         "displayName": email,
         "providerSpecificData": {
-            "loginMethod": "bulk_import",
-            "userId": tokens.get("user_id"),
-            "machineId": tokens.get("machine_id"),
-            "plan": tokens.get("plan"),
+            key: value
+            for key, value in psd.items()
+            if value is not None
         },
     }
     return {
@@ -57,3 +82,26 @@ def parse_farm_entry(entry: Any) -> dict:
         "token_data": token_data,
         "expires_at": parse_expires_at(tokens.get("expires_at")),
     }
+
+
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    return None
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _optional_pat(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    token = value.strip()
+    if not token:
+        return None
+    return token

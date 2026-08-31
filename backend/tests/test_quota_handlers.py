@@ -599,6 +599,87 @@ async def test_qoder_usage():
     assert credits.reset_at is not None
 
 
+@pytest.mark.asyncio
+async def test_qoder_usage_farm_trial_end_when_api_omits_expires():
+    handler = QoderUsageHandler()
+    mock_resp = _mock_response(200, {
+        "userType": "personal_professional_trial",
+        "usageType": "credits",
+        "isQuotaExceeded": False,
+        "userQuota": {
+            "total": 300.0,
+            "used": 43.0,
+            "remaining": 257.0,
+            "unit": "credits",
+        },
+    })
+    trial_end = "2026-09-01T10:59:32.131000+00:00"
+    with patch.object(
+        handler, "_get", new_callable=AsyncMock,
+        return_value=mock_resp,
+    ):
+        result = await handler.fetch(
+            "fake-token",
+            {
+                "expiresAt": "2026-08-28T14:24:01+00:00",
+                "proTrialEndAt": trial_end,
+                "farmQuotaRemaining": 300,
+            },
+        )
+    credits = result.quotas[0]
+    assert credits.remaining == 257
+    assert credits.reset_at == trial_end
+
+
+@pytest.mark.asyncio
+async def test_qoder_usage_falls_back_to_farm_snapshot():
+    handler = QoderUsageHandler()
+    trial_end = "2026-09-01T10:59:32.131000+00:00"
+    with patch.object(
+        handler, "_get", new_callable=AsyncMock,
+        side_effect=RuntimeError("down"),
+    ):
+        result = await handler.fetch(
+            "fake-token",
+            {
+                "proTrialEndAt": trial_end,
+                "farmQuotaTotal": 300,
+                "farmQuotaRemaining": 180,
+                "farmQuotaExceeded": False,
+                "userType": "personal_professional_trial",
+            },
+        )
+    assert result.plan == "personal_professional_trial"
+    credits = result.quotas[0]
+    assert credits.used == 120
+    assert credits.remaining == 180
+    assert credits.reset_at == trial_end
+
+
+@pytest.mark.asyncio
+async def test_qoder_usage_ignores_job_token_expiry_as_trial():
+    handler = QoderUsageHandler()
+    mock_resp = _mock_response(200, {
+        "userType": "personal_professional_trial",
+        "isQuotaExceeded": False,
+        "userQuota": {
+            "total": 300.0,
+            "used": 10.0,
+            "remaining": 290.0,
+            "unit": "credits",
+        },
+    })
+    with patch.object(
+        handler, "_get", new_callable=AsyncMock,
+        return_value=mock_resp,
+    ):
+        result = await handler.fetch(
+            "fake-token",
+            {"expiresAt": "2026-08-28T14:24:01+00:00"},
+        )
+    assert result.quotas[0].reset_at is None
+
+
 # ──────────────────────────────────────────────
 # Network failure
 # ──────────────────────────────────────────────

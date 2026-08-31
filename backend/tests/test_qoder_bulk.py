@@ -46,6 +46,49 @@ class TestParseFarmEntry:
         assert psd["machineId"] == "machine-123"
         assert psd["plan"] == "pro"
         assert parsed["expires_at"] is not None
+        assert "proTrialEndAt" not in psd
+        assert "farmQuotaTotal" not in psd
+        assert psd["personalToken"] == "pt-abc"
+        assert "personal_token" not in token_data
+        assert "password" not in token_data
+
+    def test_optional_trial_and_quota_snapshot(self):
+        entry = _farm_entry()
+        entry["checked_quota"] = 300
+        entry["tokens"].update({
+            "userType": "personal_professional_trial",
+            "plan": "PLAN_TIER_PRO_TRIAL",
+            "pro_trial_start_at": "2026-08-18T10:59:32.131000Z",
+            "pro_trial_end_at": "2026-09-01T10:59:32.131000Z",
+            "checked_quota": 300,
+            "is_quota_exceeded": False,
+            "quota_remaining": 257,
+        })
+        psd = parse_farm_entry(entry)["token_data"][
+            "providerSpecificData"
+        ]
+        assert psd["userType"] == "personal_professional_trial"
+        assert psd["plan"] == "PLAN_TIER_PRO_TRIAL"
+        assert psd["proTrialStartAt"] is not None
+        assert psd["proTrialEndAt"] is not None
+        assert psd["farmQuotaTotal"] == 300
+        assert psd["farmQuotaRemaining"] == 257
+        assert psd["farmQuotaExceeded"] is False
+
+    def test_missing_personal_token_still_parses(self):
+        entry = _farm_entry()
+        entry["tokens"].pop("personal_token")
+        parsed = parse_farm_entry(entry)
+        psd = parsed["token_data"]["providerSpecificData"]
+        assert "personalToken" not in psd
+
+    def test_checked_quota_falls_back_to_root(self):
+        entry = _farm_entry()
+        entry["checked_quota"] = 300
+        psd = parse_farm_entry(entry)["token_data"][
+            "providerSpecificData"
+        ]
+        assert psd["farmQuotaTotal"] == 300
 
     def test_display_name_is_always_email(self):
         # Farm display_name is ignored; email is the identity

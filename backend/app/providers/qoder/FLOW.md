@@ -79,7 +79,11 @@ token. Miss → force-refresh model list. **Not** stored in SQL.
    `openapi…/deviceToken/poll`; token `dt-…`.
 2. **PAT** — `pt-…` → `POST …/jobToken/exchange` → job token +
    refresh; then `userinfo` for `userId` / email / name;
-   generate `machineId`.
+   generate `machineId`. Keep `personalToken` (`pt-…`) in
+   connection `data` (bulk farm `tokens.personal_token` and
+   UI PAT import). Job tokens expire; the PAT is the
+   re-exchange key. Export dumps `data` as-is, so the PAT
+   survives a later import.
 3. **Validate** — `fetch_user_info` (token present but inactive
    still fails chat later).
 4. **Refresh** — `POST …/jobToken/refresh`:
@@ -87,8 +91,8 @@ token. Miss → force-refresh model list. **Not** stored in SQL.
    - background: `refresh_all_qoder_connections` every ~5 min
      via `token_refresh.py` (always refresh, not only near
      expiry)
-   - dead refresh (HTTP in `_DEAD_REFRESH_HTTP`) marked so
-     loops skip; re-import PAT when refresh is unusable
+   - if refresh is dead/missing, re-exchange stored
+     `personalToken`; only then mark the refresh unusable
 
 `data` must keep `userId` + `machineId` for COSY.
 
@@ -137,9 +141,17 @@ summarizes the same.
 `QoderUsageHandler` GETs `QODER_QUOTA_USAGE_URL` with Bearer
 access token (not COSY). Reads live `userQuota` credits +
 `isQuotaExceeded` / `expiresAt`. If upstream `total` is missing,
-falls back to `RATE_LIMITS["trial"]["credits"]`. Snapshot may
-land in `quota_cache` via the shared quota router — not the
-model blob.
+falls back to `RATE_LIMITS["trial"]["credits"]`. Live remaining
+always wins over a grok-farm-modular last check.
+
+`reset_at` is API `expiresAt` (trial/account end), else blob
+`proTrialEndAt`. Do not use `tokens.expires_at` / blob
+`expiresAt` — that is job-token TTL. If the GET fails, the
+handler may show the farm snapshot (`farmQuota*` +
+`proTrialEndAt`) instead of an empty error.
+
+Snapshot may land in `quota_cache` via the shared quota
+router — not the model blob.
 
 ## Models fetch (operator)
 
