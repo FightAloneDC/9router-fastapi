@@ -1,7 +1,8 @@
 # Inventory: Hoist Indented Imports — 2026-08-29
 
-**Status:** in progress (2026-08-31: all
-`backend/app/providers/*/quota.py` hoisted — 13 files clean)
+**Status:** in progress (2026-08-31: quota.py batch + P0 hot
+paths hoisted; two documented cycles remain in `base.py` /
+`proxy.py`)
 
 **Rule:** In production code under `backend/app/`, `import` /
 `from … import` must live at **module top level**. Imports inside
@@ -20,8 +21,8 @@ style, except:
 rg -c --glob '*.py' '^\s+(from|import)\s+' backend/app | sort -t: -k2 -nr
 ```
 
-**Snapshot:** 2026-08-31 re-scan — **69 files** remain
-(was 82 on 2026-08-29). Match counts below.
+**Snapshot:** 2026-08-31 re-scan — **65 files** remain
+(was 82 on 2026-08-29; 69 after quota.py batch). Match counts below.
 Re-run the command after each batch; uncheck rows as they go
 clean (count → 0, or only `TYPE_CHECKING` / documented exceptions
 remain).
@@ -42,13 +43,13 @@ relevant pytest green. Watch for new circular imports.
 
 | Done | Matches | Path |
 |------|--------:|------|
-| [ ] | 18 | `backend/app/routers/v1_proxy/chat.py` |
-| [ ] | 15 | `backend/app/services/proxy.py` |
-| [ ] | 13 | `backend/app/providers/qoder/handler.py` |
-| [ ] | 13 | `backend/app/providers/qoder/auth.py` |
+| [x] | 0 | `backend/app/routers/v1_proxy/chat.py` |
+| [x] | 1 | `backend/app/services/proxy.py` |
+| [x] | 0 | `backend/app/providers/qoder/handler.py` |
+| [x] | 0 | `backend/app/providers/qoder/auth.py` |
 | [x] | 0 | `backend/app/providers/openrouter/quota.py` |
-| [ ] | 9 | `backend/app/routers/v1_proxy/models.py` |
-| [ ] | 9 | `backend/app/providers/base.py` |
+| [x] | 0 | `backend/app/routers/v1_proxy/models.py` |
+| [x] | 2 | `backend/app/providers/base.py` |
 
 ## P1 — Medium (5–8 matches)
 
@@ -142,6 +143,20 @@ relevant pytest green. Watch for new circular imports.
 
 ---
 
+## Blocked (documented circular imports)
+
+Keep these indented; splitting the module is the real fix.
+
+- `backend/app/providers/base.py`
+  - `model_helpers` imports `BaseProviderConfig` from this module
+  - `routers.providers.constants` loads package `__init__` →
+    `Provider` → this module
+- `backend/app/services/proxy.py`
+  - `provider_models_store` → `routers.providers` →
+    `invalidate_connection_cache` on this module
+
+---
+
 ## Notes for implementers
 
 - Do not expand scope (no drive-by refactors).
@@ -152,9 +167,13 @@ relevant pytest green. Watch for new circular imports.
   module or keep a minimal indented import with a one-line why.
 - Update match counts when re-scanning; mark **Done** only when
   the file is clean under the rule above.
-- 2026-08-31: hoisted SQLAlchemy / `async_session` / model
-  imports in all `providers/*/quota.py`. Tests that patched
-  `app.database.async_session` must patch
-  `app.providers.<id>.quota.async_session` instead (the name is
-  bound at import time). `services/quota/__init__.py` is left
-  indented — it imports `app.providers` for discovery.
+- 2026-08-31: hoisted SQLAlchemy / session / model imports in
+  all `providers/*/quota.py`. `services/quota/__init__.py` stays
+  indented (discovers `app.providers`).
+- Tests are exempt. Do not retarget test patches. If a hoist
+  would bind a name that tests patch on the source module, import
+  the module at top level and look up the attribute at call time
+  (`database.async_session()`, `qoder_auth.fetch_user_info()`).
+- 2026-08-31 P0: hoisted `v1_proxy/chat.py`, `v1_proxy/models.py`,
+  `qoder/handler.py`, `qoder/auth.py`; `proxy.py` / `base.py`
+  keep the cycles above.

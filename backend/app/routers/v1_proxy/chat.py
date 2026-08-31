@@ -8,42 +8,54 @@ import uuid
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.services.api_key_auth import validate_api_key
-from app.services.proxy import (
-    resolve_model_to_targets,
-    get_combo_strategy,
-    clear_connection_error,
-    update_connection_usage,
+from app.models.provider import ProviderConnection
+from app.providers.grok_cli.anomaly import inject_retry_upstream, is_phantom_write
+from app.providers.grok_cli.constants import PHANTOM_WRITE_RETRY
+from app.providers.grok_cli.debug_dump import (
+    ChatSseAssembler,
+    begin_dump,
+    finish_dump,
+    parse_upstream_body,
+    response_from_chat_completion,
 )
-from app.services.quota import observe_upstream_response
-from app.services.usage_tracking import save_request_tracking
-from app.services.active_requests import track_request_start, track_request_end
+from app.providers.grok_cli.stream import ResponsesUpstreamTranslator
+from app.providers.grok_cli.transform import responses_to_openai_response
+from app.services.active_requests import track_request_end, track_request_start
+from app.services.api_key_auth import validate_api_key
+from app.services.message_translator import (
+    OpenaiStreamTranslator,
+    openai_to_claude_request,
+)
 from app.services.outbound_proxy import (
     ProxyRequiredError,
     create_upstream_client,
     proxy_for_connection,
     purpose_from_header,
 )
-from app.models.provider import ProviderConnection
-from sqlalchemy import select
-
-from app.services.message_translator import (
-    openai_to_claude_request,
-    OpenaiStreamTranslator,
+from app.services.proxy import (
+    clear_connection_error,
+    get_combo_strategy,
+    resolve_model_to_targets,
+    should_fallback_on_error,
+    update_connection_usage,
 )
+from app.services.quota import observe_upstream_response
+from app.services.usage_tracking import save_request_tracking
+
 from .shared import (
     MAX_FALLBACK_ATTEMPTS,
-    _stream_response,
-    _non_stream_response,
-    _should_fallback_on_error,
-    _rewrite_body_after_error,
-    _build_provider_request,
     _before_user_forward,
-    _maybe_refresh_on_auth_error,
+    _build_provider_request,
     _mark_conn_failed,
+    _maybe_refresh_on_auth_error,
+    _non_stream_response,
+    _rewrite_body_after_error,
+    _should_fallback_on_error,
+    _stream_response,
     upstream_format_flags,
 )
 
@@ -359,10 +371,6 @@ async def _non_stream_claude(
     Many Anthropic APIs are streaming-only, so we stream internally,
     collect text deltas, and return a single OpenAI JSON response.
     """
-    from app.services.message_translator import (
-        OpenaiStreamTranslator,
-    )
-
     translator = OpenaiStreamTranslator(
         model=body.get("model", ""),
         request_id=request_id,
@@ -464,8 +472,6 @@ async def _stream_claude_response(
     No pre-flight. Translates Anthropic SSE → OpenAI SSE.
     503 errors are NOT rate-limited (transient upstream issue).
     """
-    from fastapi.responses import StreamingResponse
-
     translator = OpenaiStreamTranslator(
         model=body.get("model", ""),
         request_id=request_id,
@@ -538,9 +544,6 @@ async def _stream_claude_response(
                     raise
 
             if db and provider and model:
-                from app.services.usage_tracking import (
-                    save_request_tracking,
-                )
                 await save_request_tracking(
                     db,
                     provider=provider,
@@ -644,15 +647,6 @@ async def _post_phantom_retry(
     model: str = "",
 ):
     """POST one inject retry. Returns (ok_tuple | None, status, error)."""
-    from app.providers.grok_cli.debug_dump import (
-        ChatSseAssembler,
-        begin_dump,
-        finish_dump,
-    )
-    from app.providers.grok_cli.stream import (
-        ResponsesUpstreamTranslator,
-    )
-
     cid = getattr(target, "connection_id", None)
     retry_dump = begin_dump(
         request_id=f"r{hop}-{request_id}",
@@ -733,14 +727,6 @@ async def _retry_phantom_grok_write(
     resolve_model: str = "",
 ):
     """Inject-retry a phantom write; hop on exhausted / fallback errors."""
-    from app.providers.grok_cli.anomaly import inject_retry_upstream
-    from app.providers.grok_cli.debug_dump import parse_upstream_body
-    from app.services.proxy import (
-        resolve_model_to_targets,
-        should_fallback_on_error,
-    )
-    from .shared import _mark_conn_failed
-
     upstream = parse_upstream_body(raw_body, body)
     if not isinstance(upstream, dict):
         print("[grok-cli retry] no upstream body", flush=True)
@@ -798,16 +784,6 @@ async def _non_stream_grok_responses(
     internally and the response.completed object is converted to a
     single Chat Completions JSON response.
     """
-    from app.providers.grok_cli.debug_dump import (
-        begin_dump,
-        finish_dump,
-        parse_upstream_body,
-        response_from_chat_completion,
-    )
-    from app.providers.grok_cli.transform import (
-        responses_to_openai_response,
-    )
-
     dump = begin_dump(
         request_id=request_id,
         endpoint="/v1/chat/completions",
@@ -897,10 +873,6 @@ async def _non_stream_grok_responses(
             }
         assembled = response_from_chat_completion(translated)
         finish_dump(dump, assembled, status="ok")
-        from app.providers.grok_cli.anomaly import is_phantom_write
-        from app.providers.grok_cli.constants import (
-            PHANTOM_WRITE_RETRY,
-        )
         if (
             PHANTOM_WRITE_RETRY
             and is_phantom_write(request_body or body, assembled)
@@ -982,14 +954,6 @@ async def _stream_grok_responses(
     empty SSE stream to the client. Translates Responses API SSE ->
     OpenAI Chat Completions SSE via ResponsesUpstreamTranslator.
     """
-    from app.providers.grok_cli.debug_dump import (
-        ChatSseAssembler,
-        begin_dump,
-        finish_dump,
-        parse_upstream_body,
-    )
-    from app.providers.grok_cli.stream import ResponsesUpstreamTranslator
-
     translator = ResponsesUpstreamTranslator(
         model=body.get("model", ""),
         request_id=f"chatcmpl-{request_id}",
@@ -1055,12 +1019,6 @@ async def _stream_grok_responses(
                 await resp.aclose()
                 await client.aclose()
 
-            from app.providers.grok_cli.anomaly import (
-                is_phantom_write,
-            )
-            from app.providers.grok_cli.constants import (
-                PHANTOM_WRITE_RETRY,
-            )
             assembled = assembler.to_dict()
             finish_dump(
                 dump, assembled, status="ok",
@@ -1094,9 +1052,6 @@ async def _stream_grok_responses(
                 yield ev.encode()
 
             if db and provider and model:
-                from app.services.usage_tracking import (
-                    save_request_tracking,
-                )
                 await save_request_tracking(
                     db,
                     provider=provider,

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 
-from app.database import async_session
+from app import database
 from app.models.usage import UsageHistory
 from app.providers.morph.config import MorphConfig
 from app.services.quota.base import (
@@ -87,7 +87,7 @@ async def count_requests_since(
 ) -> int:
     """Count this connection's morph requests in usage_history."""
     cid = _cid_key(connection_id)
-    async with async_session() as db:
+    async with database.async_session() as db:
         cond = [
             func.lower(UsageHistory.provider) == "morph",
             UsageHistory.timestamp >= since,

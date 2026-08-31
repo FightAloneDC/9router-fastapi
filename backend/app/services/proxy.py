@@ -14,7 +14,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.combo import Combo
 from app.models.provider import ProviderConnection, ProviderNode
 from app.models.settings import SettingsModel
+from app.providers import AVAILABLE_PROVIDERS
 from app.providers.provider import Provider
+from app.services.connection_health import (
+    EXHAUSTED,
+    classify_health,
+    health_rank,
+    parse_connection_data,
+    resort_provider_priorities,
+)
+from app.services.provider_aliases import (
+    overlay_alias_to_id,
+    overlay_alias_to_ids,
+    overlay_id_to_alias,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +45,6 @@ def _build_alias_to_id() -> dict[str, str]:
     When multiple providers share an alias (e.g. kilo-gateway + kilocode),
     the last one wins in this dict. Use ALIAS_TO_IDS for all matches.
     """
-    from app.providers import AVAILABLE_PROVIDERS
     mapping: dict[str, str] = {}
     for name in AVAILABLE_PROVIDERS:
         try:
@@ -58,7 +70,6 @@ def _build_alias_to_ids() -> dict[str, list[str]]:
     Handles shared aliases (e.g. 'kilo' → ['kilo-gateway', 'kilocode']).
     Provider IDs are also included as keys mapping to themselves.
     """
-    from app.providers import AVAILABLE_PROVIDERS
     mapping: dict[str, list[str]] = {}
     for name in AVAILABLE_PROVIDERS:
         try:
@@ -82,7 +93,6 @@ def _build_alias_to_ids() -> dict[str, list[str]]:
 
 def _build_id_to_alias() -> dict[str, str]:
     """Build provider ID → alias mapping directly from Provider class."""
-    from app.providers import AVAILABLE_PROVIDERS
     mapping: dict[str, str] = {}
     for name in AVAILABLE_PROVIDERS:
         try:
@@ -101,8 +111,6 @@ ALIAS_TO_IDS: dict[str, list[str]] = _build_alias_to_ids()
 
 def _resolve_provider_alias(provider_name: str) -> str:
     """Resolve model prefix to provider ID. DB prefix else config."""
-    from app.services.provider_aliases import overlay_alias_to_id
-
     return overlay_alias_to_id(ALIAS_TO_ID).get(
         provider_name, provider_name,
     )
@@ -110,8 +118,6 @@ def _resolve_provider_alias(provider_name: str) -> str:
 
 def _resolve_provider_aliases(provider_name: str) -> list[str]:
     """Resolve prefix to all matching provider IDs (shared prefixes)."""
-    from app.services.provider_aliases import overlay_alias_to_ids
-
     return overlay_alias_to_ids(ALIAS_TO_IDS).get(
         provider_name, [provider_name],
     )
@@ -119,8 +125,6 @@ def _resolve_provider_aliases(provider_name: str) -> list[str]:
 
 def display_alias(provider_id: str) -> str:
     """Public model prefix: DB row, else config.ALIAS."""
-    from app.services.provider_aliases import overlay_id_to_alias
-
     return overlay_id_to_alias(ID_TO_ALIAS).get(
         provider_id, provider_id,
     )
@@ -459,11 +463,6 @@ async def mark_connection_unavailable(
     data.update(update)
     conn.data = json.dumps(data)
 
-    from app.services.connection_health import (
-        EXHAUSTED,
-        classify_health,
-        resort_provider_priorities,
-    )
     health_status, _ = classify_health(data)
     if health_status == EXHAUSTED:
         conn.is_active = False
@@ -518,9 +517,6 @@ async def mark_connection_anomaly(
     data["lastErrorAt"] = now
     conn.data = json.dumps(data)
 
-    from app.services.connection_health import (
-        resort_provider_priorities,
-    )
     await resort_provider_priorities(db, conn.provider)
     await db.commit()
     invalidate_connection_cache(conn.provider)
@@ -569,9 +565,6 @@ async def clear_connection_error(db: AsyncSession, connection_id: str, model: st
     data.update(update)
     conn.data = json.dumps(data)
 
-    from app.services.connection_health import (
-        resort_provider_priorities,
-    )
     await resort_provider_priorities(db, conn.provider)
 
     await db.commit()
@@ -610,11 +603,6 @@ def select_connection_for_provider(
     - round-robin: rotate among the healthiest available
     - random: random among the healthiest available
     """
-    from app.services.connection_health import (
-        health_rank,
-        parse_connection_data,
-    )
-
     available: list[tuple[object, dict]] = []
     for c in connections:
         cid = str(c.id)
@@ -816,6 +804,11 @@ async def _resolve_single_model(
     skip_anomalous: bool = True,
 ) -> list[ResolvedTarget]:
     """Resolve a single model string to upstream targets."""
+    # Cycle: provider_models_store → routers.providers → this module.
+    from app.services.provider_models_store import (
+        list_enabled_ids,
+        uses_model_catalog_table,
+    )
 
     # Parse provider/model format
     if "/" in model:
@@ -833,10 +826,6 @@ async def _resolve_single_model(
     )
     connections = result.scalars().all()
 
-    from app.services.provider_models_store import (
-        list_enabled_ids,
-        uses_model_catalog_table,
-    )
     catalog_ids: dict[str, set[str]] = {}
 
     # Match by registered model id only. Do NOT fall back to "first
@@ -863,10 +852,6 @@ async def _resolve_single_model(
             continue
         matches.append(conn)
 
-    from app.services.connection_health import (
-        health_rank,
-        parse_connection_data,
-    )
     ranked: list = []
     for conn in matches:
         data = parse_connection_data(conn)
@@ -926,14 +911,11 @@ async def _build_target_for_provider(
 
     # If not found in built-in aliases, check provider node prefixes
     if provider_ids == [provider_name]:
-        import json as _json
-
-        from app.models.provider import ProviderNode
         node_result = await db.execute(select(ProviderNode))
         for node in node_result.scalars().all():
             try:
-                node_data = _json.loads(node.data) if node.data else {}
-            except (_json.JSONDecodeError, TypeError):
+                node_data = json.loads(node.data) if node.data else {}
+            except (json.JSONDecodeError, TypeError):
                 node_data = {}
             if node_data.get("prefix") == provider_name:
                 provider_ids = [node.id]
@@ -1038,7 +1020,7 @@ def parse_tts_model(model_str: str) -> tuple[str, str]:
 
     Raises:
         ValueError: If ``model_str`` does not contain a ``/`` separating model
-            from voice. Caller should map this to HTTP 400.
+            separates model and voice. Map this to HTTP 400.
     """
     if not model_str:
         raise ValueError(

@@ -6,7 +6,11 @@ BASE_URL, SERVICE_KINDS) and inherit connection/auth defaults.
 
 from __future__ import annotations
 
+import json
+import time
 from dataclasses import dataclass
+
+import httpx
 from pydantic import BaseModel
 
 from app.services.outbound_proxy import create_upstream_client
@@ -198,6 +202,7 @@ class BaseProviderHandler:
 
     async def fetch_models(self, api_key: str, data: dict | None = None) -> list[dict]:
         """Fetch available models from provider."""
+        # Cycle: model_helpers imports BaseProviderConfig from here.
         from app.providers.model_helpers import fetch_models_header_auth
 
         if not api_key:
@@ -234,9 +239,6 @@ class BaseProviderHandler:
         extra_headers: dict[str, str] | None = None,
     ) -> ValidateResult:
         """Default validation: GET /models with Bearer auth."""
-        import time
-        import httpx
-
         start = time.monotonic()
         url = f"{base_url}/models"
         headers = {"Authorization": f"Bearer {api_key}"}
@@ -282,9 +284,6 @@ class BaseProviderHandler:
         self, api_key: str, base_url: str
     ) -> ValidateResult:
         """Anthropic-compatible validation: GET /models with x-api-key + anthropic-version."""
-        import time
-        import httpx
-
         start = time.monotonic()
         url = f"{base_url}/models"
         headers = {
@@ -313,9 +312,6 @@ class BaseProviderHandler:
         self, api_key: str, base_url: str, model_id: str
     ) -> ValidateResult:
         """Embedding validation: POST /embeddings with model + input."""
-        import time
-        import httpx
-
         start = time.monotonic()
         url = f"{base_url}/embeddings"
         headers = {
@@ -364,6 +360,7 @@ class BaseProviderHandler:
 
     def _normalize_model(self, m) -> dict:
         """Normalize a model entry to {id, name, type}."""
+        # Cycle: routers.providers package imports Provider → this module.
         from app.routers.providers.constants import (
             resolve_model_type,
         )
@@ -437,7 +434,6 @@ class BaseProviderHandler:
         Override in child class for providers with custom envelopes (e.g. Qoder).
         Default: standard JSON parse.
         """
-        import json
         return json.loads(response_text)
 
     # When True, proxy buffers SSE by line and calls

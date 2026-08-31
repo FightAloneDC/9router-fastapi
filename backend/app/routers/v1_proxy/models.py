@@ -4,16 +4,19 @@ import json
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.services.api_key_auth import validate_api_key
-from app.models.provider import ProviderConnection
 from app.models.combo import Combo
+from app.models.provider import ProviderConnection
+from app.models.provider_model import ProviderModel
 from app.models.settings import SettingsModel
-from app.services.proxy import display_alias
 from app.routers.providers.constants import _get_model_type_overrides, infer_model_type
+from app.services.api_key_auth import validate_api_key
+from app.services.provider_aliases import refresh_from_db
+from app.services.provider_models_store import uses_model_catalog_table
+from app.services.proxy import display_alias
 
 router = APIRouter()
 
@@ -25,10 +28,6 @@ _VALID_MODEL_KINDS: set[str] = {
 
 async def _get_disabled_models(db: AsyncSession) -> dict[str, list[str]]:
     """Disabled ids: settings map plus catalog rows for table providers."""
-    from app.models.provider_model import ProviderModel
-    from app.services.proxy import display_alias
-    from app.services.provider_models_store import uses_model_catalog_table
-
     out: dict[str, list[str]] = {}
     settings_result = await db.execute(
         select(SettingsModel).where(SettingsModel.id == 1)
@@ -73,8 +72,6 @@ async def list_models(
     models: list[dict] = []
     seen_model_ids: set[str] = set()
 
-    from app.services.provider_aliases import refresh_from_db
-
     await refresh_from_db(db)
 
     disabled_models: dict[str, list[str]] = await _get_disabled_models(db)
@@ -95,9 +92,6 @@ async def list_models(
                 seen_model_ids.add(model_id)
 
     # Catalog-table providers (MODEL_CATALOG_TABLE flag).
-    from app.models.provider_model import ProviderModel
-    from app.services.provider_models_store import uses_model_catalog_table
-
     active_providers = set(
         (
             await db.execute(
@@ -214,8 +208,6 @@ async def models_info(
     if not requested_ids:
         return {"object": "list", "data": []}
 
-    from app.services.provider_aliases import refresh_from_db
-
     await refresh_from_db(db)
 
     disabled_models: dict[str, list[str]] = await _get_disabled_models(db)
@@ -235,9 +227,6 @@ async def models_info(
                 "type": "llm",
             })
             found_ids.add(combo.name)
-
-    from app.models.provider_model import ProviderModel
-    from app.services.provider_models_store import uses_model_catalog_table
 
     active_providers = set(
         (

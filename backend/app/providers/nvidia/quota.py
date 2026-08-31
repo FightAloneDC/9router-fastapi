@@ -18,7 +18,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from app.database import async_session
+from app import database
 from app.models.quota_cache import QuotaCache
 from app.models.usage import UsageHistory
 from app.providers.nvidia.config import NvidiaConfig
@@ -298,7 +298,7 @@ async def _count_requests(
 ) -> int:
     """Count NVIDIA chats since `since` (this key if known)."""
     cid = _cid_key(connection_id)
-    async with async_session() as db:
+    async with database.async_session() as db:
         cond = [
             func.lower(UsageHistory.provider) == "nvidia",
             UsageHistory.timestamp >= since,
@@ -386,7 +386,7 @@ class NvidiaUsageHandler(BaseUsageHandler):
             today_reset=_next_utc_midnight_iso(),
         )
         if connection_id:
-            async with async_session() as db:
+            async with database.async_session() as db:
                 cache = await db.get(
                     QuotaCache, uuid.UUID(connection_id),
                 )

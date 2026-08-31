@@ -26,6 +26,7 @@ Token Refresh:
 
 import base64
 import hashlib
+import json
 import logging
 import secrets
 import uuid
@@ -33,7 +34,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
+from sqlalchemy import select
 
+from app import database
+from app.models.provider import ProviderConnection
+from app.services import proxy as proxy_service
 from app.services.outbound_proxy import (
     create_upstream_client,
     proxy_for_connection,
@@ -251,7 +256,6 @@ async def fetch_user_info(access_token: str, timeout: float = 15.0) -> dict[str,
     Returns:
         Dict with user info
     """
-    import logging
     logger = logging.getLogger(__name__)
 
     # Try multiple header formats (qodercli uses Bearer)
@@ -565,11 +569,6 @@ async def try_refresh_connection(db, connection_id: str) -> bool:
     Returns:
         True if refresh succeeded and DB was updated, False otherwise.
     """
-    import json
-    import logging
-    from sqlalchemy import select
-    from app.models.provider import ProviderConnection
-
     logger = logging.getLogger(__name__)
 
     result = await db.execute(
@@ -602,10 +601,7 @@ async def try_refresh_connection(db, connection_id: str) -> bool:
             mark_refresh_rejected(data, status)
             conn.data = json.dumps(data)
             await db.flush()
-            from app.services.proxy import (
-                invalidate_connection_cache,
-            )
-            invalidate_connection_cache("qoder")
+            proxy_service.invalidate_connection_cache("qoder")
         logger.warning(
             "Qoder refresh: jobToken/refresh failed for connection %s",
             connection_id,
@@ -618,8 +614,7 @@ async def try_refresh_connection(db, connection_id: str) -> bool:
     await db.flush()
 
     # Invalidate proxy cache
-    from app.services.proxy import invalidate_connection_cache
-    invalidate_connection_cache("qoder")
+    proxy_service.invalidate_connection_cache("qoder")
 
     logger.info(f"Qoder refresh: token refreshed for connection {connection_id}")
     return True
@@ -634,16 +629,12 @@ async def refresh_all_qoder_connections() -> dict[str, bool]:
     Returns:
         Dict mapping connection_id -> success bool
     """
-    import json
-    import logging
-    from sqlalchemy import select
-    from app.models.provider import ProviderConnection
-    from app.database import async_sessionmaker, engine
-
     logger = logging.getLogger(__name__)
     results: dict[str, bool] = {}
 
-    async_session = async_sessionmaker(engine, expire_on_commit=False)
+    async_session = database.async_sessionmaker(
+        database.engine, expire_on_commit=False,
+    )
     async with async_session() as db:
         stmt = select(ProviderConnection).where(
             ProviderConnection.provider == "qoder",
@@ -700,8 +691,7 @@ async def refresh_all_qoder_connections() -> dict[str, bool]:
 
     # Invalidate proxy cache after all refreshes
     try:
-        from app.services.proxy import invalidate_connection_cache
-        invalidate_connection_cache("qoder")
+        proxy_service.invalidate_connection_cache("qoder")
     except Exception:
         pass
 

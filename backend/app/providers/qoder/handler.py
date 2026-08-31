@@ -19,6 +19,16 @@ import time
 from typing import Any
 
 from app.providers.base import BaseProviderHandler, ValidateResult
+from app.providers.qoder import auth as qoder_auth
+from app.providers.qoder.constants import QODER_CHAT_URL_ENCODED
+from app.providers.qoder.cosy import build_cosy_headers
+from app.providers.qoder.encoding import qoder_encode_body
+from app.providers.qoder.models import get_qoder_model_config, resolve_qoder_models
+from app.providers.qoder.transform import (
+    build_qoder_request_body,
+    unwrap_qoder_response,
+)
+from app.services.proxy import _resolve_provider_alias
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +47,7 @@ class QoderHandler(BaseProviderHandler):
             return ValidateResult(valid=False, error="No Qoder token configured")
         start = time.monotonic()
         try:
-            from app.providers.qoder.auth import fetch_user_info
-
-            await fetch_user_info(api_key)
+            await qoder_auth.fetch_user_info(api_key)
             return ValidateResult(
                 valid=True,
                 models=None,
@@ -58,13 +66,10 @@ class QoderHandler(BaseProviderHandler):
         connection_id: str,
     ) -> bool:
         """Refresh Qoder job token after 401/403 or build failure."""
-        from app.providers.qoder.auth import try_refresh_connection
-
-        return await try_refresh_connection(db, connection_id)
+        return await qoder_auth.try_refresh_connection(db, connection_id)
 
     def build_upstream_url(self, base_url: str, stream: bool = False, data: dict | None = None, model: str = "") -> str:
         """Qoder uses COSY-signed endpoint with Encode=1."""
-        from app.providers.qoder.constants import QODER_CHAT_URL_ENCODED
         return QODER_CHAT_URL_ENCODED
 
     def build_headers(self, api_key: str, stream: bool = False, data: dict | None = None) -> dict[str, str]:
@@ -73,9 +78,6 @@ class QoderHandler(BaseProviderHandler):
         The actual content signature is rebuilt in build_request_body() for
         providers using a custom raw body.
         """
-        from app.providers.qoder.cosy import build_cosy_headers
-        from app.providers.qoder.constants import QODER_CHAT_URL_ENCODED
-
         data = data or {}
         user_id = data.get("userId", "")
         machine_id = data.get("machineId", "")
@@ -106,13 +108,6 @@ class QoderHandler(BaseProviderHandler):
         Returns:
             (encoded_body_bytes, signed_headers) tuple
         """
-        from app.providers.qoder.transform import build_qoder_request_body
-        from app.providers.qoder.cosy import build_cosy_headers
-        from app.providers.qoder.constants import QODER_CHAT_URL_ENCODED
-        from app.providers.qoder.models import get_qoder_model_config, resolve_qoder_models
-        from app.providers.qoder.encoding import qoder_encode_body
-        from app.services.proxy import _resolve_provider_alias
-
         data = data or {}
         user_id = data.get("userId", "")
         machine_id = data.get("machineId", "")
@@ -175,7 +170,6 @@ class QoderHandler(BaseProviderHandler):
 
     def unwrap_response(self, response_text: str) -> dict[str, Any]:
         """Unwrap Qoder's custom response envelope."""
-        from app.providers.qoder.transform import unwrap_qoder_response
         return unwrap_qoder_response(response_text)
 
     async def fetch_models(self, api_key: str, data: dict | None = None) -> list[dict]:
@@ -184,8 +178,6 @@ class QoderHandler(BaseProviderHandler):
         Raises:
             httpx.HTTPStatusError: If the API returns a non-200 status code (e.g. 403 for expired token)
         """
-        from app.providers.qoder.models import resolve_qoder_models
-
         data = data or {}
         user_id = data.get("userId", "")
         machine_id = data.get("machineId", "")
