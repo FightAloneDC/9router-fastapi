@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 
+from app.providers.provider import Provider
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Local device (not a provider — OS-level)
@@ -103,7 +104,6 @@ async def fetch_voices_for_provider(
     """
     # Try handler dispatch (PS pattern)
     try:
-        from app.providers.provider import Provider
         p = Provider(provider)
         handler = p.handler()
         if hasattr(handler, "fetch_voices"):

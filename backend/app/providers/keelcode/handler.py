@@ -10,6 +10,7 @@ from app.providers.base import (
     BaseProviderHandler,
     ValidateResult,
 )
+from app.providers.keelcode import models as keelcode_models
 from app.services.outbound_proxy import create_upstream_client
 
 
@@ -94,11 +95,7 @@ class KeelcodeHandler(BaseProviderHandler):
         api_key: str,
         data: dict | None = None,
     ) -> list[dict]:
-        from app.providers.keelcode.models import (
-            fetch_models as _fetch,
-        )
-
-        return await _fetch(api_key, data=data)
+        return await keelcode_models.fetch_models(api_key, data=data)
 
     def build_upstream_url(
         self,

@@ -38,6 +38,7 @@ _ERROR_PROVIDER_TTL = 10  # seconds
 def _notify_sse() -> None:
     """Fire SSE update event (late import to avoid circular dependency)."""
     try:
+        # Cycle: usage_stream imports this module at top level.
         from app.routers.usage_stream import notify_usage_update
         notify_usage_update()
     except ImportError:

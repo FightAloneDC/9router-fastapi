@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import time
 from typing import Any
 
@@ -26,8 +27,6 @@ class InworldHandler(BaseProviderHandler):
         **_kwargs,
     ) -> tuple[bytes, str]:
         """Inworld TTS — POST {base_url}, Basic auth, base64 JSON response."""
-        import base64
-
         base_url = self._resolve_base_url(None)
         headers = {
             self.config.AUTH_HEADER: f"{self.config.AUTH_PREFIX}{api_key}",

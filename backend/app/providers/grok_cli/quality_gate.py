@@ -11,6 +11,9 @@ import logging
 
 import httpx
 
+from app.providers.grok_cli.transform import (
+    responses_to_openai_response,
+)
 from app.services.outbound_proxy import create_upstream_client
 
 logger = logging.getLogger(__name__)
@@ -33,10 +36,6 @@ def probe_passes(text: str) -> bool:
 
 def assistant_text_from_completed(resp: dict) -> str:
     """Extract assistant text from a Responses ``response`` object."""
-    from app.providers.grok_cli.transform import (
-        responses_to_openai_response,
-    )
-
     translated = responses_to_openai_response(resp, "")
     choices = translated.get("choices") or []
     if not choices:

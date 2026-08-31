@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 
+from app.providers.mistral.models import reasoning_capability
+
 _DROP_ALWAYS = (
     "max_context_size",
     "max_context",
@@ -38,8 +40,6 @@ _EFFORT_HIGH = frozenset({
 
 def supports_reasoning(model: str) -> bool | None:
     """Upstream capabilities.reasoning, or None if cache miss."""
-    from app.providers.mistral.models import reasoning_capability
-
     return reasoning_capability(model)
 
 

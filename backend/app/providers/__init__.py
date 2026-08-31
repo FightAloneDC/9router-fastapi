@@ -4,6 +4,8 @@ Each provider lives in its own sub-package (e.g. providers/cerebras/).
 All provider name references MUST use constants below — never string literals.
 """
 
+from app.providers.provider import Provider
+
 # ── Provider constants ─────────────────────────────────────────────────────
 # Free tier providers
 PROVIDER_OPENROUTER = "openrouter"
@@ -226,8 +228,6 @@ def get_all_model_type_overrides() -> dict[str, str]:
     model_id → type (e.g. "whisper-1" → "stt"). This function collects
     all overrides into a single dict.
     """
-    from app.providers.provider import Provider
-
     overrides: dict[str, str] = {}
     for name in AVAILABLE_PROVIDERS:
         try:

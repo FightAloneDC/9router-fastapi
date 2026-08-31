@@ -4,7 +4,7 @@ import json
 import math
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -574,7 +574,6 @@ async def get_request_detail(
     )
     row = result.scalar_one_or_none()
     if not row:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Request detail not found")
 
     def _parse(raw):

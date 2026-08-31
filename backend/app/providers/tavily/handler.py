@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from app.providers.base import BaseProviderHandler
+from app.services.search_adapters import make_result, parse_domain_filter
 
 
 class TavilyHandler(BaseProviderHandler):
@@ -21,8 +22,6 @@ class TavilyHandler(BaseProviderHandler):
         provider_data: dict | None = None,
     ) -> dict[str, Any]:
         """Execute Tavily Search and return normalized results."""
-        from app.services.search_adapters import make_result, parse_domain_filter
-
         body: dict[str, Any] = {
             "query": params["query"],
             "max_results": params.get("max_results", 5),

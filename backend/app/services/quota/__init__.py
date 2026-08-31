@@ -13,6 +13,8 @@ import importlib
 import logging
 import pkgutil
 
+import app.providers as providers_pkg
+
 from .base import BaseUsageHandler, QuotaItem, UsageResponse
 
 logger = logging.getLogger(__name__)
@@ -22,8 +24,6 @@ _HANDLERS: dict[str, BaseUsageHandler] = {}
 
 def _discover_provider_folders() -> list[str]:
     """List all provider sub-package names under app.providers."""
-    import app.providers as providers_pkg
-
     return [
         modname
         for _importer, modname, ispkg

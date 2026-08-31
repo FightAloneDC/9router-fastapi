@@ -1,17 +1,18 @@
 """Helper functions for provider data conversion, proxy config, and utilities."""
 
 import json
+from importlib import import_module
 from typing import Optional
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.provider import ProviderConnection, ProviderNode
 from app.models.proxy_pool import ProxyPool
 from app.providers.provider import Provider
 from app.routers.providers.constants import (
-    DEFAULT_ACCOUNT_TYPE,
     _DATA_INTERNAL_KEYS,
+    DEFAULT_ACCOUNT_TYPE,
     normalize_models_list,
 )
 
@@ -50,8 +51,6 @@ def normalize_studio_plan_for_provider(
         raise ValueError(
             f"studioPlan is not supported for provider '{provider_id}'"
         )
-
-    from importlib import import_module
 
     mod = import_module(cfg.__class__.__module__)
     normalize = getattr(mod, "normalize_studio_plan", None)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import httpx
 
+from app.providers.alims_intl import models as alims_models
 from app.providers.alims_intl.config import AlimsIntlConfig
 from app.providers.base import BaseProviderHandler
 
@@ -44,11 +45,7 @@ class AlimsIntlHandler(BaseProviderHandler):
         data: dict | None = None,
     ) -> list[dict]:
         """Live /models plus docs-only rerank rows."""
-        from app.providers.alims_intl.models import (
-            fetch_models as load_catalog,
-        )
-
-        models = await load_catalog(api_key, data)
+        models = await alims_models.fetch_models(api_key, data)
         normalized = [
             self._normalize_model(item) for item in models
         ]

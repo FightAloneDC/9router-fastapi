@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 
 from app.providers.base import BaseProviderHandler
-from app.providers.mistral.models import fetch_models as mistral_fetch_models
+from app.providers.mistral.models import (
+    fetch_models as mistral_fetch_models,
+)
+from app.providers.mistral.models import (
+    remember_reasoning,
+)
 from app.providers.mistral.transform import (
     body_has_reasoning_fields,
     normalize_mistral_completion,
@@ -89,8 +94,6 @@ def mistral_rewrite_body_after_error(
         return None
     # Explicit 400/3051: strip even if cache said True.
     if status_code == 400:
-        from app.providers.mistral.models import remember_reasoning
-
         remember_reasoning(model, False)
         return strip_reasoning_fields(body)
     # 422: only strip when we do not know the model accepts reasoning.

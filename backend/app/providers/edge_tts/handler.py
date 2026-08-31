@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import edge_tts
 import httpx
 
 from app.providers.base import BaseProviderHandler, ValidateResult
@@ -24,8 +25,6 @@ class EdgeTtsHandler(BaseProviderHandler):
         """Microsoft Edge TTS — free, no API key required."""
         if not voice:
             raise ValueError("Edge TTS requires a voice")
-
-        import edge_tts
 
         communicate = edge_tts.Communicate(input_text, voice)
         audio_chunks: list[bytes] = []

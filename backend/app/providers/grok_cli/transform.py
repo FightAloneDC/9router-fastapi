@@ -15,8 +15,8 @@ import uuid
 from typing import Any
 
 from app.providers.grok_cli.constants import (
-    GROK_CLI_EFFORT_LEVELS,
     GROK_CLI_DEFAULT_EFFORT,
+    GROK_CLI_EFFORT_LEVELS,
     GROK_CLI_FREEFORM_TOOL_PARAMETERS,
     GROK_CLI_NATIVE_ITEM_ID,
     GROK_CLI_SESSION_TTL_SECONDS,
@@ -25,6 +25,7 @@ from app.providers.grok_cli.constants import (
     RESPONSES_API_ALLOWLIST,
     SERVER_ID_PATTERN,
 )
+from app.services.responses_translator import normalize_responses_input
 
 _SERVER_ID_RE = re.compile(SERVER_ID_PATTERN)
 _NATIVE_ITEM_ID_RE = re.compile(GROK_CLI_NATIVE_ITEM_ID, re.IGNORECASE)
@@ -512,8 +513,6 @@ def build_grok_cli_request(
         (transformed_body, meta) where meta carries sessionId, reqId,
         turnIdx, agentId and the upstream model id.
     """
-    from app.services.responses_translator import normalize_responses_input
-
     if "messages" in body and "input" not in body:
         result: dict = chat_to_responses_request(body)
     else:

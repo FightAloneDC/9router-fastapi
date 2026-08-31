@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 from app.providers.base import BaseProviderHandler, ValidateResult
+from app.providers.opencode import models as opencode_models
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +35,7 @@ class OpencodeHandler(BaseProviderHandler):
 
         Filters to models ending with -free or in the known free set.
         """
-        from app.providers.opencode.models import fetch_models
-
-        return await fetch_models(api_key)
+        return await opencode_models.fetch_models(api_key)
 
     def build_upstream_url(
         self,

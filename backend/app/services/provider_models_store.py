@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.provider_model import ProviderModel
 from app.models.settings import KV
+from app.providers.provider import Provider
 from app.routers.providers.constants import normalize_models_list
 
 _HISTORY_SCOPE = "catalog-enabled"
@@ -46,8 +47,6 @@ def prune_history(
 
 def uses_model_catalog_table(provider: str) -> bool:
     """True when this provider stores models in provider_models."""
-    from app.providers.provider import Provider
-
     try:
         return bool(Provider(provider).config().MODEL_CATALOG_TABLE)
     except (ValueError, ModuleNotFoundError, AttributeError):

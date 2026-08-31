@@ -13,6 +13,8 @@ from typing import Any
 
 import httpx
 
+from app.providers.provider import Provider
+
 
 async def execute_rerank(
     client: httpx.AsyncClient,
@@ -40,8 +42,6 @@ async def execute_rerank(
     """
     if provider_data is None:
         provider_data = {}
-
-    from app.providers.provider import Provider
 
     try:
         p = Provider(provider_id)

@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from app.providers.base import BaseProviderHandler
+from app.services.search_adapters import make_result
 
 
 class SerperHandler(BaseProviderHandler):
@@ -21,8 +22,6 @@ class SerperHandler(BaseProviderHandler):
         provider_data: dict | None = None,
     ) -> dict[str, Any]:
         """Execute Serper Search and return normalized results."""
-        from app.services.search_adapters import make_result
-
         endpoint = "/news" if params.get("search_type") == "news" else "/search"
         body: dict[str, Any] = {"q": params["query"], "num": params.get("max_results", 5)}
         if params.get("country"):

@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 import httpx
 
 from app.providers.base import BaseProviderHandler
+from app.services.search_adapters import make_result
 
 
 class SearchapiHandler(BaseProviderHandler):
@@ -22,8 +23,6 @@ class SearchapiHandler(BaseProviderHandler):
         provider_data: dict | None = None,
     ) -> dict[str, Any]:
         """Execute SearchAPI Search and return normalized results."""
-        from app.services.search_adapters import make_result
-
         qp: dict[str, str] = {
             "engine": "google",
             "q": params["query"],

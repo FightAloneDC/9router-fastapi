@@ -1,6 +1,7 @@
 """Application settings endpoints."""
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,9 +15,9 @@ from app.database import get_db
 from app.models.settings import SettingsModel
 from app.models.user import User
 from app.routers.auth import get_current_user
+from app.routers.providers.connection_filters import ConnectionListFilters
 from app.schemas.settings import DatabaseImportRequest, SettingsOut, SettingsUpdate
 from app.services.auth import get_any_user, hash_password, verify_password
-from app.routers.providers.connection_filters import ConnectionListFilters
 from app.services.database_transfer import (
     CONNECTIONS_TABLES,
     IMPORT_MODE_MERGE,
@@ -132,7 +133,6 @@ def _build_safe_settings(raw: dict) -> dict:
         merged.get("oidcIssuerUrl") and merged.get("oidcClientId") and raw.get("oidcClientSecret")
     )
     # Runtime flags (env-based, not stored)
-    import os
     merged["enableRequestLogs"] = os.environ.get("ENABLE_REQUEST_LOGS", "false").lower() == "true"
     merged["enableTranslator"] = os.environ.get("ENABLE_TRANSLATOR", "false").lower() == "true"
     return merged

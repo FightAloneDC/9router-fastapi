@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.config import settings
 
 _SECRET_KEYS = frozenset({
     "apikey",
@@ -84,7 +85,6 @@ def resolve_dump_dir() -> Path:
     configured = os.environ.get("GROK_CLI_DUMP_DIR", "").strip()
     if not configured:
         try:
-            from app.config import settings
             configured = (settings.GROK_CLI_DUMP_DIR or "").strip()
         except Exception:
             configured = ""

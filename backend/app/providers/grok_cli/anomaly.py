@@ -21,6 +21,8 @@ import logging
 import re
 from typing import Any
 
+from app.services import proxy as proxy_service
+
 logger = logging.getLogger(__name__)
 
 WRITE_TOOL_NAMES = frozenset({"write", "edit"})
@@ -231,13 +233,11 @@ async def maybe_mark_phantom_write(
         signals = evaluate_phantom_write(client_request, assembled)
         if not signals["hit"]:
             return False
-        from app.services.proxy import mark_connection_anomaly
-
         reason = (
             "Phantom write: user asked to write a file, "
             "finish=stop, no Write/Edit/Bash"
         )
-        marked = await mark_connection_anomaly(
+        marked = await proxy_service.mark_connection_anomaly(
             db,
             connection_id,
             reason=reason,

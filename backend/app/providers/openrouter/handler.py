@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from typing import Any
 
 import httpx
@@ -30,8 +31,6 @@ class OpenrouterHandler(BaseProviderHandler):
         **_kwargs,
     ) -> tuple[bytes, str]:
         """OpenRouter TTS — via chat completions w/ audio modality, SSE stream."""
-        import json as _json
-
         base_url = self._resolve_base_url(None)
         url = f"{base_url}/chat/completions"
         fmt = response_format if response_format in {"wav", "mp3", "flac", "opus", "pcm16"} else "wav"
@@ -70,7 +69,7 @@ class OpenrouterHandler(BaseProviderHandler):
                     if not line.startswith("data: ") or line == "data: [DONE]":
                         continue
                     try:
-                        payload = _json.loads(line[6:])
+                        payload = json.loads(line[6:])
                     except Exception:
                         continue
                     choices = payload.get("choices") or []

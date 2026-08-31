@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 import httpx
 
 from app.providers.base import BaseProviderHandler
+from app.services.search_adapters import make_result
 
 
 class YoucomHandler(BaseProviderHandler):
@@ -22,8 +23,6 @@ class YoucomHandler(BaseProviderHandler):
         provider_data: dict | None = None,
     ) -> dict[str, Any]:
         """Execute You.com Search and return normalized results."""
-        from app.services.search_adapters import make_result
-
         qp: dict[str, str] = {"query": params["query"], "count": str(params.get("max_results", 5))}
         base_url = self._resolve_base_url(provider_data)
         url = f"{base_url}/search?{urlencode(qp)}"

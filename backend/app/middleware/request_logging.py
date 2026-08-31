@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from typing import Callable
 
+from app.routers import console
+
 
 class RequestLoggingMiddleware:
     """Pure ASGI request logger for the console buffer.
@@ -47,15 +49,13 @@ class RequestLoggingMiddleware:
     def _log(
         method: str, path: str, status: int, start: float,
     ) -> None:
-        from app.routers.console import add_log
-
         duration_ms = round((time.time() - start) * 1000, 1)
         level = (
             "ERROR" if status >= 500
             else "WARN" if status >= 400
             else "INFO"
         )
-        add_log(
+        console.add_log(
             level=level,
             message=(
                 f"{method} {path} -> {status} ({duration_ms}ms)"

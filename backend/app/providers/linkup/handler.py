@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from app.providers.base import BaseProviderHandler
+from app.services.search_adapters import make_result
 
 
 class LinkupHandler(BaseProviderHandler):
@@ -21,8 +22,6 @@ class LinkupHandler(BaseProviderHandler):
         provider_data: dict | None = None,
     ) -> dict[str, Any]:
         """Execute Linkup Search and return normalized results."""
-        from app.services.search_adapters import make_result
-
         body: dict[str, Any] = {
             "q": params["query"],
             "depth": (params.get("provider_options") or {}).get("depth", "standard"),

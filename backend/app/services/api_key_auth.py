@@ -5,6 +5,8 @@ Priority: API key first, then JWT fallback.
 Returns None if auth not required (requireApiKey=False).
 """
 
+import json
+
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,8 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.api_key import ApiKey
 from app.models.settings import SettingsModel
-
-import json
+from app.services.auth import decode_access_token, get_user_by_username
 
 
 async def _require_api_key_setting(db: AsyncSession) -> bool:
@@ -59,8 +60,6 @@ async def validate_api_key(
         return {"id": api_key.id, "name": api_key.name, "auth_type": "api_key"}
 
     # Fallback: try JWT
-    from app.services.auth import decode_access_token, get_user_by_username
-
     payload = decode_access_token(token)
     if payload and payload.get("sub"):
         user = await get_user_by_username(db, payload["sub"])

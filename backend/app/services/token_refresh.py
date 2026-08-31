@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from app.database import async_session
 from app.models.provider import ProviderConnection
+from app.providers.qoder import auth as qoder_auth
 from app.services.oauth import refresh_access_token
 from app.services.outbound_proxy import (
     proxy_for_connection,
@@ -188,8 +189,7 @@ async def check_and_refresh_tokens() -> dict:
 
     # ── Refresh Qoder tokens (always refresh, not just near expiry) ──
     try:
-        from app.providers.qoder.auth import refresh_all_qoder_connections
-        qoder_results = await refresh_all_qoder_connections()
+        qoder_results = await qoder_auth.refresh_all_qoder_connections()
         for conn_id, success in qoder_results.items():
             if success:
                 refreshed += 1

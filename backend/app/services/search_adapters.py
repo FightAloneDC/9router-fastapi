@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 
+from app.providers.provider import Provider
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared utilities
@@ -94,8 +95,6 @@ async def execute_search(
     """
     if provider_data is None:
         provider_data = {}
-
-    from app.providers.provider import Provider
 
     try:
         p = Provider(provider_id)

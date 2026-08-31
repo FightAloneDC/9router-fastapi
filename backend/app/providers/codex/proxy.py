@@ -9,9 +9,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Callable, Coroutine, Optional
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
+
+from app import database
 
 logger = logging.getLogger(__name__)
 
@@ -143,8 +145,7 @@ class CodexProxy:
 
     async def _save_connection_sync(self, provider: str, token_data: dict):
         """Save connection from the proxy thread using a new async session."""
-        from app.database import async_session
-        async with async_session() as db:
+        async with database.async_session() as db:
             conn = await self._save_connection_fn(db, provider, token_data)
             await db.commit()
             return conn

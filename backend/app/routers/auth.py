@@ -5,17 +5,18 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.user import User
 from app.schemas.auth import AuthStatus, LoginRequest, Token, UserCreate, UserOut
 from app.services.auth import (
+    DEFAULT_PASSWORD,
     authenticate_user,
     create_access_token,
     create_user,
     decode_access_token,
     ensure_admin_user,
+    get_any_user,
     get_auth_status,
     get_user_by_username,
-    get_any_user,
-    DEFAULT_PASSWORD,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -34,8 +35,6 @@ async def get_current_user(
     - Authorization: Bearer <token> header (standard)
     - ?token=<token> query parameter (for EventSource/SSE which can't set headers)
     """
-    from app.models.user import User
-
     resolved_token = token or token_query
     if not resolved_token:
         raise HTTPException(

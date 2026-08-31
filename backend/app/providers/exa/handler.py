@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from app.providers.base import BaseProviderHandler
+from app.services.search_adapters import make_result, parse_domain_filter
 
 
 class ExaHandler(BaseProviderHandler):
@@ -21,8 +22,6 @@ class ExaHandler(BaseProviderHandler):
         provider_data: dict | None = None,
     ) -> dict[str, Any]:
         """Execute Exa Search and return normalized results."""
-        from app.services.search_adapters import make_result, parse_domain_filter
-
         includes, excludes = parse_domain_filter(params.get("domain_filter"))
         body: dict[str, Any] = {
             "query": params["query"],

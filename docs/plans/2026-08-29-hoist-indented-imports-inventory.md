@@ -1,8 +1,9 @@
 # Inventory: Hoist Indented Imports — 2026-08-29
 
-**Status:** in progress (2026-09-01: quota.py + P0 + P1 +
-P2 hoisted; documented cycles remain in `base.py` / `proxy.py` /
-`connection_health.py` / `connections.py` / `models.py`)
+**Status:** in progress (2026-09-01: quota.py + P0–P3
+hoisted; documented cycles remain in `base.py` / `proxy.py` /
+`connection_health.py` / `connections.py` / `models.py` /
+`active_requests.py`)
 
 **Rule:** In production code under `backend/app/`, `import` /
 `from … import` must live at **module top level**. Imports inside
@@ -21,9 +22,9 @@ style, except:
 rg -c --glob '*.py' '^\s+(from|import)\s+' backend/app | sort -t: -k2 -nr
 ```
 
-**Snapshot:** 2026-09-01 re-scan — **41 files** remain
+**Snapshot:** 2026-09-01 re-scan — **6 files** remain
 (was 82 on 2026-08-29; 69 after quota.py; 65 after P0;
-58 after P1). Match counts below.
+58 after P1; 41 after P2). Match counts below.
 Re-run the command after each batch; uncheck rows as they go
 clean (count → 0, or only `TYPE_CHECKING` / documented exceptions
 remain).
@@ -103,44 +104,44 @@ relevant pytest green. Watch for new circular imports.
 
 | Done | Matches | Path |
 |------|--------:|------|
-| [ ] | 1 | `backend/app/services/voice_fetchers.py` |
-| [ ] | 1 | `backend/app/services/token_refresh.py` |
-| [ ] | 1 | `backend/app/services/search_adapters.py` |
-| [ ] | 1 | `backend/app/services/rerank_adapters.py` |
-| [ ] | 1 | `backend/app/services/quota/__init__.py` |
-| [ ] | 1 | `backend/app/services/provider_models_store.py` |
-| [ ] | 1 | `backend/app/services/api_key_auth.py` |
-| [ ] | 1 | `backend/app/services/active_requests.py` |
-| [ ] | 1 | `backend/app/routers/usage.py` |
-| [ ] | 1 | `backend/app/routers/settings.py` |
-| [ ] | 1 | `backend/app/routers/providers/helpers.py` |
-| [ ] | 1 | `backend/app/routers/auth.py` |
-| [ ] | 1 | `backend/app/providers/youcom/handler.py` |
-| [ ] | 1 | `backend/app/providers/voyage_ai/handler.py` |
-| [ ] | 1 | `backend/app/providers/tavily/handler.py` |
-| [ ] | 1 | `backend/app/providers/serper/handler.py` |
-| [ ] | 1 | `backend/app/providers/searxng/handler.py` |
-| [ ] | 1 | `backend/app/providers/searchapi/handler.py` |
-| [ ] | 1 | `backend/app/providers/perplexity/handler.py` |
-| [ ] | 1 | `backend/app/providers/openrouter/handler.py` |
-| [ ] | 1 | `backend/app/providers/opencode/handler.py` |
-| [ ] | 1 | `backend/app/providers/mistral/transform.py` |
-| [ ] | 1 | `backend/app/providers/mistral/handler.py` |
-| [ ] | 1 | `backend/app/providers/linkup/handler.py` |
-| [ ] | 1 | `backend/app/providers/keelcode/handler.py` |
-| [ ] | 1 | `backend/app/providers/inworld/handler.py` |
-| [ ] | 1 | `backend/app/providers/__init__.py` |
-| [ ] | 1 | `backend/app/providers/grok_cli/transform.py` |
-| [ ] | 1 | `backend/app/providers/grok_cli/quality_gate.py` |
-| [ ] | 1 | `backend/app/providers/grok_cli/debug_dump.py` |
-| [ ] | 1 | `backend/app/providers/grok_cli/anomaly.py` |
-| [ ] | 1 | `backend/app/providers/google_pse/handler.py` |
-| [ ] | 1 | `backend/app/providers/exa/handler.py` |
-| [ ] | 1 | `backend/app/providers/edge_tts/handler.py` |
-| [ ] | 1 | `backend/app/providers/codex/proxy.py` |
-| [ ] | 1 | `backend/app/providers/brave/handler.py` |
-| [ ] | 1 | `backend/app/providers/alims_intl/handler.py` |
-| [ ] | 1 | `backend/app/middleware/request_logging.py` |
+| [x] | 0 | `backend/app/services/voice_fetchers.py` |
+| [x] | 0 | `backend/app/services/token_refresh.py` |
+| [x] | 0 | `backend/app/services/search_adapters.py` |
+| [x] | 0 | `backend/app/services/rerank_adapters.py` |
+| [x] | 0 | `backend/app/services/quota/__init__.py` |
+| [x] | 0 | `backend/app/services/provider_models_store.py` |
+| [x] | 0 | `backend/app/services/api_key_auth.py` |
+| [x] | 1 | `backend/app/services/active_requests.py` |
+| [x] | 0 | `backend/app/routers/usage.py` |
+| [x] | 0 | `backend/app/routers/settings.py` |
+| [x] | 0 | `backend/app/routers/providers/helpers.py` |
+| [x] | 0 | `backend/app/routers/auth.py` |
+| [x] | 0 | `backend/app/providers/youcom/handler.py` |
+| [x] | 0 | `backend/app/providers/voyage_ai/handler.py` |
+| [x] | 0 | `backend/app/providers/tavily/handler.py` |
+| [x] | 0 | `backend/app/providers/serper/handler.py` |
+| [x] | 0 | `backend/app/providers/searxng/handler.py` |
+| [x] | 0 | `backend/app/providers/searchapi/handler.py` |
+| [x] | 0 | `backend/app/providers/perplexity/handler.py` |
+| [x] | 0 | `backend/app/providers/openrouter/handler.py` |
+| [x] | 0 | `backend/app/providers/opencode/handler.py` |
+| [x] | 0 | `backend/app/providers/mistral/transform.py` |
+| [x] | 0 | `backend/app/providers/mistral/handler.py` |
+| [x] | 0 | `backend/app/providers/linkup/handler.py` |
+| [x] | 0 | `backend/app/providers/keelcode/handler.py` |
+| [x] | 0 | `backend/app/providers/inworld/handler.py` |
+| [x] | 0 | `backend/app/providers/__init__.py` |
+| [x] | 0 | `backend/app/providers/grok_cli/transform.py` |
+| [x] | 0 | `backend/app/providers/grok_cli/quality_gate.py` |
+| [x] | 0 | `backend/app/providers/grok_cli/debug_dump.py` |
+| [x] | 0 | `backend/app/providers/grok_cli/anomaly.py` |
+| [x] | 0 | `backend/app/providers/google_pse/handler.py` |
+| [x] | 0 | `backend/app/providers/exa/handler.py` |
+| [x] | 0 | `backend/app/providers/edge_tts/handler.py` |
+| [x] | 0 | `backend/app/providers/codex/proxy.py` |
+| [x] | 0 | `backend/app/providers/brave/handler.py` |
+| [x] | 0 | `backend/app/providers/alims_intl/handler.py` |
+| [x] | 0 | `backend/app/middleware/request_logging.py` |
 
 ---
 
@@ -165,6 +166,9 @@ Keep these indented; splitting the module is the real fix.
 - `backend/app/routers/providers/models.py`
   - same store → `routers.providers` package cycle as
     `connections.py`
+- `backend/app/services/active_requests.py`
+  - `usage_stream` imports this module at top level
+    (`get_active_requests`)
 
 ---
 
@@ -179,8 +183,7 @@ Keep these indented; splitting the module is the real fix.
 - Update match counts when re-scanning; mark **Done** only when
   the file is clean under the rule above.
 - 2026-08-31: hoisted SQLAlchemy / session / model imports in
-  all `providers/*/quota.py`. `services/quota/__init__.py` stays
-  indented (discovers `app.providers`).
+  all `providers/*/quota.py`.
 - Tests are exempt. Do not retarget test patches. If a hoist
   would bind a name that tests patch on the source module, import
   the module at top level and look up the attribute at call time
@@ -196,3 +199,12 @@ Keep these indented; splitting the module is the real fix.
   lines, rewritten as prose. `testing.py` uses
   `proxy_service.resolve_model_to_targets` so tests that patch
   `app.services.proxy.resolve_model_to_targets` still apply.
+- 2026-09-01 P3: hoisted remaining P3 table rows in document
+  order. `quota/__init__.py` `providers_pkg` hoist is fine
+  (same as `catalog.py`). `active_requests.py` keeps the
+  `usage_stream` cycle above. `request_logging.py` uses
+  `console.add_log` so tests that replace `console.add_log`
+  still apply. `token_refresh.py` uses
+  `qoder_auth.refresh_all_qoder_connections`. `codex/proxy.py`
+  uses `database.async_session()`. `anomaly.py` uses
+  `proxy_service.mark_connection_anomaly`.

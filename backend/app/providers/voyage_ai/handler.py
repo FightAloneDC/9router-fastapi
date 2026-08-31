@@ -5,6 +5,7 @@ import time
 import httpx
 
 from app.providers.base import BaseProviderHandler, ValidateResult
+from app.providers.voyage_ai import models as voyage_models
 from app.services.outbound_proxy import create_upstream_client
 
 
@@ -45,9 +46,7 @@ class VoyageAiHandler(BaseProviderHandler):
         data: dict | None = None,
     ) -> list[dict]:
         """Return the documented catalog. Voyage has no list-models API."""
-        from app.providers.voyage_ai.models import fetch_models as load_catalog
-
-        models = await load_catalog(api_key, data)
+        models = await voyage_models.fetch_models(api_key, data)
         normalized = [self._normalize_model(item) for item in models]
         return [item for item in normalized if item.get("id")]
 
