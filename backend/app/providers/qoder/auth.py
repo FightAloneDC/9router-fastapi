@@ -462,6 +462,28 @@ def apply_refreshed_qoder_tokens(
     data.pop("errorCode", None)
 
 
+async def _sync_quota_after_refresh(
+    db: Any,
+    connection_id: str,
+    data: dict[str, Any],
+) -> None:
+    """GET quota/usage after a real token recover. Fail-open."""
+    try:
+        from app.providers.qoder import quota as qoder_quota
+
+        await qoder_quota.sync_quota_after_token_refresh(
+            db,
+            connection_id,
+            data.get("accessToken") or "",
+            data,
+        )
+    except Exception as e:
+        logger.warning(
+            "Qoder refresh usage sync failed for %s: %s",
+            connection_id, e,
+        )
+
+
 async def refresh_job_token_result(
     refresh_token: str,
     timeout: float = 15.0,
@@ -680,6 +702,7 @@ async def try_refresh_connection(db, connection_id: str) -> bool:
 
     await db.flush()
     proxy_service.invalidate_connection_cache("qoder")
+    await _sync_quota_after_refresh(db, str(connection_id), data)
     logger.info(
         "Qoder refresh: token refreshed for connection %s",
         connection_id,
@@ -750,6 +773,7 @@ async def refresh_all_qoder_connections() -> dict[str, bool]:
             apply_refreshed_qoder_tokens(data, new_tokens)
             conn.data = json.dumps(data)
             db.add(conn)
+            await _sync_quota_after_refresh(db, conn_id, data)
 
             logger.info(f"Qoder background refresh OK: {conn_id[:8]}...")
             results[conn_id] = True

@@ -961,6 +961,62 @@ async def test_qoder_observe_complete_skips_without_local_credits():
 
 
 @pytest.mark.asyncio
+async def test_sync_quota_after_refresh_writes_max_api_local():
+    """After a real jobToken/refresh, GET usage and keep max."""
+    from app.providers.qoder.quota import (
+        sync_quota_after_token_refresh,
+    )
+
+    handler_get = AsyncMock(return_value=_mock_response(200, {
+        "userType": "personal_professional_trial",
+        "isQuotaExceeded": False,
+        "userQuota": {
+            "total": 300.0,
+            "used": 250.12,
+            "remaining": 49.88,
+            "unit": "credits",
+        },
+    }))
+    db = _qoder_observe_db()
+    with patch.object(
+        QoderUsageHandler, "_get", handler_get,
+    ):
+        with patch(
+            "app.providers.qoder.quota.local_credits",
+            new_callable=AsyncMock,
+            return_value=5.9,
+        ):
+            await sync_quota_after_token_refresh(
+                db, QODER_CONN_ID, "jt-new", {},
+            )
+    handler_get.assert_awaited_once()
+    db.add.assert_called_once()
+    added = db.add.call_args[0][0]
+    rows = json.loads(added.quotas)
+    assert rows[0]["used"] == pytest.approx(250.12)
+    assert rows[0]["remaining"] == pytest.approx(49.88)
+
+
+@pytest.mark.asyncio
+async def test_sync_quota_after_refresh_skips_write_on_get_fail():
+    from app.providers.qoder.quota import (
+        sync_quota_after_token_refresh,
+    )
+
+    db = _qoder_observe_db()
+    with patch.object(
+        QoderUsageHandler, "_get",
+        new_callable=AsyncMock,
+        side_effect=Exception("timeout"),
+    ):
+        await sync_quota_after_token_refresh(
+            db, QODER_CONN_ID, "jt-new", {},
+        )
+    db.add.assert_not_called()
+    db.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_observe_after_request_skips_default_complete():
     from app.services.quota import observe_after_request
 

@@ -1,7 +1,7 @@
 # Qoder open problems
 
 Date: 2026-09-01
-Status: **open** — inventory, not an implementation plan
+Status: **closed** (2026-09-02) — inventory complete
 Provider: `qoder` (alias `qd`)
 
 Written from live code + operator review the same day.
@@ -26,14 +26,16 @@ cadence.
 | After proxied chat, `observe_complete` adds this chat to a floor (`quota_cache` / `farmQuota*` / one GET) | `observe_complete` |
 | Credits stay **full float** in Python / cache / JSON | `QuotaItem` is `float`; never `int()` / `round()` |
 | Tracker UI may show 2 decimal places | `formatQuotaNum` `toFixed(2)` — display only |
-| Farm trial vs job-token clocks | quota design §7 |
+| Farm trial vs job-token clocks | `bulk.py` + quota design §7 |
+| PAT persisted for late re-exchange | blob `personalToken` |
 | Background job-token refresh gated on `expiresAt` | `job_token_needs_refresh` (1h buffer) |
 | Tracker list tick does not live-poll Qoder | `USES_UPSTREAM = True`; cache + `/usage` |
+| GET `quota/usage` after a real job-token refresh | `sync_quota_after_token_refresh` |
 
 Cap `RATE_LIMITS["trial"]["credits"]` = 300 stays an integer
 table value. Live **used** is the float.
 
-## Open
+## Inventory
 
 ### 1. ~~Background refresh ignores job-token TTL~~ — solved
 
@@ -55,43 +57,50 @@ hitting Qoder.
 Idle rows with no `lastUsedAt` stay on cache until a manual
 card refresh or a proxied chat.
 
-### 3. Two clocks, two hosts — easy to mix
+### 3. ~~Two clocks, two hosts — easy to mix~~ — solved
 
-| Clock | Host | Auth | Meaning |
-|-------|------|------|---------|
-| Job token `expiresAt` | openapi | Bearer `jt-` | Credential TTL (~24 h) |
-| Trial `expiresAt` / `proTrialEndAt` | quota API / farm | same Bearer | Credit window (~14 d) |
-| Chat | `api3` COSY | not the quota GET | Usage; SSE `credits` if proxied |
+**Already in code** (`bulk.py` `parse_farm_entry`, quota
+`reset_at`, `auth.py` PAT fallback). grok-farm-modular puts
+both clocks in one `tokens` object; import splits them:
 
-Chat that never hits 9router (`api3` / IDE) does not write
-`usage_history`. Local sum then lags the vendor. `fetch()`
-`max(API used, local sum)` exists for that. Direct chat is
-not a 9router tracker bug; it is a coverage gap.
+| Farm field | Blob | Meaning |
+|------------|------|---------|
+| `tokens.expires_at` / `expires_in` | `expiresAt` | Job-token TTL (~24 h) |
+| `tokens.pro_trial_*_at` | `proTrialStartAt` / `proTrialEndAt` | Credit window (~14 d) |
+| `tokens.checked_quota` / `quota_remaining` / `is_quota_exceeded` | `farmQuota*` | Credit floor (item 6) |
+| `tokens.personal_token` | `personalToken` | Re-exchange if refresh is late |
+| Chat `api3` COSY | not this GET | Usage only if proxied |
 
-Do not use blob `expiresAt` as the credit-bar `reset_at`.
+Bar `reset_at` = API trial `expiresAt`, else `proTrialEndAt`.
+Never blob `expiresAt`. Do not persist `password`, `proxy`,
+`claim_status`, `claim_detail`.
+
+Chat that never hits 9router still lags `usage_history`. Item 5
+covers idle imports (dev→prod, IDE-only) on the next real
+job-token refresh.
 
 ### 4. ~~Docs disagree with code~~ — solved
 
 **Fixed 2026-09-02.** Quota design header is **approved**.
 §2 list path, full-float credits, and `observe_complete` floor
-increment match `quota.py` / `FLOW.md`. Optional item 5 is
-not part of that design lock.
+increment match `quota.py` / `FLOW.md`.
 
-### 5. Optional: GET usage after a real job-token refresh
+### 5. ~~GET usage after a real job-token refresh~~ — solved
 
-Not built. After a **successful** `jobToken/refresh` (near
-`expiresAt`, ~once per day per account), also GET
-`quota/usage` with the new Bearer and write `quota_cache`
-(`max` with local credits, full float). That is the vendor
-source of truth for chats that never hit 9router.
+**Fixed 2026-09-02.** After a **successful** token recover
+(`jobToken/refresh` or PAT re-exchange) in
+`refresh_all_qoder_connections` / `try_refresh_connection`,
+GET `quota/usage` with the new Bearer and write `quota_cache`
+(`max` with local credits, full float). Covers idle imports
+(dev→prod) and chats that never hit this 9router.
 
 Do **not** GET usage when the refresh cycle skips a still-fresh
-token. Tracker ticks already do not poll.
+token. Tracker ticks already do not poll. GET failure does not
+roll back the token refresh.
 
 Already exists, not this item: operator card refresh is
 `GET /usage/{id}?force=true`. In-use connections may also
-re-poll on `/usage` after 15 min. Those are the current
-manual / cache paths — they are not the piggyback.
+re-poll on `/usage` after 15 min.
 
 ### 6. ~~Import with credits already used~~ — solved
 
@@ -104,9 +113,8 @@ manual / cache paths — they are not the piggyback.
    `max(API, local)`. GET failure does not seed a local-only
    bar. Later chats hit (1) and do not GET again.
 
-Do not GET usage on every chat. Item 5 stays optional for
-accounts that never chat through 9router and never open the
-tracker.
+Do not GET usage on every chat. Idle imports without a chat
+are covered by item 5 on the next real token refresh.
 
 ## Suggested order
 
@@ -114,10 +122,12 @@ tracker.
 2. ~~Stop list `GET /quota` from calling Qoder `fetch()`.~~ done.
 3. ~~Item 6: `observe_complete` increment + farm floor + one
    GET on first chat if no cache/farm.~~ done.
-4. Optional item 5: GET `quota/usage` after a real near-expiry
-   `jobToken/refresh` (not `force=true`; that already exists).
+4. ~~Item 5: GET `quota/usage` after a real token recover.~~
+   done.
 5. ~~Align quota design header status if still marked draft.~~
    done.
+6. ~~Item 3: split farm job-token vs trial clocks.~~ already
+   in `bulk.py`.
 
 ## Out of scope until asked
 

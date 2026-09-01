@@ -5,6 +5,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from app.providers.qoder.auth import (
     apply_qoder_token_expiry,
     expires_in_to_seconds,
@@ -17,6 +19,24 @@ from app.providers.qoder.auth import (
 from app.providers.qoder.constants import (
     QODER_JOB_TOKEN_REFRESH_BUFFER_S,
 )
+
+
+@pytest.fixture(autouse=True)
+def skip_quota_sync_unless_marked(monkeypatch, request):
+    """Avoid a live quota/usage GET from refresh tests."""
+    if request.node.name.endswith(
+        "background_refresh_syncs_quota_after_post",
+    ):
+        return
+
+    async def _skip(*_a: object, **_k: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "app.providers.qoder.quota.sync_quota_after_token_refresh",
+        _skip,
+        raising=False,
+    )
 
 
 def test_expires_in_ms_vs_seconds() -> None:
@@ -438,3 +458,88 @@ def test_background_skips_fresh_job_token(monkeypatch) -> None:
     result = asyncio.run(refresh_all_qoder_connections())
     assert result == {}
     assert hits == []
+
+
+def test_background_refresh_syncs_quota_after_post(monkeypatch) -> None:
+    """Near-expiry POST also GETs quota/usage once (item 5)."""
+    import app.providers.qoder.auth as auth
+
+    near = _refresh_conn("jrt-ok")
+    near.id = "cccccccc-1111-2222-3333-444444444444"
+    blob = json.loads(near.data)
+    blob["expiresAt"] = (
+        datetime.now(timezone.utc) + timedelta(minutes=10)
+    ).isoformat()
+    near.data = json.dumps(blob)
+    synced: list[tuple] = []
+
+    class _Result:
+        def scalars(self) -> "_Result":
+            return self
+
+        def all(self) -> list:
+            return [near]
+
+    class _Session:
+        async def execute(self, _s: object) -> _Result:
+            return _Result()
+
+        def add(self, _c: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    class _Ctx:
+        async def __aenter__(self) -> _Session:
+            return _Session()
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+    async def _refresh(token: str, timeout: float = 15.0) -> tuple:
+        return {
+            "access_token": "jt-new",
+            "refresh_token": "jrt-new",
+            "expires_in": 86400000,
+        }, 200
+
+    async def _sync(
+        _db: object,
+        connection_id: str,
+        access_token: str,
+        provider_data: dict | None = None,
+    ) -> None:
+        synced.append((connection_id, access_token))
+
+    async def _proxy(*_a: object, **_k: object) -> None:
+        return None
+
+    class _ProxyCtx:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "app.database.async_sessionmaker",
+        lambda *_a, **_k: lambda: _Ctx(),
+    )
+    monkeypatch.setattr(auth, "refresh_job_token_result", _refresh)
+    monkeypatch.setattr(auth, "proxy_for_connection", _proxy)
+    monkeypatch.setattr(
+        auth, "use_outbound_proxy", lambda _p: _ProxyCtx(),
+    )
+    monkeypatch.setattr(
+        "app.services.proxy.invalidate_connection_cache",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
+        "app.providers.qoder.quota.sync_quota_after_token_refresh",
+        _sync,
+    )
+
+    result = asyncio.run(refresh_all_qoder_connections())
+    assert result == {str(near.id): True}
+    assert synced == [(str(near.id), "jt-new")]

@@ -175,7 +175,11 @@ handler may show the farm snapshot (`farmQuota*` +
 `USES_UPSTREAM = True` — tracker `GET /quota` serves
 `quota_cache` (no live poll per tick). `fetch()` still GETs
 the live quota API on `GET /usage/{id}` (15 min cache, or
-`force=true`).
+`force=true`). After a real job-token refresh (near
+`expiresAt`, or on-demand 401/403 recover),
+`sync_quota_after_token_refresh` GETs `quota/usage` once
+and writes `quota_cache`. Skipped still-fresh cycles do not
+GET.
 
 After each proxied chat, `observe_complete` (from
 `save_request_tracking`) adds this chat's `credits` onto

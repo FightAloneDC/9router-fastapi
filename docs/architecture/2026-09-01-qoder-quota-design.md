@@ -161,9 +161,11 @@ be mixed:
 | `tokens.quota_remaining` | Last known remaining | `farmQuotaRemaining` |
 | `tokens.is_quota_exceeded` | Last known exhaust | `farmQuotaExceeded` |
 | `tokens.userType` / `plan` | Plan labels | `userType` / `plan` |
+| `tokens.personal_token` | PAT for late `jobToken/exchange` | `personalToken` |
 
-Do **not** persist `password`, `personal_token`, `proxy`,
-`claim_status`, or `claim_detail`.
+Do **not** persist `password`, `proxy`, `claim_status`, or
+`claim_detail`. **Do** persist `personalToken` when the farm
+entry has `tokens.personal_token` — job tokens die in a day.
 
 Tracker:
 
@@ -189,7 +191,5 @@ rows.
 
 ## Remaining after §7
 
-Optional follow-up only: GET `quota/usage` after a real
-near-expiry `jobToken/refresh` (open-problems item 5). Refresh
-gating, tracker list cache, and `observe_complete` floor
-increment are already in `providers/qoder/`.
+None. Open-problems inventory is closed (2026-09-02), including
+GET `quota/usage` after a real job-token refresh.

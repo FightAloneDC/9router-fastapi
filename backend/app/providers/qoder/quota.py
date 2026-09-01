@@ -366,6 +366,58 @@ async def _write_observe_bar_from_result(
     await db.commit()
 
 
+async def sync_quota_after_token_refresh(
+    db: Any,
+    connection_id: str,
+    access_token: str,
+    provider_data: dict | None = None,
+) -> None:
+    """GET quota/usage after a real job-token refresh. Fail-open.
+
+    Writes ``quota_cache`` only when the GET succeeds. Uses
+    max(API used, local credits). Does not run on skipped
+    still-fresh refresh cycles.
+    """
+    if not access_token:
+        return
+    try:
+        cid = uuid.UUID(connection_id)
+    except (TypeError, ValueError):
+        return
+    blob = provider_data or {}
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {access_token}",
+    }
+    handler = QoderUsageHandler()
+    try:
+        resp = await handler._get(
+            QODER_QUOTA_USAGE_URL, headers,
+        )
+    except Exception as e:
+        logger.warning("Qoder refresh usage GET failed: %s", e)
+        return
+    if resp.status_code != 200:
+        logger.warning(
+            "Qoder refresh usage GET status %s",
+            resp.status_code,
+        )
+        return
+    data = resp.json()
+    if not isinstance(data, dict):
+        return
+    local_used = await local_credits(connection_id)
+    result = apply_local_used(
+        usage_from_api(data, blob), local_used,
+    )
+    if not result.quotas:
+        return
+    from app.models.quota_cache import QuotaCache
+
+    cache = await db.get(QuotaCache, cid)
+    await _write_observe_bar_from_result(db, cid, cache, result)
+
+
 class QoderUsageHandler(BaseUsageHandler):
     PROVIDER_ID = "qoder"
     # True: GET /quota serves quota_cache (chat observe_complete
