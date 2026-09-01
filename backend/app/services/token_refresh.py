@@ -187,7 +187,7 @@ async def check_and_refresh_tokens() -> dict:
 
         await session.commit()
 
-    # ── Refresh Qoder tokens (always refresh, not just near expiry) ──
+    # ── Qoder job tokens (near expiresAt, not every active) ──
     try:
         qoder_results = await qoder_auth.refresh_all_qoder_connections()
         for conn_id, success in qoder_results.items():

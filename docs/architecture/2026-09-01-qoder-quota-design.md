@@ -78,16 +78,16 @@ No per-model table. No `detail=models`. No RPM/TPM rows. Provider
 Detail already shows the published 300 / 14-day note; the tracker
 is the **live** bar.
 
-### 2. List path matches other FLOW.md quota providers
+### 2. List path reads cache; live GET is `/usage`
 
-`USES_UPSTREAM = False`. Quota Tracker auto-refresh (60s default,
-visible page only) is `GET /quota`, which calls `fetch()` for
-each Qoder row on that page — same as Groq / Cerebras / Voyage.
-`fetch()` still GETs `quota/usage` with the job token. Credits
-are not summed from `usage_history`.
+`USES_UPSTREAM = True`. Quota Tracker auto-refresh (60s) is
+`GET /quota` and serves `quota_cache`. It does **not** call
+`fetch()` per visible Qoder row. Chat `observe_complete` already
+wrote the local credit sum. Empty cache is filled by
+`GET /usage/{id}` (`CACHE_MIN_AGE_S` 15 min, or `force=true`).
 
-The 15 min `CACHE_MIN_AGE_S` applies to `GET /usage/{id}`
-without `force`, not to the list tick.
+`fetch()` still GETs `quota/usage` with the job token and
+takes max(API used, local `usage_history` credit sum).
 
 After each proxied chat, `observe_complete` sums
 `usage_history.tokens.credits` (SSE `usage.credits`, verified
@@ -105,8 +105,8 @@ account to 300.
 
 Do **not** seed fake `0 / 300` bars into `quota_cache` for
 accounts that have never been fetched. Empty until the first
-list `GET /quota` `fetch()` (or card `GET /usage/{id}`) is
-correct; inventing a full trial hides already-depleted idle
+`GET /usage/{id}` (or `observe_complete` after a proxied chat)
+is correct; inventing a full trial hides already-depleted idle
 accounts.
 
 A grok-farm-modular **last check** is not a fake seed. See §7.
@@ -187,5 +187,8 @@ rows.
 
 ## Remaining after §7
 
-Live-bar decisions in §1–6 still wait review. Farm optional keys
-and FLOW quota notes are already in `providers/qoder/`.
+Open follow-ups (refresh-all vs TTL, tracker live poll, doc
+drift) are in
+`docs/architecture/2026-09-01-qoder-open-problems.md`.
+Farm optional keys and FLOW quota notes are already in
+`providers/qoder/`.

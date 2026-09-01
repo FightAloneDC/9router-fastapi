@@ -133,7 +133,9 @@ agent planner.
   `idToken`) are stripped from `/providers/client` responses.
 - Deleting a provider node cascades to connections that reference it.
 - OAuth tokens: background refresh via `token_refresh.py`. Qoder:
-  on-demand (401/403) + background (~5 min).
+  on-demand (401/403) + background every ~5 min, but POST
+  `jobToken/refresh` only near `expiresAt` (1h buffer). See
+  `docs/architecture/2026-09-01-qoder-open-problems.md`.
 
 ## Key files
 

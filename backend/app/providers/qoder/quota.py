@@ -209,10 +209,10 @@ def apply_local_used(
 
 class QoderUsageHandler(BaseUsageHandler):
     PROVIDER_ID = "qoder"
-    # Same list path as other FLOW.md quota providers: GET /quota
-    # calls fetch() for visible rows (60s tracker tick). fetch()
-    # still GETs QODER_QUOTA_USAGE_URL.
-    USES_UPSTREAM = False
+    # True: GET /quota serves quota_cache (chat observe_complete
+    # already wrote it). fetch() still GETs quota/usage on
+    # GET /usage/{id} (15 min cache / force).
+    USES_UPSTREAM = True
 
     async def fetch(
         self,

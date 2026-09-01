@@ -589,7 +589,7 @@ async def test_qoder_usage():
     ):
         result = await handler.fetch("fake-token")
 
-    assert QoderUsageHandler.USES_UPSTREAM is False
+    assert QoderUsageHandler.USES_UPSTREAM is True
     assert result.plan == "personal_professional_trial"
     assert result.limit_reached is False
     assert len(result.quotas) == 1

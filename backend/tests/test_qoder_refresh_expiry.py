@@ -2,16 +2,20 @@
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from app.providers.qoder.auth import (
     apply_qoder_token_expiry,
     expires_in_to_seconds,
+    job_token_needs_refresh,
     mark_refresh_rejected,
     refresh_all_qoder_connections,
     refresh_token_unusable,
     try_refresh_connection,
+)
+from app.providers.qoder.constants import (
+    QODER_JOB_TOKEN_REFRESH_BUFFER_S,
 )
 
 
@@ -334,3 +338,103 @@ def test_background_marks_400_then_skips(
     second = asyncio.run(refresh_all_qoder_connections())
     assert second == {}
     assert hits == ["drt-dead"]
+
+
+def test_job_token_needs_refresh_skips_fresh() -> None:
+    now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
+    far = now + timedelta(hours=12)
+    assert job_token_needs_refresh(
+        {"expiresAt": far.isoformat()},
+        now=now,
+    ) is False
+
+
+def test_job_token_needs_refresh_when_within_buffer() -> None:
+    now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
+    soon = now + timedelta(
+        seconds=QODER_JOB_TOKEN_REFRESH_BUFFER_S - 60,
+    )
+    assert job_token_needs_refresh(
+        {"expiresAt": soon.isoformat()},
+        now=now,
+    ) is True
+
+
+def test_job_token_needs_refresh_when_missing_expiry() -> None:
+    now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
+    assert job_token_needs_refresh(
+        {"refreshToken": "jrt-x"},
+        now=now,
+    ) is True
+
+
+def test_background_skips_fresh_job_token(monkeypatch) -> None:
+    import app.providers.qoder.auth as auth
+
+    fresh = _refresh_conn("jrt-ok")
+    fresh.id = "bbbbbbbb-1111-2222-3333-444444444444"
+    blob = json.loads(fresh.data)
+    blob["expiresAt"] = "2099-01-01T00:00:00+00:00"
+    fresh.data = json.dumps(blob)
+    hits: list[str] = []
+
+    class _Result:
+        def scalars(self) -> "_Result":
+            return self
+
+        def all(self) -> list:
+            return [fresh]
+
+    class _Session:
+        async def execute(self, _s: object) -> _Result:
+            return _Result()
+
+        def add(self, _c: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    class _Ctx:
+        async def __aenter__(self) -> _Session:
+            return _Session()
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+    async def _refresh(token: str, timeout: float = 15.0) -> tuple:
+        hits.append(token)
+        return {
+            "access_token": "jt-new",
+            "refresh_token": "jrt-new",
+            "expires_in": 86400000,
+        }, 200
+
+    async def _proxy(*_a: object, **_k: object) -> None:
+        hits.append("proxy")
+        return None
+
+    class _ProxyCtx:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "app.database.async_sessionmaker",
+        lambda *_a, **_k: lambda: _Ctx(),
+    )
+    monkeypatch.setattr(auth, "refresh_job_token_result", _refresh)
+    monkeypatch.setattr(auth, "proxy_for_connection", _proxy)
+    monkeypatch.setattr(
+        auth, "use_outbound_proxy", lambda _p: _ProxyCtx(),
+    )
+    monkeypatch.setattr(
+        "app.services.proxy.invalidate_connection_cache",
+        lambda *_a, **_k: None,
+    )
+
+    result = asyncio.run(refresh_all_qoder_connections())
+    assert result == {}
+    assert hits == []

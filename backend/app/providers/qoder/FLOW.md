@@ -96,8 +96,8 @@ token. Miss → force-refresh model list. **Not** stored in SQL.
 4. **Refresh** — `POST …/jobToken/refresh`:
    - on-demand: `try_refresh_on_auth_error` after 401/403
    - background: `refresh_all_qoder_connections` every ~5 min
-     via `token_refresh.py` (always refresh, not only near
-     expiry)
+     via `token_refresh.py` — POST only when `expiresAt` is
+     within 1h (or missing). Not every active account.
    - if refresh is dead/missing, re-exchange stored
      `personalToken`; only then mark the refresh unusable
 
@@ -170,17 +170,17 @@ always wins over a grok-farm-modular last check.
 handler may show the farm snapshot (`farmQuota*` +
 `proTrialEndAt`) instead of an empty error.
 
-`USES_UPSTREAM = False` — tracker `GET /quota` calls `fetch()`
-on the visible page (60s auto-refresh), same list path as Groq
-/ Cerebras / Voyage. `fetch()` still GETs the live quota API.
+`USES_UPSTREAM = True` — tracker `GET /quota` serves
+`quota_cache` (no live poll per tick). `fetch()` still GETs
+the live quota API on `GET /usage/{id}` (15 min cache, or
+`force=true`).
 
 After each proxied chat, `observe_complete` (from
 `save_request_tracking`) sums `usage_history.tokens.credits`
 into `quota_cache` so the next list tick is not the first
-refresh. `fetch()` still GETs the live quota API and takes
-max(API used, local credit sum) as full floats — never
-`int()` / `round()` in Python, cache, or JSON. Tracker UI
-may show 2 decimal places (display only).
+refresh. `fetch()` takes max(API used, local credit sum) as
+full floats — never `int()` / `round()` in Python, cache, or
+JSON. Tracker UI may show 2 decimal places (display only).
 
 Snapshot may land in `quota_cache` via the shared quota
 router — not the model blob.
@@ -194,6 +194,8 @@ router — not the model blob.
 
 ## Related
 
+- Open problems (optional billing piggyback):
+  `docs/architecture/2026-09-01-qoder-open-problems.md`
 - Catalog policy:
   `docs/architecture/2026-08-15-openrouter-catalog-slice.md`
 - Token / cache bugs (historical):

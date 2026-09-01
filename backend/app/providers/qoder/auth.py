@@ -22,6 +22,9 @@ Token Refresh:
   a jrt-* refresh token. OAuth / device flow comes with a drt-* refresh
   token. Both prefixes work on POST /api/v1/jobToken/refresh
   (openapi.qoder.sh). The old endpoint on center.qoder.sh returns 403.
+  Background refresh_all only POSTs near expiresAt (1h buffer) or when
+  expiresAt is missing. On-demand try_refresh_connection still handles
+  401/403.
 """
 
 import base64
@@ -47,6 +50,7 @@ from app.services.outbound_proxy import (
 
 from .constants import (
     QODER_DEVICE_TOKEN_URL,
+    QODER_JOB_TOKEN_REFRESH_BUFFER_S,
     QODER_LOGIN_URL,
     QODER_OPENAPI_BASE,
     QODER_REFRESH_TOKEN_URL,
@@ -73,6 +77,40 @@ def expires_in_to_seconds(expires_in: object) -> int | None:
     if value > _EXPIRES_IN_MS_THRESHOLD:
         return value // 1000
     return value
+
+
+def _parse_job_expires_at(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(
+            value.replace("Z", "+00:00"),
+        )
+    except (ValueError, TypeError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def job_token_needs_refresh(
+    data: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """True when the background loop should hit jobToken/refresh.
+
+    Missing expiresAt (legacy blobs) refreshes once so expiry is
+    written. Fresh tokens wait until within the 1h buffer.
+    """
+    now = now or datetime.now(timezone.utc)
+    expires_at = _parse_job_expires_at(data.get("expiresAt"))
+    if expires_at is None:
+        return True
+    remaining = expires_at - now
+    return remaining <= timedelta(
+        seconds=QODER_JOB_TOKEN_REFRESH_BUFFER_S,
+    )
 
 
 def apply_qoder_token_expiry(
@@ -650,10 +688,11 @@ async def try_refresh_connection(db, connection_id: str) -> bool:
 
 
 async def refresh_all_qoder_connections() -> dict[str, bool]:
-    """Background task: refresh all Qoder connections that have a refresh_token.
+    """Refresh active Qoder job tokens that are near expiry.
 
-    Called periodically (every 5 min via token_refresh_loop) to keep tokens
-    alive even when connections are idle.
+    Called every 5 min via token_refresh_loop. Skips tokens whose
+    expiresAt is still outside QODER_JOB_TOKEN_REFRESH_BUFFER_S.
+    Idle accounts still stay alive; they are not POSTed every cycle.
 
     Returns:
         Dict mapping connection_id -> success bool
@@ -686,6 +725,8 @@ async def refresh_all_qoder_connections() -> dict[str, bool]:
                 and not pat
             ):
                 skipped_dead += 1
+                continue
+            if not job_token_needs_refresh(data):
                 continue
 
             proxy = await proxy_for_connection(db, conn, "oauthRefresh")
