@@ -113,6 +113,74 @@ async def local_credits(connection_id: str | None) -> float:
     return total
 
 
+async def latest_chat_credits(connection_id: str | None) -> float:
+    """Credits on the newest usage_history row for this connection."""
+    cid = _cid_key(connection_id)
+    if not cid:
+        return 0.0
+    stored = func.replace(
+        func.lower(func.coalesce(UsageHistory.connection_id, "")),
+        "-",
+        "",
+    )
+    async with async_session() as db:
+        row = (
+            await db.execute(
+                select(UsageHistory.tokens).where(
+                    func.lower(UsageHistory.provider) == "qoder",
+                    stored == cid,
+                ).order_by(
+                    UsageHistory.timestamp.desc(),
+                ).limit(1)
+            )
+        ).first()
+    if row is None:
+        return 0.0
+    return credits_from_tokens(row[0])
+
+
+def usage_from_api(
+    data: dict,
+    blob: dict | None = None,
+) -> UsageResponse:
+    """Map a live quota/usage JSON body to UsageResponse."""
+    extra = blob or {}
+    quota = data.get("userQuota") or {}
+    total = as_credit(quota.get("total")) or float(
+        published_credit_cap()
+    )
+    used = as_credit(quota.get("used"))
+    remaining = quota.get("remaining")
+    if remaining is None:
+        remaining = max(0.0, total - used)
+    else:
+        remaining = as_credit(remaining)
+    unit = (quota.get("unit") or "credits").title()
+    reset_at = None
+    expires_ms = data.get("expiresAt")
+    if isinstance(expires_ms, (int, float)) and expires_ms > 0:
+        reset_at = datetime.fromtimestamp(
+            expires_ms / 1000, tz=timezone.utc,
+        ).isoformat()
+    if reset_at is None:
+        reset_at = parse_expires_at(extra.get("proTrialEndAt"))
+    return UsageResponse(
+        plan=data.get("userType") or extra.get("userType"),
+        quotas=[QuotaItem(
+            name=unit,
+            used=used,
+            total=total,
+            remaining=remaining,
+            remaining_percentage=QoderUsageHandler._pct(
+                used, total,
+            ),
+            reset_at=reset_at,
+        )],
+        limit_reached=bool(data.get("isQuotaExceeded"))
+        or remaining <= 0,
+    )
+
+
 def usage_from_stored(data: dict) -> UsageResponse | None:
     """Last stored quota/trial check on the connection, if any.
 
@@ -207,6 +275,97 @@ def apply_local_used(
     return result
 
 
+def _blob_from_conn(conn: Any) -> dict[str, Any]:
+    if conn is None:
+        return {}
+    raw = getattr(conn, "data", None)
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return {}
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _farm_has_credits(blob: dict[str, Any]) -> bool:
+    return (
+        blob.get("farmQuotaTotal") is not None
+        or blob.get("farmQuotaRemaining") is not None
+        or blob.get("farmQuotaExceeded") is not None
+    )
+
+
+def _cache_credit_row(cache: Any) -> dict[str, Any] | None:
+    if cache is None or not cache.quotas:
+        return None
+    try:
+        rows = json.loads(cache.quotas)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(rows, list) or not rows:
+        return None
+    row0 = rows[0]
+    return row0 if isinstance(row0, dict) else None
+
+
+async def _write_observe_bar(
+    db: Any,
+    cid: uuid.UUID,
+    cache: Any,
+    *,
+    used: float,
+    total: float,
+    plan: str | None,
+    reset_at: str | None,
+    name: str = "Credits",
+    limit_reached: bool | None = None,
+) -> None:
+    left = max(0.0, float(total) - used)
+    hit = (
+        bool(limit_reached) or left <= 0
+        if limit_reached is not None
+        else left <= 0
+    )
+    result = UsageResponse(
+        plan=plan,
+        quotas=[QuotaItem(
+            name=name,
+            used=used,
+            total=total,
+            remaining=left,
+            remaining_percentage=QoderUsageHandler._pct(
+                used, total,
+            ),
+            reset_at=reset_at,
+        )],
+        limit_reached=hit,
+    )
+    await _write_observe_bar_from_result(db, cid, cache, result)
+
+
+async def _write_observe_bar_from_result(
+    db: Any,
+    cid: uuid.UUID,
+    cache: Any,
+    result: UsageResponse,
+) -> None:
+    from app.models.quota_cache import QuotaCache
+
+    if cache is None:
+        cache = QuotaCache(connection_id=cid)
+        db.add(cache)
+    cache.plan = result.plan
+    cache.quotas = json.dumps(
+        [q.model_dump() for q in result.quotas]
+    )
+    cache.limit_reached = result.limit_reached
+    cache.fetched_at = datetime.now(timezone.utc)
+    await db.commit()
+
+
 class QoderUsageHandler(BaseUsageHandler):
     PROVIDER_ID = "qoder"
     # True: GET /quota serves quota_cache (chat observe_complete
@@ -252,41 +411,15 @@ class QoderUsageHandler(BaseUsageHandler):
             )
 
         data = resp.json()
-        quota = data.get("userQuota") or {}
-        total = as_credit(quota.get("total")) or float(
-            published_credit_cap()
-        )
-        used = as_credit(quota.get("used"))
-        remaining = quota.get("remaining")
-        if remaining is None:
-            remaining = max(0.0, total - used)
-        else:
-            remaining = as_credit(remaining)
-        unit = (quota.get("unit") or "credits").title()
-        remaining_pct = self._pct(used, total)
-
-        reset_at = None
-        expires_ms = data.get("expiresAt")
-        if isinstance(expires_ms, (int, float)) and expires_ms > 0:
-            reset_at = datetime.fromtimestamp(
-                expires_ms / 1000, tz=timezone.utc,
-            ).isoformat()
-        if reset_at is None:
-            reset_at = parse_expires_at(blob.get("proTrialEndAt"))
-
-        result = UsageResponse(
-            plan=data.get("userType") or blob.get("userType"),
-            quotas=[QuotaItem(
-                name=unit,
-                used=used,
-                total=total,
-                remaining=remaining,
-                remaining_percentage=remaining_pct,
-                reset_at=reset_at,
-            )],
-            limit_reached=bool(data.get("isQuotaExceeded"))
-            or remaining <= 0,
-        )
+        if not isinstance(data, dict):
+            if stored is not None:
+                return apply_local_used(stored, local_used)
+            if local_used:
+                return apply_local_used(UsageResponse(), local_used)
+            return UsageResponse(
+                message="Qoder API returned invalid JSON"
+            )
+        result = usage_from_api(data, blob)
         return apply_local_used(result, local_used)
 
     async def observe_complete(
@@ -294,59 +427,100 @@ class QoderUsageHandler(BaseUsageHandler):
         db: Any,
         connection_id: str,
     ) -> None:
-        """After a proxied chat, apply usage_history.tokens.credits.
+        """After a proxied chat, add this chat's credits to a floor.
 
-        Live SSE usage carries ``credits`` (verified 2026-09-01).
-        Same lifecycle as NVIDIA counting the log — no extra
-        quota/usage GET here.
+        Floor: existing quota_cache, else farmQuota*, else one
+        GET quota/usage. Never replace a vendor bar with the
+        9router sum. Never GET on every chat.
         """
+        from app.models.provider import ProviderConnection
         from app.models.quota_cache import QuotaCache
 
-        local_used = await local_credits(connection_id)
-        if local_used <= 0:
+        latest = await latest_chat_credits(connection_id)
+        if latest <= 0:
             return
         try:
             cid = uuid.UUID(connection_id)
         except (TypeError, ValueError):
             return
         cache = await db.get(QuotaCache, cid)
-        cap = published_credit_cap()
-        reset_at: str | None = None
-        plan: str | None = None
-        if cache is not None and cache.quotas:
-            try:
-                rows = json.loads(cache.quotas)
-            except (json.JSONDecodeError, TypeError):
-                rows = []
-            if isinstance(rows, list) and rows:
-                row0 = rows[0] if isinstance(rows[0], dict) else {}
-                cap = as_credit(row0.get("total") or cap) or float(
-                    cap
-                )
-                raw_reset = row0.get("reset_at")
-                if isinstance(raw_reset, str):
-                    reset_at = raw_reset
-            plan = cache.plan
-        left = max(0.0, float(cap) - local_used)
-        result = UsageResponse(
-            plan=plan,
-            quotas=[QuotaItem(
-                name="Credits",
-                used=local_used,
+        row = _cache_credit_row(cache)
+        if row is not None:
+            cap = as_credit(
+                row.get("total") or published_credit_cap(),
+            ) or float(published_credit_cap())
+            used = as_credit(row.get("used")) + latest
+            raw_reset = row.get("reset_at")
+            reset_at = (
+                raw_reset if isinstance(raw_reset, str) else None
+            )
+            await _write_observe_bar(
+                db, cid, cache,
+                used=used,
                 total=cap,
-                remaining=left,
-                remaining_percentage=self._pct(local_used, cap),
+                plan=cache.plan,
                 reset_at=reset_at,
-            )],
-            limit_reached=left <= 0,
+                name=str(row.get("name") or "Credits"),
+            )
+            return
+
+        conn = await db.get(ProviderConnection, cid)
+        blob = _blob_from_conn(conn)
+        if _farm_has_credits(blob):
+            stored = usage_from_stored(blob)
+            item = (
+                stored.quotas[0]
+                if stored is not None and stored.quotas
+                else None
+            )
+            if item is not None:
+                cap = float(
+                    item.total or published_credit_cap()
+                )
+                used = as_credit(item.used) + latest
+                await _write_observe_bar(
+                    db, cid, None,
+                    used=used,
+                    total=cap,
+                    plan=stored.plan,
+                    reset_at=item.reset_at,
+                    name=item.name or "Credits",
+                )
+                return
+
+        token = (
+            blob.get("accessToken")
+            or blob.get("apiKey")
+            or ""
         )
-        if cache is None:
-            cache = QuotaCache(connection_id=cid)
-            db.add(cache)
-        cache.plan = result.plan
-        cache.quotas = json.dumps(
-            [q.model_dump() for q in result.quotas]
+        if not token:
+            return
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+        }
+        try:
+            resp = await self._get(
+                QODER_QUOTA_USAGE_URL, headers,
+            )
+        except Exception as e:
+            logger.warning(
+                "Qoder observe usage GET failed: %s", e,
+            )
+            return
+        if resp.status_code != 200:
+            logger.warning(
+                "Qoder observe usage GET status %s",
+                resp.status_code,
+            )
+            return
+        data = resp.json()
+        if not isinstance(data, dict):
+            return
+        local_used = await local_credits(connection_id)
+        result = apply_local_used(
+            usage_from_api(data, blob), local_used,
         )
-        cache.limit_reached = result.limit_reached
-        cache.fetched_at = datetime.now(timezone.utc)
-        await db.commit()
+        await _write_observe_bar_from_result(
+            db, cid, None, result,
+        )

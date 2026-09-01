@@ -82,18 +82,20 @@ is the **live** bar.
 
 `USES_UPSTREAM = True`. Quota Tracker auto-refresh (60s) is
 `GET /quota` and serves `quota_cache`. It does **not** call
-`fetch()` per visible Qoder row. Chat `observe_complete` already
-wrote the local credit sum. Empty cache is filled by
+`fetch()` per visible Qoder row. Chat `observe_complete` adds
+this chat's credits to a floor (`quota_cache` / `farmQuota*` /
+one GET on first chat). Empty cache is also filled by
 `GET /usage/{id}` (`CACHE_MIN_AGE_S` 15 min, or `force=true`).
 
 `fetch()` still GETs `quota/usage` with the job token and
 takes max(API used, local `usage_history` credit sum).
 
-After each proxied chat, `observe_complete` sums
+After each proxied chat, `observe_complete` adds this chat's
 `usage_history.tokens.credits` (SSE `usage.credits`, verified
-2026-09-01) into `quota_cache`. `fetch()` takes max(live API
-used, that local sum). `observe_response` stays a no-op —
-no remaining-credit headers, and stream headers arrive too
+2026-09-01) onto that floor — it does not replace the bar
+with the 9router sum. `fetch()` takes max(live API used, that
+local sum). `observe_response` stays a no-op — no
+remaining-credit headers, and stream headers arrive too
 early.
 
 ### 3. Trust live `total`; fallback only when missing

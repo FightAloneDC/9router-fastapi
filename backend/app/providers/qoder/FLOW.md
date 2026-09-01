@@ -121,7 +121,7 @@ Client POST /v1/chat/completions  model="qd/auto"
   → unwrap_response / SSE unwrap → OpenAI shape
   → usage_history as usual (tokens.credits from SSE usage)
   → observe_after_request → QoderUsageHandler.observe_complete
-       sum tokens.credits → quota_cache
+       cache.used + this chat (farm/GET floor if empty)
 ```
 
 `observe_response` is a no-op (no credit remaining headers;
@@ -130,8 +130,10 @@ headers also arrive before the stream finishes). Chat SSE
 2026-09-01). That JSON is stored on `usage_history.tokens`.
 `fetch()` takes max(live API used, full-float sum of those
 credits). Never `int()` or round credits. `observe_complete`
-writes that local sum into `quota_cache` right after the
-history row — same lifecycle as NVIDIA.
+adds this chat's credits to a floor: existing `quota_cache`,
+else blob `farmQuota*`, else one GET `quota/usage` then
+`max(API, local)`. It does not replace the bar with the
+9router sum.
 
 SSE unwrap lives in `transform.unwrap_qoder_sse_line` (also
 called from `v1_proxy/shared` for the streaming path). Business
@@ -176,11 +178,13 @@ the live quota API on `GET /usage/{id}` (15 min cache, or
 `force=true`).
 
 After each proxied chat, `observe_complete` (from
-`save_request_tracking`) sums `usage_history.tokens.credits`
-into `quota_cache` so the next list tick is not the first
-refresh. `fetch()` takes max(API used, local credit sum) as
-full floats — never `int()` / `round()` in Python, cache, or
-JSON. Tracker UI may show 2 decimal places (display only).
+`save_request_tracking`) adds this chat's `credits` onto
+`quota_cache.used` (or a farm snapshot / one-shot GET if the
+cache is empty) so the next list tick is not the first
+refresh. Do not GET `quota/usage` on every chat. `fetch()`
+takes max(API used, local credit sum) as full floats — never
+`int()` / `round()` in Python, cache, or JSON. Tracker UI may
+show 2 decimal places (display only).
 
 Snapshot may land in `quota_cache` via the shared quota
 router — not the model blob.

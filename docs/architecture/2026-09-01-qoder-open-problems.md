@@ -23,7 +23,7 @@ cadence.
 | Item | Where |
 |------|--------|
 | Chat SSE `usage.credits` exists and is stored on `usage_history.tokens` | `quota.py` `credits_from_tokens` |
-| After proxied chat, local credit sum updates `quota_cache` | `observe_complete` |
+| After proxied chat, `observe_complete` adds this chat to a floor (`quota_cache` / `farmQuota*` / one GET) | `observe_complete` |
 | Credits stay **full float** in Python / cache / JSON | `QuotaItem` is `float`; never `int()` / `round()` |
 | Tracker UI may show 2 decimal places | `formatQuotaNum` `toFixed(2)` — display only |
 | Farm trial vs job-token clocks | quota design §7 |
@@ -35,7 +35,7 @@ table value. Live **used** is the float.
 
 ## Open
 
-### 1. Background refresh ignores job-token TTL
+### 1. ~~Background refresh ignores job-token TTL~~ — solved
 
 **Fixed 2026-09-01.** `refresh_all_qoder_connections` still runs
 every 5 min, but POSTs `jobToken/refresh` only when `expiresAt`
@@ -44,7 +44,7 @@ is within `QODER_JOB_TOKEN_REFRESH_BUFFER_S` (1h) or missing
 near-expiry, with a longer buffer because job tokens last ~24 h.
 On-demand `try_refresh_connection` on 401/403 is unchanged.
 
-### 2. Quota Tracker still live-polls Qoder
+### 2. ~~Quota Tracker still live-polls Qoder~~ — solved
 
 **Fixed 2026-09-01.** `USES_UPSTREAM = True`. `GET /quota` serves
 `quota_cache`. Live `quota/usage` is `GET /usage/{id}` (15 min
@@ -72,27 +72,50 @@ Do not use blob `expiresAt` as the credit-bar `reset_at`.
 
 ### 4. Docs disagree with code
 
-- Quota design §2 still says credits are **not** summed from
-  `usage_history`; the same file later describes
-  `observe_complete`. The sum **is** live (`c52577b` era).
-- Quota design header still says draft; §2 list path is cache.
+Quota design header still says draft. §2 list path and
+`observe_complete` floor increment were aligned with code on
+2026-09-02 (`FLOW.md` too).
 
-FLOW.md is closer to code than the quota design intro.
+### 5. Optional: GET usage after a real job-token refresh
 
-### 5. Optional: live usage GET on near-expiry refresh
+Not built. After a **successful** `jobToken/refresh` (near
+`expiresAt`, ~once per day per account), also GET
+`quota/usage` with the new Bearer and write `quota_cache`
+(`max` with local credits, full float). That is the vendor
+source of truth for chats that never hit 9router.
 
-Problem 1 is gated. A successful **near-expiry** refresh is a
-reasonable place to write `quota_cache` from the live API
-(`max` with local credits, full float). Do not GET usage on
-skipped (still-fresh) cycles. Tracker ticks no longer poll.
+Do **not** GET usage when the refresh cycle skips a still-fresh
+token. Tracker ticks already do not poll.
+
+Already exists, not this item: operator card refresh is
+`GET /usage/{id}?force=true`. In-use connections may also
+re-poll on `/usage` after 15 min. Those are the current
+manual / cache paths — they are not the piggyback.
+
+### 6. ~~Import with credits already used~~ — solved
+
+**Fixed 2026-09-02.** `observe_complete` no longer sets
+`used = sum(9router credits)`.
+
+1. Cache exists: `cache.used + this chat` (full float).
+2. Cache empty + blob `farmQuota*`: farm used + this chat.
+3. Cache empty, no farm: **one** GET `quota/usage`, then
+   `max(API, local)`. GET failure does not seed a local-only
+   bar. Later chats hit (1) and do not GET again.
+
+Do not GET usage on every chat. Item 5 stays optional for
+accounts that never chat through 9router and never open the
+tracker.
 
 ## Suggested order
 
 1. ~~Gate job-token background refresh on `expiresAt`.~~ done.
 2. ~~Stop list `GET /quota` from calling Qoder `fetch()`.~~ done.
-3. Optional: live usage GET only on that real refresh (or
-   manual `GET /usage/{id}?force=true`).
-4. Align quota design header status if still marked draft.
+3. ~~Item 6: `observe_complete` increment + farm floor + one
+   GET on first chat if no cache/farm.~~ done.
+4. Optional item 5: GET `quota/usage` after a real near-expiry
+   `jobToken/refresh` (not `force=true`; that already exists).
+5. Align quota design header status if still marked draft.
 
 ## Out of scope until asked
 

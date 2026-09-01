@@ -15,6 +15,8 @@ from app.services.quota import (
     supported_providers,
 )
 from app.services.quota.base import QuotaItem, UsageResponse
+from app.models.provider import ProviderConnection
+from app.models.quota_cache import QuotaCache
 from app.providers.github.quota import GitHubUsageHandler
 from app.providers.claude.quota import ClaudeUsageHandler
 from app.providers.codex.quota import CodexUsageHandler
@@ -732,56 +734,228 @@ async def test_qoder_fetch_uses_chat_credits_when_higher():
     assert credits.remaining == pytest.approx(294.1)
 
 
-@pytest.mark.asyncio
-async def test_qoder_observe_complete_writes_quota_cache():
-    """After a proxied chat, usage_history.tokens.credits
-    update quota_cache — same lifecycle as NVIDIA logs.
-    """
-    handler = QoderUsageHandler()
-    conn_id = "fd55d07d-c8f5-401b-9216-59d75060f4a8"
+QODER_CONN_ID = "fd55d07d-c8f5-401b-9216-59d75060f4a8"
+QODER_CHAT_CREDITS = 2.8877612500000005
+
+
+def _qoder_observe_db(cache=None, conn=None):
     db = MagicMock()
-    db.get = AsyncMock(return_value=None)
+
+    async def _get(model, _pk):
+        if model is QuotaCache:
+            return cache
+        if model is ProviderConnection:
+            return conn
+        return None
+
+    db.get = AsyncMock(side_effect=_get)
     db.add = MagicMock()
     db.commit = AsyncMock()
+    return db
 
+
+def _qoder_conn(data: dict) -> MagicMock:
+    conn = MagicMock()
+    conn.data = json.dumps(data)
+    return conn
+
+
+@pytest.mark.asyncio
+async def test_qoder_observe_complete_increments_existing_cache():
+    """Cache used + this chat. Not the 9router sum, not a GET."""
+    handler = QoderUsageHandler()
+    cache = MagicMock()
+    cache.plan = "personal_professional_trial"
+    cache.quotas = json.dumps([{
+        "name": "Credits",
+        "used": 250.12,
+        "total": 300.0,
+        "remaining": 49.88,
+        "reset_at": "2026-09-15T00:00:00+00:00",
+    }])
+    db = _qoder_observe_db(cache=cache)
     with patch.object(
         handler, "_get", new_callable=AsyncMock,
     ) as get_mock:
         with patch(
-            "app.providers.qoder.quota.local_credits",
+            "app.providers.qoder.quota.latest_chat_credits",
             new_callable=AsyncMock,
-            return_value=2.8877612500000005,
+            return_value=QODER_CHAT_CREDITS,
         ):
-            await handler.observe_complete(db, conn_id)
+            with patch(
+                "app.providers.qoder.quota.local_credits",
+                new_callable=AsyncMock,
+                return_value=10.0,
+            ):
+                await handler.observe_complete(db, QODER_CONN_ID)
+    get_mock.assert_not_called()
+    db.add.assert_not_called()
+    db.commit.assert_awaited()
+    rows = json.loads(cache.quotas)
+    want = 250.12 + QODER_CHAT_CREDITS
+    assert rows[0]["used"] == pytest.approx(want)
+    assert rows[0]["remaining"] == pytest.approx(300.0 - want)
+    assert rows[0]["reset_at"] == "2026-09-15T00:00:00+00:00"
+    assert cache.limit_reached is False
 
+
+@pytest.mark.asyncio
+async def test_qoder_observe_complete_uses_farm_floor_when_cache_empty():
+    """Import snapshot is the floor; then add this chat. No GET."""
+    handler = QoderUsageHandler()
+    conn = _qoder_conn({
+        "farmQuotaTotal": 300,
+        "farmQuotaRemaining": 50,
+        "farmQuotaExceeded": False,
+        "accessToken": "job-token",
+        "userType": "personal_professional_trial",
+    })
+    db = _qoder_observe_db(conn=conn)
+    with patch.object(
+        handler, "_get", new_callable=AsyncMock,
+    ) as get_mock:
+        with patch(
+            "app.providers.qoder.quota.latest_chat_credits",
+            new_callable=AsyncMock,
+            return_value=QODER_CHAT_CREDITS,
+        ):
+            with patch(
+                "app.providers.qoder.quota.local_credits",
+                new_callable=AsyncMock,
+                return_value=QODER_CHAT_CREDITS,
+            ):
+                await handler.observe_complete(db, QODER_CONN_ID)
     get_mock.assert_not_called()
     db.add.assert_called_once()
     db.commit.assert_awaited()
     added = db.add.call_args[0][0]
     rows = json.loads(added.quotas)
-    assert rows[0]["used"] == pytest.approx(2.8877612500000005)
-    assert rows[0]["remaining"] == pytest.approx(
-        300 - 2.8877612500000005
-    )
+    want = 250.0 + QODER_CHAT_CREDITS
+    assert rows[0]["used"] == pytest.approx(want)
+    assert rows[0]["remaining"] == pytest.approx(300.0 - want)
     assert added.limit_reached is False
+
+
+@pytest.mark.asyncio
+async def test_qoder_observe_complete_gets_usage_once_when_no_floor():
+    """First chat, no cache/farm: one GET, max(API, local)."""
+    handler = QoderUsageHandler()
+    conn = _qoder_conn({"accessToken": "job-token"})
+    db = _qoder_observe_db(conn=conn)
+    mock_resp = _mock_response(200, {
+        "userType": "personal_professional_trial",
+        "isQuotaExceeded": False,
+        "userQuota": {
+            "total": 300.0,
+            "used": 250.0,
+            "remaining": 50.0,
+            "unit": "credits",
+        },
+    })
+    with patch.object(
+        handler, "_get", new_callable=AsyncMock,
+        return_value=mock_resp,
+    ) as get_mock:
+        with patch(
+            "app.providers.qoder.quota.latest_chat_credits",
+            new_callable=AsyncMock,
+            return_value=QODER_CHAT_CREDITS,
+        ):
+            with patch(
+                "app.providers.qoder.quota.local_credits",
+                new_callable=AsyncMock,
+                return_value=QODER_CHAT_CREDITS,
+            ):
+                await handler.observe_complete(db, QODER_CONN_ID)
+    get_mock.assert_awaited_once()
+    db.add.assert_called_once()
+    added = db.add.call_args[0][0]
+    rows = json.loads(added.quotas)
+    assert rows[0]["used"] == pytest.approx(250.0)
+    assert rows[0]["remaining"] == pytest.approx(50.0)
+
+
+@pytest.mark.asyncio
+async def test_qoder_observe_complete_get_keeps_higher_local_sum():
+    """max(API, local) when the chat log is ahead of the API."""
+    handler = QoderUsageHandler()
+    conn = _qoder_conn({"accessToken": "job-token"})
+    db = _qoder_observe_db(conn=conn)
+    mock_resp = _mock_response(200, {
+        "userType": "personal_professional_trial",
+        "isQuotaExceeded": False,
+        "userQuota": {
+            "total": 300.0,
+            "used": 1.0,
+            "remaining": 299.0,
+            "unit": "credits",
+        },
+    })
+    with patch.object(
+        handler, "_get", new_callable=AsyncMock,
+        return_value=mock_resp,
+    ) as get_mock:
+        with patch(
+            "app.providers.qoder.quota.latest_chat_credits",
+            new_callable=AsyncMock,
+            return_value=5.9,
+        ):
+            with patch(
+                "app.providers.qoder.quota.local_credits",
+                new_callable=AsyncMock,
+                return_value=5.9,
+            ):
+                await handler.observe_complete(db, QODER_CONN_ID)
+    get_mock.assert_awaited_once()
+    added = db.add.call_args[0][0]
+    rows = json.loads(added.quotas)
+    assert rows[0]["used"] == pytest.approx(5.9)
+    assert rows[0]["remaining"] == pytest.approx(294.1)
+
+
+@pytest.mark.asyncio
+async def test_qoder_observe_complete_skips_write_when_get_fails():
+    """Do not seed a fake local-only bar if the one-shot GET fails."""
+    handler = QoderUsageHandler()
+    conn = _qoder_conn({"accessToken": "job-token"})
+    db = _qoder_observe_db(conn=conn)
+    with patch.object(
+        handler, "_get", new_callable=AsyncMock,
+        side_effect=Exception("timeout"),
+    ):
+        with patch(
+            "app.providers.qoder.quota.latest_chat_credits",
+            new_callable=AsyncMock,
+            return_value=QODER_CHAT_CREDITS,
+        ):
+            with patch(
+                "app.providers.qoder.quota.local_credits",
+                new_callable=AsyncMock,
+                return_value=QODER_CHAT_CREDITS,
+            ):
+                await handler.observe_complete(db, QODER_CONN_ID)
+    db.add.assert_not_called()
+    db.commit.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_qoder_observe_complete_skips_without_local_credits():
     handler = QoderUsageHandler()
-    db = MagicMock()
-    db.add = MagicMock()
+    db = _qoder_observe_db()
     with patch.object(
         handler, "_get", new_callable=AsyncMock,
     ) as get_mock:
         with patch(
-            "app.providers.qoder.quota.local_credits",
+            "app.providers.qoder.quota.latest_chat_credits",
             new_callable=AsyncMock,
             return_value=0.0,
         ):
-            await handler.observe_complete(
-                db, "fd55d07d-c8f5-401b-9216-59d75060f4a8",
-            )
+            with patch(
+                "app.providers.qoder.quota.local_credits",
+                new_callable=AsyncMock,
+                return_value=0.0,
+            ):
+                await handler.observe_complete(db, QODER_CONN_ID)
     get_mock.assert_not_called()
     db.add.assert_not_called()
 
