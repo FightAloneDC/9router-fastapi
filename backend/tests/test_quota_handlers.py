@@ -24,6 +24,8 @@ from app.providers.kiro.quota import KiroUsageHandler
 from app.providers.qoder.quota import (
     QoderUsageHandler,
     credits_from_tokens,
+    live_bar_is_spent,
+    retire_if_spent,
 )
 from app.providers.groq.quota import (
     GroqUsageHandler,
@@ -757,7 +759,29 @@ def _qoder_observe_db(cache=None, conn=None):
 def _qoder_conn(data: dict) -> MagicMock:
     conn = MagicMock()
     conn.data = json.dumps(data)
+    conn.is_active = True
+    conn.provider = "qoder"
     return conn
+
+
+def _qoder_credit_bar(
+    *,
+    used: float = 43.0,
+    total: float = 300.0,
+    remaining: float | None = 257.0,
+    reset_at: str | None = None,
+    limit_reached: bool = False,
+) -> UsageResponse:
+    return UsageResponse(
+        quotas=[QuotaItem(
+            name="Credits",
+            used=used,
+            total=total,
+            remaining=remaining,
+            reset_at=reset_at,
+        )],
+        limit_reached=limit_reached,
+    )
 
 
 @pytest.mark.asyncio
@@ -1014,6 +1038,257 @@ async def test_sync_quota_after_refresh_skips_write_on_get_fail():
         )
     db.add.assert_not_called()
     db.commit.assert_not_called()
+
+
+def test_live_bar_is_spent_credits_gone():
+    now = datetime(2026, 9, 2, tzinfo=timezone.utc)
+    bar = _qoder_credit_bar(
+        used=300.0, remaining=0.0, limit_reached=True,
+        reset_at="2026-09-15T00:00:00+00:00",
+    )
+    assert live_bar_is_spent(bar, now=now) is True
+
+
+def test_live_bar_is_spent_trial_past():
+    now = datetime(2026, 9, 2, tzinfo=timezone.utc)
+    bar = _qoder_credit_bar(
+        used=10.0, remaining=290.0,
+        reset_at="2026-08-01T00:00:00+00:00",
+    )
+    assert live_bar_is_spent(bar, now=now) is True
+
+
+def test_live_bar_is_spent_healthy():
+    now = datetime(2026, 9, 2, tzinfo=timezone.utc)
+    bar = _qoder_credit_bar(
+        used=43.0, remaining=257.0,
+        reset_at="2026-09-15T00:00:00+00:00",
+    )
+    assert live_bar_is_spent(bar, now=now) is False
+
+
+def test_live_bar_is_spent_ignores_missing_reset_at():
+    now = datetime(2026, 9, 2, tzinfo=timezone.utc)
+    bar = _qoder_credit_bar(
+        used=43.0, remaining=257.0, reset_at=None,
+    )
+    assert live_bar_is_spent(bar, now=now) is False
+
+
+def test_live_bar_is_spent_trial_end_only_row():
+    now = datetime(2026, 9, 2, tzinfo=timezone.utc)
+    bar = UsageResponse(
+        quotas=[QuotaItem(
+            name="Credits",
+            reset_at="2026-08-01T00:00:00+00:00",
+        )],
+    )
+    assert live_bar_is_spent(bar, now=now) is True
+
+
+@pytest.mark.asyncio
+async def test_retire_if_spent_disables_active_qoder():
+    conn = _qoder_conn({})
+    db = _qoder_observe_db(conn=conn)
+    bar = _qoder_credit_bar(
+        used=300.0, remaining=0.0, limit_reached=True,
+    )
+    with patch(
+        "app.providers.qoder.quota.invalidate_connection_cache",
+    ) as inv:
+        await retire_if_spent(db, QODER_CONN_ID, bar)
+    assert conn.is_active is False
+    inv.assert_called_once_with("qoder")
+
+
+@pytest.mark.asyncio
+async def test_retire_if_spent_skips_healthy_bar():
+    conn = _qoder_conn({})
+    db = _qoder_observe_db(conn=conn)
+    bar = _qoder_credit_bar(
+        remaining=257.0,
+        reset_at="2026-09-15T00:00:00+00:00",
+    )
+    with patch(
+        "app.providers.qoder.quota.invalidate_connection_cache",
+    ) as inv:
+        await retire_if_spent(
+            db, QODER_CONN_ID, bar,
+            now=datetime(2026, 9, 2, tzinfo=timezone.utc),
+        )
+    assert conn.is_active is True
+    inv.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_qoder_observe_cache_hit_zero_disables():
+    handler = QoderUsageHandler()
+    cache = MagicMock()
+    cache.plan = "personal_professional_trial"
+    cache.quotas = json.dumps([{
+        "name": "Credits",
+        "used": 297.2,
+        "total": 300.0,
+        "remaining": 2.8,
+        "reset_at": "2026-09-15T00:00:00+00:00",
+    }])
+    conn = _qoder_conn({})
+    db = _qoder_observe_db(cache=cache, conn=conn)
+    with patch.object(handler, "_get", new_callable=AsyncMock):
+        with patch(
+            "app.providers.qoder.quota.latest_chat_credits",
+            new_callable=AsyncMock,
+            return_value=QODER_CHAT_CREDITS,
+        ):
+            with patch(
+                "app.providers.qoder.quota.invalidate_connection_cache",
+            ):
+                await handler.observe_complete(db, QODER_CONN_ID)
+    assert conn.is_active is False
+    rows = json.loads(cache.quotas)
+    assert rows[0]["remaining"] == pytest.approx(0.0)
+    assert cache.limit_reached is True
+
+
+@pytest.mark.asyncio
+async def test_qoder_observe_farm_floor_zero_stays_active():
+    """Farm snapshot without GET 200 is not a live bar."""
+    handler = QoderUsageHandler()
+    conn = _qoder_conn({
+        "farmQuotaTotal": 300,
+        "farmQuotaRemaining": 2,
+        "farmQuotaExceeded": False,
+        "accessToken": "job-token",
+    })
+    db = _qoder_observe_db(conn=conn)
+    with patch.object(
+        handler, "_get", new_callable=AsyncMock,
+    ) as get_mock:
+        with patch(
+            "app.providers.qoder.quota.latest_chat_credits",
+            new_callable=AsyncMock,
+            return_value=QODER_CHAT_CREDITS,
+        ):
+            with patch(
+                "app.providers.qoder.quota.invalidate_connection_cache",
+            ) as inv:
+                await handler.observe_complete(db, QODER_CONN_ID)
+    get_mock.assert_not_called()
+    assert conn.is_active is True
+    inv.assert_not_called()
+    added = db.add.call_args[0][0]
+    assert added.limit_reached is True
+
+
+@pytest.mark.asyncio
+async def test_qoder_fetch_live_spent_disables():
+    handler = QoderUsageHandler()
+    conn = _qoder_conn({})
+    db = _qoder_observe_db(conn=conn)
+    mock_resp = _mock_response(200, {
+        "userType": "personal_professional_trial",
+        "isQuotaExceeded": True,
+        "expiresAt": 1787423063188,
+        "userQuota": {
+            "total": 300.0,
+            "used": 300.0,
+            "remaining": 0.0,
+            "unit": "credits",
+        },
+    })
+    sess_cm = AsyncMock()
+    sess_cm.__aenter__.return_value = db
+    sess_cm.__aexit__.return_value = False
+    with patch.object(
+        handler, "_get", new_callable=AsyncMock,
+        return_value=mock_resp,
+    ):
+        with patch(
+            "app.providers.qoder.quota.local_credits",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ):
+            with patch(
+                "app.providers.qoder.quota.async_session",
+                return_value=sess_cm,
+            ):
+                with patch(
+                    "app.providers.qoder.quota.invalidate_connection_cache",
+                ):
+                    result = await handler.fetch(
+                        "fake-token",
+                        connection_id=QODER_CONN_ID,
+                    )
+    assert result.limit_reached is True
+    assert conn.is_active is False
+
+
+@pytest.mark.asyncio
+async def test_qoder_fetch_farm_fallback_does_not_disable():
+    handler = QoderUsageHandler()
+    conn = _qoder_conn({})
+    db = _qoder_observe_db(conn=conn)
+    blob = {
+        "proTrialEndAt": "2026-08-01T00:00:00+00:00",
+        "farmQuotaTotal": 300,
+        "farmQuotaRemaining": 0,
+        "farmQuotaExceeded": True,
+    }
+    sess_cm = AsyncMock()
+    sess_cm.__aenter__.return_value = db
+    sess_cm.__aexit__.return_value = False
+    with patch.object(
+        handler, "_get", new_callable=AsyncMock,
+        side_effect=RuntimeError("down"),
+    ):
+        with patch(
+            "app.providers.qoder.quota.local_credits",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ):
+            with patch(
+                "app.providers.qoder.quota.async_session",
+                return_value=sess_cm,
+            ):
+                result = await handler.fetch(
+                    "fake-token", blob,
+                    connection_id=QODER_CONN_ID,
+                )
+    assert result.limit_reached is True
+    assert conn.is_active is True
+
+
+@pytest.mark.asyncio
+async def test_sync_quota_after_refresh_disables_spent():
+    from app.providers.qoder.quota import (
+        sync_quota_after_token_refresh,
+    )
+
+    conn = _qoder_conn({})
+    db = _qoder_observe_db(conn=conn)
+    handler_get = AsyncMock(return_value=_mock_response(200, {
+        "userType": "personal_professional_trial",
+        "isQuotaExceeded": True,
+        "userQuota": {
+            "total": 300.0,
+            "used": 300.0,
+            "remaining": 0.0,
+            "unit": "credits",
+        },
+    }))
+    with patch.object(QoderUsageHandler, "_get", handler_get):
+        with patch(
+            "app.providers.qoder.quota.local_credits",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ):
+            with patch(
+                "app.providers.qoder.quota.invalidate_connection_cache",
+            ):
+                await sync_quota_after_token_refresh(
+                    db, QODER_CONN_ID, "jt-new", {},
+                )
+    assert conn.is_active is False
 
 
 @pytest.mark.asyncio

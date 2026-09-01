@@ -33,6 +33,7 @@ from app.providers.qoder.config import QoderConfig
 from app.providers.qoder.constants import (
     QODER_QUOTA_USAGE_URL,
 )
+from app.services.proxy import invalidate_connection_cache
 
 from app.services.quota.base import (
     BaseUsageHandler,
@@ -275,6 +276,85 @@ def apply_local_used(
     return result
 
 
+def _reset_at_past(value: str | None, now: datetime) -> bool:
+    if not value:
+        return False
+    try:
+        dt = datetime.fromisoformat(
+            value.replace("Z", "+00:00"),
+        )
+    except ValueError:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt <= now
+
+
+def live_bar_is_spent(
+    result: UsageResponse,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """True when a live credit bar is exhausted or trial-ended."""
+    now = now or datetime.now(timezone.utc)
+    if result.limit_reached:
+        return True
+    for item in result.quotas:
+        if (
+            item.total > 0
+            and item.remaining is not None
+            and item.remaining <= 0
+        ):
+            return True
+        if _reset_at_past(item.reset_at, now):
+            return True
+    return False
+
+
+async def retire_if_spent(
+    db: Any,
+    connection_id: str | None,
+    result: UsageResponse,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Set is_active=False when the live bar is spent. No-op else."""
+    if not connection_id:
+        return False
+    if not live_bar_is_spent(result, now=now):
+        return False
+    try:
+        cid = uuid.UUID(connection_id)
+    except (TypeError, ValueError):
+        return False
+    from app.models.provider import ProviderConnection
+
+    conn = await db.get(ProviderConnection, cid)
+    if conn is None or not conn.is_active:
+        return False
+    conn.is_active = False
+    invalidate_connection_cache(conn.provider)
+    logger.info(
+        "Qoder connection %s retired (spent or trial ended)",
+        connection_id[:8],
+    )
+    return True
+
+
+async def _retire_live_fetch(
+    connection_id: str | None,
+    result: UsageResponse,
+) -> None:
+    if not connection_id:
+        return
+    async with async_session() as db:
+        changed = await retire_if_spent(
+            db, connection_id, result,
+        )
+        if changed:
+            await db.commit()
+
+
 def _blob_from_conn(conn: Any) -> dict[str, Any]:
     if conn is None:
         return {}
@@ -322,6 +402,7 @@ async def _write_observe_bar(
     reset_at: str | None,
     name: str = "Credits",
     limit_reached: bool | None = None,
+    live: bool = False,
 ) -> None:
     left = max(0.0, float(total) - used)
     hit = (
@@ -343,7 +424,9 @@ async def _write_observe_bar(
         )],
         limit_reached=hit,
     )
-    await _write_observe_bar_from_result(db, cid, cache, result)
+    await _write_observe_bar_from_result(
+        db, cid, cache, result, live=live,
+    )
 
 
 async def _write_observe_bar_from_result(
@@ -351,6 +434,8 @@ async def _write_observe_bar_from_result(
     cid: uuid.UUID,
     cache: Any,
     result: UsageResponse,
+    *,
+    live: bool = False,
 ) -> None:
     from app.models.quota_cache import QuotaCache
 
@@ -363,6 +448,8 @@ async def _write_observe_bar_from_result(
     )
     cache.limit_reached = result.limit_reached
     cache.fetched_at = datetime.now(timezone.utc)
+    if live:
+        await retire_if_spent(db, str(cid), result)
     await db.commit()
 
 
@@ -415,7 +502,9 @@ async def sync_quota_after_token_refresh(
     from app.models.quota_cache import QuotaCache
 
     cache = await db.get(QuotaCache, cid)
-    await _write_observe_bar_from_result(db, cid, cache, result)
+    await _write_observe_bar_from_result(
+        db, cid, cache, result, live=True,
+    )
 
 
 class QoderUsageHandler(BaseUsageHandler):
@@ -472,7 +561,9 @@ class QoderUsageHandler(BaseUsageHandler):
                 message="Qoder API returned invalid JSON"
             )
         result = usage_from_api(data, blob)
-        return apply_local_used(result, local_used)
+        result = apply_local_used(result, local_used)
+        await _retire_live_fetch(connection_id, result)
+        return result
 
     async def observe_complete(
         self,
@@ -513,6 +604,7 @@ class QoderUsageHandler(BaseUsageHandler):
                 plan=cache.plan,
                 reset_at=reset_at,
                 name=str(row.get("name") or "Credits"),
+                live=True,
             )
             return
 
@@ -574,5 +666,5 @@ class QoderUsageHandler(BaseUsageHandler):
             usage_from_api(data, blob), local_used,
         )
         await _write_observe_bar_from_result(
-            db, cid, None, result,
+            db, cid, None, result, live=True,
         )

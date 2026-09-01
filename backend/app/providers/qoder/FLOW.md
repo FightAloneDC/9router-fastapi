@@ -190,6 +190,11 @@ takes max(API used, local credit sum) as full floats — never
 `int()` / `round()` in Python, cache, or JSON. Tracker UI may
 show 2 decimal places (display only).
 
+A live bar that is spent (`limit_reached` / `remaining <= 0`)
+or whose `reset_at` is past sets `is_active=False`
+(`retire_if_spent`). Farm snapshot without GET 200 does not.
+Chat 402 still disables on the proxy path.
+
 Snapshot may land in `quota_cache` via the shared quota
 router — not the model blob.
 
@@ -202,7 +207,9 @@ router — not the model blob.
 
 ## Related
 
-- Open problems (optional billing piggyback):
+- Quota bar + auto-disable:
+  `docs/architecture/2026-09-01-qoder-quota-design.md`
+- Open problems (closed 2026-09-02):
   `docs/architecture/2026-09-01-qoder-open-problems.md`
 - Catalog policy:
   `docs/architecture/2026-08-15-openrouter-catalog-slice.md`

@@ -145,12 +145,22 @@ display only. `% left` may still floor — percent, not credit.
 |--------|-------|---------|
 | `limit_reached` | quota API | credits gone or `isQuotaExceeded` |
 | `is_active=False` (402) | proxy | chat exhausted |
+| `is_active=False` (live bar) | `quota.py` `retire_if_spent` | live bar spent or `reset_at` past |
+
+After a **live** bar write (`observe_complete` on cache or GET
+200, `GET /usage/{id}` `fetch()` 200, or
+`sync_quota_after_token_refresh`), if `limit_reached` /
+`remaining <= 0` (full float, `total > 0`) or `reset_at` is
+past, set `is_active=False` and invalidate the proxy cache.
+Farm `farmQuota*` without GET 200 does not retire. Missing
+`reset_at` is not a time-based disable. Do not seed `0/300`.
 
 Do not write credit remaining from a 402 body. After a proxy
 exhaust, the tracker may still show the last cached bar until
 `GET /usage/{id}`, `force=true`, a proxied chat, or a real
 token-refresh quota sync. Inactive filter + Provider Detail
-re-enable remain the operator tools.
+re-enable remain the operator tools. The next live bar or 402
+retires again.
 
 `observe_response` stays a no-op (no credit remaining headers
 on chat). Live credit from the chat is SSE `usage.credits`,
@@ -203,5 +213,5 @@ Import does not insert cache rows.
 
 None. Open-problems inventory is closed (2026-09-02). This
 file matches `quota.py` / `FLOW.md`: list cache, float credits,
-observe floor, farm clocks + PAT, and GET usage after a real
-job-token refresh.
+observe floor, farm clocks + PAT, GET usage after a real
+job-token refresh, and live-bar auto-disable.
