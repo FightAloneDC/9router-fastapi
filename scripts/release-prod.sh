@@ -30,17 +30,19 @@ if [[ ! -d node_modules ]]; then
 fi
 npm run build
 
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
-cp -a "$FRONTEND/dist/." "$TMP/"
-if [[ -f "$STATIC/README.md" && ! -f "$TMP/README.md" ]]; then
-  cp "$STATIC/README.md" "$TMP/README.md"
+STAGE="$ROOT/.scratch/release-static"
+rm -rf "$STAGE"
+mkdir -p "$STAGE"
+trap 'rm -rf "$STAGE"' EXIT
+cp -r "$FRONTEND/dist/." "$STAGE/"
+if [[ -f "$STATIC/README.md" && ! -f "$STAGE/README.md" ]]; then
+  cp "$STATIC/README.md" "$STAGE/README.md"
 fi
 
 # Atomic swap
 NEXT="$ROOT/backend/app/static.next"
 rm -rf "$NEXT"
-mv "$TMP" "$NEXT"
+mv "$STAGE" "$NEXT"
 trap - EXIT
 rm -rf "$STATIC"
 mv "$NEXT" "$STATIC"
