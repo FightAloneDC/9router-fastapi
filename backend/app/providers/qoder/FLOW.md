@@ -49,6 +49,10 @@ center               = https://center.qoder.sh
 chat (algo)          = https://api3.qoder.sh/algo/...
 CHAT_URL_ENCODED     = .../agent_chat_generation?...&Encode=1
 MODEL_LIST_URL       = .../algo/api/v2/model/list
+QODER_IDE_VERSION    = 1.0.48  (Cosy-Version / User-Agent)
+                     catalog omits keys whose
+                     minimal_version.cli is newer
+                     (cmodel/Cantus needs 1.0.48)
 QUOTA_USAGE_URL      = .../api/v2/quota/usage
 REFRESH              = .../api/v1/jobToken/refresh
 ```

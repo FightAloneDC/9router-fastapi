@@ -25,8 +25,10 @@ QODER_CHAT_URL = f"{QODER_CHAT_BASE}/algo{QODER_CHAT_SIG_PATH}?FetchKeys=llm_mod
 QODER_CHAT_URL_ENCODED = f"{QODER_CHAT_URL}&Encode=1"
 QODER_MODEL_LIST_URL = f"{QODER_CHAT_BASE}/algo/api/v2/model/list"
 
-# COSY header constants
-QODER_IDE_VERSION = "1.0.30"
+# COSY header constants.
+# Catalog gates models by Cosy-Version (cmodel/Cantus needs
+# cli >= 1.0.48). Chat with that key was verified 2026-09-01.
+QODER_IDE_VERSION = "1.0.48"
 QODER_CLIENT_TYPE = "5"
 QODER_DATA_POLICY = "agree"
 QODER_LOGIN_VERSION = "v2"
