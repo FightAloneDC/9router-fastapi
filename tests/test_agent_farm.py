@@ -47,14 +47,14 @@ def test_farm_models_groups_and_skips_embeddings() -> None:
     grouped = farm_models(
         [
             "gcli/grok-4.6",
-            "qd/qoder/auto",
+            "qd/auto",
             "mi/mistral-small-latest",
             "alims-intl/qwen3.7-flash",
             "mi/mistral-embed",
         ]
     )
     assert grouped["grok-cli"] == ["gcli/grok-4.6"]
-    assert grouped["qoder"] == ["qd/qoder/auto"]
+    assert grouped["qoder"] == ["qd/auto"]
     assert grouped["mistral"] == ["mi/mistral-small-latest"]
     assert grouped["alibaba-studio"] == ["alims-intl/qwen3.7-flash"]
 

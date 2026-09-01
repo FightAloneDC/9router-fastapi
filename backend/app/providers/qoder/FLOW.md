@@ -63,8 +63,11 @@ Two layers — do not conflate them.
 | Full upstream entry for chat | Process RAM `_catalog_cache` | `models.py` `raw_configs` |
 
 `handler.fetch_models` calls `resolve_qoder_models` (COSY GET
-model list) and returns ids like `qoder/<key>`. With the catalog
-flag on, fetch/set/clear persist **id/name/type** into
+model list) and stores the upstream `key` as the catalog id
+(`auto`, `qmodel`, …). Public `/v1/models` id is `qd/<key>`.
+Do not prefix `qoder/` onto the catalog id (that produced the
+broken `qd/qoder/<key>`). With the catalog flag on,
+fetch/set/clear persist **id/name/type** into
 `provider_models` — never `data.models`.
 
 Chat `build_request_body` needs the **entire** upstream list entry
@@ -99,11 +102,13 @@ token. Miss → force-refresh model list. **Not** stored in SQL.
 ## Entry: proxy chat
 
 ```
-Client POST /v1/chat/completions  model="qd/qoder/auto"
-  → alias qd → provider qoder
+Client POST /v1/chat/completions  model="qd/auto"
+  → alias qd → provider qoder, remainder "auto"
   → build_upstream_url → QODER_CHAT_URL_ENCODED (Encode=1)
   → build_headers / build_request_body:
-       resolve qoder_key ("auto")
+       qoder_key is the remainder ("auto"); leftover
+       "qoder/auto" is not a valid key
+
        get_qoder_model_config (RAM) or refresh list
        transform OpenAI body → Qoder JSON + model_config
        qoder_encode_body (WAF alphabet)

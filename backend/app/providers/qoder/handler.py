@@ -28,7 +28,6 @@ from app.providers.qoder.transform import (
     build_qoder_request_body,
     unwrap_qoder_response,
 )
-from app.services.proxy import _resolve_provider_alias
 
 logger = logging.getLogger(__name__)
 
@@ -113,14 +112,10 @@ class QoderHandler(BaseProviderHandler):
         machine_id = data.get("machineId", "")
         access_token = data.get("accessToken", "")
 
-        # Resolve model ID: "qd/qoder/auto" -> "auto"
-        if "/" in model:
-            parts = model.split("/", 1)
-            resolved = _resolve_provider_alias(parts[0])
-            remainder = parts[1]
-            qoder_key = remainder[len(resolved) + 1:] if remainder.startswith(resolved + "/") else remainder
-        else:
-            qoder_key = model
+        # Proxy already stripped alias/provider (`qd/auto` → `auto`).
+        # Do not peel a second `qoder/` layer: leftover `qoder/auto`
+        # from the old catalog id is not a valid upstream key.
+        qoder_key = model
 
         # Get model config from cache
         model_config = get_qoder_model_config(user_id, access_token, qoder_key)
@@ -198,7 +193,7 @@ class QoderHandler(BaseProviderHandler):
             model_id = m.get("id", "")
             if model_id:
                 models.append({
-                    "id": f"qoder/{model_id}",
+                    "id": model_id,
                     "name": m.get("name", model_id),
                     "type": "llm",
                     "contextLength": m.get("context_length", 0),

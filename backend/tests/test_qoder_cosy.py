@@ -90,3 +90,64 @@ def test_qoder_validate_accepts_active_token(monkeypatch):
 
     assert result.valid is True
     assert result.error is None
+
+
+def test_fetch_models_id_is_upstream_key(monkeypatch):
+    async def fake_resolve(credentials, force_refresh=False):
+        del credentials, force_refresh
+        return {
+            "models": [
+                {"id": "auto", "name": "Auto", "context_length": 128000},
+            ],
+        }
+
+    monkeypatch.setattr(
+        "app.providers.qoder.handler.resolve_qoder_models",
+        fake_resolve,
+    )
+    models = asyncio.run(
+        QoderHandler(QoderConfig()).fetch_models(
+            "jt-token",
+            {"userId": "u1", "machineId": "m1"},
+        )
+    )
+    assert models[0]["id"] == "auto"
+
+
+def test_build_request_body_rejects_leftover_qoder_prefix(monkeypatch):
+    seen: list[str] = []
+
+    def fake_get(user_id, token, key):
+        del user_id, token
+        seen.append(key)
+        return None
+
+    async def fake_resolve(credentials, force_refresh=False):
+        del credentials, force_refresh
+        return {"models": []}
+
+    monkeypatch.setattr(
+        "app.providers.qoder.handler.get_qoder_model_config",
+        fake_get,
+    )
+    monkeypatch.setattr(
+        "app.providers.qoder.handler.resolve_qoder_models",
+        fake_resolve,
+    )
+    try:
+        asyncio.run(
+            QoderHandler(QoderConfig()).build_request_body(
+                "qoder/auto",
+                {"messages": []},
+                {
+                    "userId": "u1",
+                    "machineId": "m1",
+                    "accessToken": "jt",
+                },
+            )
+        )
+    except ValueError as exc:
+        assert "qoder/auto" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for leftover prefix")
+    assert seen == ["qoder/auto", "qoder/auto"]

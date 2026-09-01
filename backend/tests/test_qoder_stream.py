@@ -132,15 +132,15 @@ def _run_stream(url: str) -> str:
     target = ProxyTarget()
     target.url = url
     target.headers = {}
-    target.model = "qoder/kmodel_latest"
+    target.model = "kmodel_latest"
     # Fake provider id: skips handler lookup, exercises only the relay.
     target.provider = "fake-provider"
     target.connection_id = None
 
     async def collect() -> str:
         resp = await _stream_response(
-            target, {"model": "qd/qoder/kmodel_latest", "stream": True},
-            "req-test", provider="qoder", model="qoder/kmodel_latest",
+            target, {"model": "qd/kmodel_latest", "stream": True},
+            "req-test", provider="qoder", model="kmodel_latest",
         )
         parts: list[str] = []
         async for piece in resp.body_iterator:
@@ -326,17 +326,17 @@ def test_qoder_business_error_raises_before_stream():
         target = ProxyTarget()
         target.url = url
         target.headers = {}
-        target.model = "qoder/auto"
+        target.model = "auto"
         target.provider = "fake-provider"
         target.connection_id = None
 
         async def run() -> None:
             await _stream_response(
                 target,
-                {"model": "qd/qoder/auto", "stream": True},
+                {"model": "qd/auto", "stream": True},
                 "req-quota",
                 provider="qoder",
-                model="qoder/auto",
+                model="auto",
             )
 
         import httpx

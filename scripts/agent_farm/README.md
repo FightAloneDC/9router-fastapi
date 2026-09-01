@@ -49,7 +49,7 @@ python3 scripts/agent_farm_chat_test.py --ensure-only
 # Dry-run: write command meta, do not exec agents
 python3 scripts/agent_farm_chat_test.py --dry-run --skip-ensure \
   --agents hermes,pi \
-  --models 'mi/mistral-small-latest,qd/qoder/auto'
+  --models 'mi/mistral-small-latest,qd/auto'
 
 # Probe: smoke-test every runnable agent (1 prompt, 1 model/farm)
 python3 scripts/agent_farm_chat_test.py --probe --max-workers 2

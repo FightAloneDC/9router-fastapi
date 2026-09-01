@@ -106,17 +106,17 @@ def build_qoder_request_body(
     """Transform OpenAI-format request to Qoder format.
 
     Args:
-        model: Model string (e.g., "qoder/auto")
+        model: Catalog remainder / public id (e.g., "auto" or "qd/auto")
         body: OpenAI-format request body
         credentials: Connection credentials
         model_config: Model config from catalog (optional, will use defaults if not provided)
-        qoder_key: Resolved model key (e.g., "auto"). If empty, derived from model string.
+        qoder_key: Upstream key (e.g., "auto"). If empty, uses model as-is.
 
     Returns:
         Qoder-format request body
     """
     if not qoder_key:
-        qoder_key = model.replace("qoder/", "") if model.startswith("qoder/") else model
+        qoder_key = model
 
     # Use provided model_config or create a minimal one
     if not model_config:
