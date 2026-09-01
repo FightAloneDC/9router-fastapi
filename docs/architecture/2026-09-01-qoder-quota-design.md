@@ -78,17 +78,23 @@ No per-model table. No `detail=models`. No RPM/TPM rows. Provider
 Detail already shows the published 300 / 14-day note; the tracker
 is the **live** bar.
 
-### 2. Upstream poll stays (`USES_UPSTREAM = True`)
+### 2. List path matches other FLOW.md quota providers
 
-Credits are not tokens in `usage_history`. There is nothing local
-to sum. Keep polling `quota/usage` with the job token.
+`USES_UPSTREAM = False`. Quota Tracker auto-refresh (60s default,
+visible page only) is `GET /quota`, which calls `fetch()` for
+each Qoder row on that page — same as Groq / Cerebras / Voyage.
+`fetch()` still GETs `quota/usage` with the job token. Credits
+are not summed from `usage_history`.
 
-The shared router cache still applies (15 min min-age; re-poll
-stale cache only if the connection was used in the last hour;
-`force=true` on the card refresh button). Qoder farms the same
-ban-risk as other OAuth providers.
+The 15 min `CACHE_MIN_AGE_S` applies to `GET /usage/{id}`
+without `force`, not to the list tick.
 
-Do **not** switch this handler to `USES_UPSTREAM = False`.
+After each proxied chat, `observe_complete` sums
+`usage_history.tokens.credits` (SSE `usage.credits`, verified
+2026-09-01) into `quota_cache`. `fetch()` takes max(live API
+used, that local sum). `observe_response` stays a no-op —
+no remaining-credit headers, and stream headers arrive too
+early.
 
 ### 3. Trust live `total`; fallback only when missing
 
@@ -98,9 +104,10 @@ different total (other plan), **keep it**. Do not clamp every
 account to 300.
 
 Do **not** seed fake `0 / 300` bars into `quota_cache` for
-accounts that have never been fetched. Empty until first
-`GET /usage/{id}` is correct; inventing a full trial hides
-already-depleted idle accounts.
+accounts that have never been fetched. Empty until the first
+list `GET /quota` `fetch()` (or card `GET /usage/{id}`) is
+correct; inventing a full trial hides already-depleted idle
+accounts.
 
 A grok-farm-modular **last check** is not a fake seed. See §7.
 
@@ -128,7 +135,10 @@ exhaust, the tracker may still show the last cached bar until
 the next poll or `force=true`. Inactive filter + Provider Detail
 re-enable remain the operator tools.
 
-`observe_response` stays a no-op (no credit headers on chat).
+`observe_response` stays a no-op (no credit remaining headers
+on chat). Live credit from the chat is SSE `usage.credits`,
+stored on `usage_history.tokens` and applied in
+`observe_complete`.
 
 ### 7. grok-farm-modular snapshot (optional)
 

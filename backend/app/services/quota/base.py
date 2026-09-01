@@ -73,6 +73,18 @@ class BaseUsageHandler(ABC):
         Default: no-op. Dispatcher fail-open.
         """
 
+    async def observe_complete(
+        self,
+        db: Any,
+        connection_id: str,
+    ) -> None:
+        """Optional PS hook: after usage_history is written.
+
+        Default: no-op. For providers whose ``used`` is not in
+        that log (Qoder credits), poll the live quota API here.
+        """
+        del db, connection_id
+
     async def _get(
         self,
         url: str,

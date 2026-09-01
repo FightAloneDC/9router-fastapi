@@ -474,6 +474,13 @@ async def save_request_tracking(
         # Cleanup old details (non-blocking, after commit)
         await cleanup_old_details(db)
 
+        # Same moment NVIDIA/Cerebras used increments from the
+        # usage_history row just written. Handlers that need a
+        # live quota API (Qoder credits) refresh here.
+        if provider and connection_id:
+            from app.services.quota import observe_after_request
+            await observe_after_request(provider, connection_id)
+
     except Exception as e:
         logger.error(f"Failed to save request tracking: {e}")
         await db.rollback()

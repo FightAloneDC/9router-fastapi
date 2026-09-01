@@ -19,7 +19,10 @@ from app.providers.github.quota import GitHubUsageHandler
 from app.providers.claude.quota import ClaudeUsageHandler
 from app.providers.codex.quota import CodexUsageHandler
 from app.providers.kiro.quota import KiroUsageHandler
-from app.providers.qoder.quota import QoderUsageHandler
+from app.providers.qoder.quota import (
+    QoderUsageHandler,
+    credits_from_tokens,
+)
 from app.providers.groq.quota import (
     GroqUsageHandler,
     lookup_limits,
@@ -586,6 +589,7 @@ async def test_qoder_usage():
     ):
         result = await handler.fetch("fake-token")
 
+    assert QoderUsageHandler.USES_UPSTREAM is False
     assert result.plan == "personal_professional_trial"
     assert result.limit_reached is False
     assert len(result.quotas) == 1
@@ -678,6 +682,146 @@ async def test_qoder_usage_ignores_job_token_expiry_as_trial():
             {"expiresAt": "2026-08-28T14:24:01+00:00"},
         )
     assert result.quotas[0].reset_at is None
+
+
+def test_qoder_credits_from_chat_usage_chunk() -> None:
+    """Live SSE usage (verified 2026-09-01) carries credits."""
+    assert credits_from_tokens({
+        "billable": True,
+        "credits": 1.21,
+        "original_credits": 1.21,
+        "prompt_tokens": 9,
+        "completion_tokens": 11,
+    }) == pytest.approx(1.21)
+    assert credits_from_tokens(
+        json.dumps({"credits": 2.8877612500000005})
+    ) == pytest.approx(2.8877612500000005)
+    assert credits_from_tokens({"original_credits": 4.5}) == 4.5
+    assert credits_from_tokens({}) == 0.0
+    assert credits_from_tokens(None) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_qoder_fetch_uses_chat_credits_when_higher():
+    handler = QoderUsageHandler()
+    mock_resp = _mock_response(200, {
+        "userType": "personal_professional_trial",
+        "isQuotaExceeded": False,
+        "userQuota": {
+            "total": 300.0,
+            "used": 1.0,
+            "remaining": 299.0,
+            "unit": "credits",
+        },
+    })
+    with patch.object(
+        handler, "_get", new_callable=AsyncMock,
+        return_value=mock_resp,
+    ):
+        with patch(
+            "app.providers.qoder.quota.local_credits",
+            new_callable=AsyncMock,
+            return_value=5.9,
+        ):
+            result = await handler.fetch(
+                "fake-token",
+                connection_id="fd55d07d-c8f5-401b-9216-59d75060f4a8",
+            )
+    credits = result.quotas[0]
+    assert credits.used == 5
+    assert credits.remaining == 295
+
+
+@pytest.mark.asyncio
+async def test_qoder_observe_complete_writes_quota_cache():
+    """After a proxied chat, usage_history.tokens.credits
+    update quota_cache — same lifecycle as NVIDIA logs.
+    """
+    handler = QoderUsageHandler()
+    conn_id = "fd55d07d-c8f5-401b-9216-59d75060f4a8"
+    db = MagicMock()
+    db.get = AsyncMock(return_value=None)
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+
+    with patch.object(
+        handler, "_get", new_callable=AsyncMock,
+    ) as get_mock:
+        with patch(
+            "app.providers.qoder.quota.local_credits",
+            new_callable=AsyncMock,
+            return_value=2.8877612500000005,
+        ):
+            await handler.observe_complete(db, conn_id)
+
+    get_mock.assert_not_called()
+    db.add.assert_called_once()
+    db.commit.assert_awaited()
+    added = db.add.call_args[0][0]
+    rows = json.loads(added.quotas)
+    assert rows[0]["used"] == 2
+    assert rows[0]["remaining"] == 298
+    assert added.limit_reached is False
+
+
+@pytest.mark.asyncio
+async def test_qoder_observe_complete_skips_without_local_credits():
+    handler = QoderUsageHandler()
+    db = MagicMock()
+    db.add = MagicMock()
+    with patch.object(
+        handler, "_get", new_callable=AsyncMock,
+    ) as get_mock:
+        with patch(
+            "app.providers.qoder.quota.local_credits",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ):
+            await handler.observe_complete(
+                db, "fd55d07d-c8f5-401b-9216-59d75060f4a8",
+            )
+    get_mock.assert_not_called()
+    db.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_observe_after_request_skips_default_complete():
+    from app.services.quota import observe_after_request
+
+    with patch(
+        "app.database.async_session",
+    ) as sess:
+        await observe_after_request(
+            "groq",
+            "fd55d07d-c8f5-401b-9216-59d75060f4a8",
+        )
+    sess.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_observe_after_request_dispatches_qoder():
+    from app.services.quota import observe_after_request
+
+    db = AsyncMock()
+    sess_cm = AsyncMock()
+    sess_cm.__aenter__.return_value = db
+    with patch(
+        "app.database.async_session",
+        return_value=sess_cm,
+    ):
+        with patch.object(
+            QoderUsageHandler,
+            "observe_complete",
+            new_callable=AsyncMock,
+        ) as complete:
+            await observe_after_request(
+                "qoder",
+                "fd55d07d-c8f5-401b-9216-59d75060f4a8",
+            )
+    complete.assert_awaited_once()
+    assert complete.call_args.args[1] == (
+        "fd55d07d-c8f5-401b-9216-59d75060f4a8"
+    )
 
 
 # ──────────────────────────────────────────────

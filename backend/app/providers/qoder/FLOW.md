@@ -119,8 +119,18 @@ Client POST /v1/chat/completions  model="qd/auto"
        build_cosy_headers(body=encoded) → Bearer COSY.…
   → POST algo chat
   → unwrap_response / SSE unwrap → OpenAI shape
-  → usage_history as usual
+  → usage_history as usual (tokens.credits from SSE usage)
+  → observe_after_request → QoderUsageHandler.observe_complete
+       sum tokens.credits → quota_cache
 ```
+
+`observe_response` is a no-op (no credit remaining headers;
+headers also arrive before the stream finishes). Chat SSE
+`usage` includes ``credits`` / ``original_credits`` (verified
+2026-09-01). That JSON is stored on `usage_history.tokens`.
+`fetch()` takes max(live API used, int(sum of those credits)).
+`observe_complete` writes the local sum into `quota_cache`
+right after the history row — same lifecycle as NVIDIA.
 
 SSE unwrap lives in `transform.unwrap_qoder_sse_line` (also
 called from `v1_proxy/shared` for the streaming path). Business
@@ -158,6 +168,16 @@ always wins over a grok-farm-modular last check.
 `expiresAt` — that is job-token TTL. If the GET fails, the
 handler may show the farm snapshot (`farmQuota*` +
 `proTrialEndAt`) instead of an empty error.
+
+`USES_UPSTREAM = False` — tracker `GET /quota` calls `fetch()`
+on the visible page (60s auto-refresh), same list path as Groq
+/ Cerebras / Voyage. `fetch()` still GETs the live quota API.
+
+After each proxied chat, `observe_complete` (from
+`save_request_tracking`) sums `usage_history.tokens.credits`
+into `quota_cache` so the next list tick is not the first
+refresh. `fetch()` still GETs the live quota API and takes
+max(API used, local credit sum).
 
 Snapshot may land in `quota_cache` via the shared quota
 router — not the model blob.

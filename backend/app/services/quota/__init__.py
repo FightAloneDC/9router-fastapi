@@ -101,6 +101,38 @@ async def observe_upstream_response(
         )
 
 
+async def observe_after_request(
+    provider_id: str | None,
+    connection_id: str | None,
+) -> None:
+    """After usage_history is committed, let the handler refresh.
+
+    No-op unless the handler overrides observe_complete. Own
+    session so tracking commit is not mixed with quota HTTP.
+    Fail-open.
+    """
+    if not provider_id or not connection_id:
+        return
+    handler = _HANDLERS.get(provider_id)
+    if handler is None:
+        return
+    if (
+        type(handler).observe_complete
+        is BaseUsageHandler.observe_complete
+    ):
+        return
+    from app.database import async_session
+
+    try:
+        async with async_session() as db:
+            await handler.observe_complete(db, connection_id)
+    except Exception as e:
+        logger.warning(
+            "Quota complete observer failed for %s (%s): %s",
+            provider_id, connection_id, e,
+        )
+
+
 def supported_providers() -> list[str]:
     """Return list of provider IDs with usage handlers."""
     return list(_HANDLERS.keys())
@@ -112,5 +144,6 @@ __all__ = [
     "UsageResponse",
     "get_usage_handler",
     "observe_upstream_response",
+    "observe_after_request",
     "supported_providers",
 ]
