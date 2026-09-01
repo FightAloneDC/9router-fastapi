@@ -6,20 +6,21 @@ Provider: `qoder` (alias `qd`)
 Folder: `backend/app/providers/qoder/`
 
 Written from this vendor only: `quota.py`, `config.py`,
-`constants.py`, `FLOW.md`, live response shape (verified
-2026-08), and `docs/archives/qoder-docs/QODER_PROVIDER_DOC.md`.
+`constants.py`, `auth.py` (refresh piggyback), `FLOW.md`, live
+response shape (verified 2026-08), and
+`docs/archives/qoder-docs/QODER_PROVIDER_DOC.md`.
 Do not copy Groq / Alibaba / Command Code / OpenRouter quota UX.
 
 ## Problem
 
-Quota Tracker for Qoder feels unfinished because there is no
-architecture decision. `FLOW.md` only describes the GET. The
-generic tracker UI then treats Qoder like every other card
-(reset countdown, % bar, bulk-depleted) without saying what the
-numbers mean.
+Quota Tracker treated Qoder like every other card (reset
+countdown, % bar, bulk-depleted) while the vendor only
+publishes one credit window on a different host. This document
+is the locked meaning of that bar.
 
-This document is the missing design. It does **not** change COSY,
-auth, or catalog.
+It does **not** change COSY, device OAuth, PAT exchange, or
+catalog. Job-token refresh stays in `auth.py`; quota only
+piggybacks a GET after a refresh that actually POSTs.
 
 ## What Qoder actually publishes
 
@@ -82,19 +83,27 @@ is the **live** bar.
 
 `USES_UPSTREAM = True`. Quota Tracker auto-refresh (60s) is
 `GET /quota` and serves `quota_cache`. It does **not** call
-`fetch()` per visible Qoder row. Chat `observe_complete` adds
-this chat's credits to a floor (`quota_cache` / `farmQuota*` /
-one GET on first chat). Empty cache is also filled by
-`GET /usage/{id}` (`CACHE_MIN_AGE_S` 15 min, or `force=true`).
+`fetch()` per visible Qoder row.
 
-`fetch()` still GETs `quota/usage` with the job token and
-takes max(API used, local `usage_history` credit sum).
+`quota_cache` is written by:
 
-After each proxied chat, `observe_complete` adds this chat's
-`usage_history.tokens.credits` (SSE `usage.credits`, verified
-2026-09-01) onto that floor — it does not replace the bar
-with the 9router sum. `fetch()` takes max(live API used, that
-local sum). `observe_response` stays a no-op — no
+1. Chat `observe_complete` — add this chat's credits onto a
+   floor (`quota_cache` / blob `farmQuota*` / **one** GET
+   `quota/usage` on the first proxied chat if neither exists).
+   Later chats increment; they do not GET again.
+2. `GET /usage/{id}` — live `fetch()` (`CACHE_MIN_AGE_S` 15 min
+   when in use, or `force=true`).
+3. `sync_quota_after_token_refresh` — after a **successful**
+   `jobToken/refresh` or PAT re-exchange (near `expiresAt`, or
+   on-demand 401/403). Still-fresh skip cycles do not GET.
+   GET failure does not roll back the token.
+
+`fetch()` GETs `quota/usage` with the job token and takes
+max(API used, local `usage_history` credit sum). Chat SSE
+`usage.credits` (verified 2026-09-01) is stored on
+`usage_history.tokens`. `observe_complete` adds that chat's
+credits onto the floor — it does not replace the bar with the
+9router sum. `observe_response` stays a no-op — no
 remaining-credit headers, and stream headers arrive too
 early.
 
@@ -106,9 +115,9 @@ different total (other plan), **keep it**. Do not clamp every
 account to 300.
 
 Do **not** seed fake `0 / 300` bars into `quota_cache` for
-accounts that have never been fetched. Empty until the first
-`GET /usage/{id}` (or `observe_complete` after a proxied chat)
-is correct; inventing a full trial hides already-depleted idle
+accounts that have never been fetched. Empty until a live GET
+(`/usage/{id}`, first-chat observe, or refresh piggyback) is
+correct; inventing a full trial hides already-depleted idle
 accounts.
 
 A grok-farm-modular **last check** is not a fake seed. See §7.
@@ -139,7 +148,8 @@ display only. `% left` may still floor — percent, not credit.
 
 Do not write credit remaining from a 402 body. After a proxy
 exhaust, the tracker may still show the last cached bar until
-the next poll or `force=true`. Inactive filter + Provider Detail
+`GET /usage/{id}`, `force=true`, a proxied chat, or a real
+token-refresh quota sync. Inactive filter + Provider Detail
 re-enable remain the operator tools.
 
 `observe_response` stays a no-op (no credit remaining headers
@@ -177,19 +187,21 @@ Tracker:
    yields a bar whose `reset_at` is the trial end (no invented
    `0/300` remaining).
 
-`quota_cache` is still written on first successful
-`GET /usage/{id}` (shared router). Import does not insert cache
-rows.
+`quota_cache` is written on successful `GET /usage/{id}`,
+`observe_complete`, and `sync_quota_after_token_refresh`.
+Import does not insert cache rows.
 
 ## Out of scope
 
 - Other providers
-- COSY / device / PAT / refresh
+- COSY signing, device OAuth, PAT exchange mechanics
 - Catalog / `provider_models`
 - Frontend-only copy changes (unless a later UI task)
 - Inventing RPM/TPM or a model-details modal
 
 ## Remaining after §7
 
-None. Open-problems inventory is closed (2026-09-02), including
-GET `quota/usage` after a real job-token refresh.
+None. Open-problems inventory is closed (2026-09-02). This
+file matches `quota.py` / `FLOW.md`: list cache, float credits,
+observe floor, farm clocks + PAT, and GET usage after a real
+job-token refresh.
