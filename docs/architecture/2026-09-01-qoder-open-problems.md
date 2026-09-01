@@ -70,11 +70,12 @@ not a 9router tracker bug; it is a coverage gap.
 
 Do not use blob `expiresAt` as the credit-bar `reset_at`.
 
-### 4. Docs disagree with code
+### 4. ~~Docs disagree with code~~ — solved
 
-Quota design header still says draft. §2 list path and
-`observe_complete` floor increment were aligned with code on
-2026-09-02 (`FLOW.md` too).
+**Fixed 2026-09-02.** Quota design header is **approved**.
+§2 list path, full-float credits, and `observe_complete` floor
+increment match `quota.py` / `FLOW.md`. Optional item 5 is
+not part of that design lock.
 
 ### 5. Optional: GET usage after a real job-token refresh
 
@@ -115,7 +116,8 @@ tracker.
    GET on first chat if no cache/farm.~~ done.
 4. Optional item 5: GET `quota/usage` after a real near-expiry
    `jobToken/refresh` (not `force=true`; that already exists).
-5. Align quota design header status if still marked draft.
+5. ~~Align quota design header status if still marked draft.~~
+   done.
 
 ## Out of scope until asked
 

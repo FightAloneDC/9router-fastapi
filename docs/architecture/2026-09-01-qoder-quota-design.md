@@ -1,7 +1,7 @@
 # Qoder quota tracker
 
 Date: 2026-09-01
-Status: **draft — review** (§1–6); **§7 farm keys implemented**
+Status: **approved** (2026-09-02)
 Provider: `qoder` (alias `qd`)
 Folder: `backend/app/providers/qoder/`
 
@@ -31,7 +31,7 @@ headers. Balance lives on a **different host and auth**:
 |------|-------|
 | URL | `https://openapi.qoder.sh/api/v2/quota/usage` |
 | Auth | `Authorization: Bearer <job token>` (not COSY) |
-| Unit | credits (float in JSON, int in our schema) |
+| Unit | credits (full float in JSON, `QuotaItem`, cache) |
 | Window | `expiresAt` epoch-ms — trial / account end, **not** a daily reset |
 | Cap (published) | `RATE_LIMITS["trial"]` = 300 credits, ~14 days |
 
@@ -189,8 +189,7 @@ rows.
 
 ## Remaining after §7
 
-Open follow-ups (refresh-all vs TTL, tracker live poll, doc
-drift) are in
-`docs/architecture/2026-09-01-qoder-open-problems.md`.
-Farm optional keys and FLOW quota notes are already in
-`providers/qoder/`.
+Optional follow-up only: GET `quota/usage` after a real
+near-expiry `jobToken/refresh` (open-problems item 5). Refresh
+gating, tracker list cache, and `observe_complete` floor
+increment are already in `providers/qoder/`.
