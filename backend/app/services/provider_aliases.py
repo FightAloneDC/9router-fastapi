@@ -1,9 +1,17 @@
-"""Provider prefix: DB row wins, else config.ALIAS."""
+"""Provider prefix: DB row wins, else config.ALIAS.
+
+Custom compatible nodes store their public prefix on the node
+(``data.prefix``). That prefix is merged here so ``/v1/models``
+lists ``farm-a/gpt-4o`` instead of ``openai-compatible-chat-…/gpt-4o``.
+"""
 
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import delete, select
 
+from app.models.provider import ProviderNode
 from app.models.provider_alias import ProviderAlias
 
 _overrides: dict[str, str] = {}
@@ -19,18 +27,37 @@ def set_overrides(mapping: dict[str, str]) -> None:
     }
 
 
+def node_public_prefix(data: str | None) -> str:
+    """Return the node's public model prefix, or empty."""
+    try:
+        blob = json.loads(data) if data else {}
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if not isinstance(blob, dict):
+        return ""
+    return str(blob.get("prefix") or "").strip()
+
+
 async def refresh_from_db(db: object) -> None:
-    """Load provider_aliases into memory. No-op if table missing."""
+    """Load prefixes: alias table, then custom node ``data.prefix``."""
+    mapping: dict[str, str] = {}
     try:
         result = await db.execute(select(ProviderAlias))
+        mapping = {
+            row.provider: row.alias
+            for row in result.scalars().all()
+            if row.alias
+        }
     except Exception:
-        set_overrides({})
-        return
-    mapping = {
-        row.provider: row.alias
-        for row in result.scalars().all()
-        if row.alias
-    }
+        mapping = {}
+    try:
+        result = await db.execute(select(ProviderNode))
+        for node in result.scalars().all():
+            prefix = node_public_prefix(node.data)
+            if prefix:
+                mapping[node.id] = prefix
+    except Exception:
+        pass
     set_overrides(mapping)
 
 
