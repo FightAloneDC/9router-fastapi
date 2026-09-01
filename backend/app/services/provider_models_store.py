@@ -46,11 +46,16 @@ def prune_history(
 
 
 def uses_model_catalog_table(provider: str) -> bool:
-    """True when this provider stores models in provider_models."""
+    """True when this provider stores models in provider_models.
+
+    Custom compatible nodes have no Provider config module. They still
+    use the SQL catalog (connection ``data`` is secrets/health only).
+    Unknown ids therefore default to the table, not the legacy blob.
+    """
     try:
         return bool(Provider(provider).config().MODEL_CATALOG_TABLE)
     except (ValueError, ModuleNotFoundError, AttributeError):
-        return False
+        return True
 
 
 def _as_dict(m: ProviderModel) -> dict:

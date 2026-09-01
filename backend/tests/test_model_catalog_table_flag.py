@@ -45,6 +45,14 @@ def test_grok_cli_uses_catalog_table() -> None:
     assert uses_model_catalog_table("grok-cli") is True
 
 
+def test_openai_builtin_stays_on_blob() -> None:
+    assert uses_model_catalog_table("openai") is False
+
+
+def test_unknown_id_defaults_to_catalog_table() -> None:
+    assert uses_model_catalog_table("not-a-real-provider") is True
+
+
 def test_fetch_without_history_is_disabled() -> None:
     assert resolve_enabled_flag("a", {}, {}) is False
 

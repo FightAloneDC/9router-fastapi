@@ -39,6 +39,19 @@ import KindTestPlayground from '../components/media/KindTestPlaygrounds'
 
 const COMPATIBLE_TYPES = new Set(['openai-compatible', 'anthropic-compatible'])
 
+function catalogCustomModelId(raw, providerId, displayAlias) {
+  const id = (raw || '').trim()
+  if (!id) return ''
+  const prefixes = [`${providerId}/`]
+  if (displayAlias && displayAlias !== providerId) {
+    prefixes.push(`${displayAlias}/`)
+  }
+  for (const prefix of prefixes) {
+    if (id.startsWith(prefix)) return id.slice(prefix.length)
+  }
+  return id
+}
+
 const PROXY_USAGE_FLAGS = [
   ['testConnection', 'Test connection'],
   ['testModel', 'Test model'],
@@ -1640,7 +1653,14 @@ function ProviderDetailPage() {
   // Provider alias for model storage
   const providerAlias = catalogStore.getProviderAlias(providerId)
   const providerStorageAlias = isCompatible ? providerId : providerAlias
-  const providerDisplayAlias = isCompatible ? (providerNode?.prefix || providerId) : providerAlias
+  const providerDisplayAlias = isCompatible
+    ? (providerNode?.prefix || providerId)
+    : providerAlias
+  // Custom nodes are not in /providers/catalog, so info is missing.
+  // They still use provider_models, same as flagged builtins.
+  const usesModelCatalog = info
+    ? Boolean(info.modelCatalogTable)
+    : true
   // Keep alias in a ref so connection reloads are not triggered when
   // catalog resolves alias (mistral → mi) after the first paint.
   const providerStorageAliasRef = useRef(providerStorageAlias)
@@ -2037,14 +2057,19 @@ function ProviderDetailPage() {
   const addModel = async (model) => {
     const trimmed = (model || newModel).trim()
     if (!trimmed) return
-    const prefixed = trimmed.includes('/') ? trimmed : `${providerId}/${trimmed}`
+    const catalogId = catalogCustomModelId(
+      trimmed, providerId, providerDisplayAlias,
+    )
+    const prefixed = trimmed.includes('/')
+      ? trimmed
+      : `${providerId}/${trimmed}`
     const knownIds = models.map((m) => (typeof m === 'string' ? m : m.id))
-    if (knownIds.includes(prefixed) || knownIds.includes(trimmed)) return
-    if (info?.modelCatalogTable) {
+    if (usesModelCatalog) {
+      if (!catalogId || knownIds.includes(catalogId)) return
       setNewModel('')
       try {
         await providersApi.addCatalogCustomModel(providerId, {
-          id: trimmed.includes('/') ? trimmed : prefixed,
+          id: catalogId,
         })
         await fetchConnections()
       } catch (err) {
@@ -2052,6 +2077,7 @@ function ProviderDetailPage() {
       }
       return
     }
+    if (knownIds.includes(prefixed) || knownIds.includes(trimmed)) return
     const updated = [...models, prefixed]
     setNewModel('')
     setEnabledModelIds((prev) => new Set([...prev, prefixed]))
@@ -2085,7 +2111,7 @@ function ProviderDetailPage() {
       const fetchedArray = fetchedList.map(m => typeof m === 'string' ? m : m.id)
 
       // Catalog providers are persisted by the fetch endpoint itself.
-      if (!info?.modelCatalogTable) {
+      if (!usesModelCatalog) {
         await providersApi.setProviderModels(providerId, fetchedArray)
       }
 
@@ -2099,7 +2125,7 @@ function ProviderDetailPage() {
               }),
             ),
           )
-        } else if (!info?.modelCatalogTable) {
+        } else if (!usesModelCatalog) {
           const disabledRes = await providersApi.getDisabledModels(
             providerStorageAlias,
           )
@@ -3659,7 +3685,7 @@ function ProviderDetailPage() {
               <p className="mt-0.5 text-xs text-zinc-500">
                 {routeKind
                   ? `Models for kind "${kindConfig?.label || routeKind}"`
-                  : info?.modelCatalogTable
+                  : usesModelCatalog
                     ? 'Shared provider catalog'
                     : 'Connection model list'}
               </p>

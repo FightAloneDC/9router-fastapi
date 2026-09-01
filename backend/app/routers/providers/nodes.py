@@ -16,6 +16,8 @@ from app.providers.base import BaseProviderConfig, BaseProviderHandler
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
 from app.routers.providers.helpers import _node_to_out
+from app.services.provider_aliases import refresh_from_db
+from app.services.proxy import invalidate_connection_cache
 from app.schemas.provider import (
     ProviderNodeCreate,
     ProviderNodeOut,
@@ -51,6 +53,29 @@ def _build_node_handler(node_type: str, base_url: str, node_name: str = "", node
             BASE_URL=base_url,
         )
     return BaseProviderHandler(config)
+
+
+def stale_model_lock_keys(
+    data: dict,
+    *,
+    node_id: str,
+    old_prefix: str = "",
+) -> list[str]:
+    """Cooldown keys that still embed the node id or previous prefix."""
+    needles: list[str] = []
+    nid = (node_id or "").strip()
+    if nid:
+        needles.append(f"modelLock_{nid}/")
+    prev = (old_prefix or "").strip()
+    if prev:
+        needles.append(f"modelLock_{prev}/")
+    stale: list[str] = []
+    for key in data:
+        if not isinstance(key, str) or not key.startswith("modelLock_"):
+            continue
+        if any(key.startswith(n) for n in needles):
+            stale.append(key)
+    return stale
 
 
 @router.get("/provider-nodes", response_model=list[ProviderNodeOut])
@@ -207,6 +232,8 @@ async def update_provider_node(
     except (json.JSONDecodeError, TypeError):
         pass
 
+    old_prefix = str(data.get("prefix") or "").strip()
+
     # Apply updates
     if body.name is not None:
         node.name = body.name.strip()
@@ -249,9 +276,22 @@ async def update_provider_node(
         if body.name is not None:
             psd["nodeName"] = body.name
         conn_data["providerSpecificData"] = psd
+        new_prefix = (
+            body.prefix.strip() if body.prefix is not None else ""
+        )
+        drop_prefix = old_prefix if (
+            new_prefix and new_prefix != old_prefix
+        ) else ""
+        for key in stale_model_lock_keys(
+            conn_data, node_id=node_id, old_prefix=drop_prefix,
+        ):
+            conn_data.pop(key, None)
         conn.data = json.dumps(conn_data)
+        invalidate_connection_cache(str(conn.id))
 
     await db.flush()
+    await refresh_from_db(db)
+    invalidate_connection_cache(node_id)
     return _node_to_out(node)
 
 
