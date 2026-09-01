@@ -49,8 +49,21 @@ def published_credit_cap() -> int:
     return int(table.get("trial", {}).get("credits") or 300)
 
 
+def as_credit(value: Any, default: float = 0.0) -> float:
+    """Parse a credit field. Never int() or round."""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def credits_from_tokens(raw: dict | str | None) -> float:
-    """Credits charged on one chat (SSE ``usage`` / usage_history)."""
+    """Credits charged on one chat (SSE ``usage`` / usage_history).
+
+    Return the full float. Never int() or round.
+    """
     if raw is None:
         return 0.0
     if isinstance(raw, str):
@@ -127,10 +140,14 @@ def usage_from_stored(data: dict) -> UsageResponse | None:
                 reset_at=reset_at,
             )],
         )
-    cap = int(total) if total is not None else published_credit_cap()
+    cap = (
+        as_credit(total)
+        if total is not None
+        else float(published_credit_cap())
+    )
     if remaining is not None:
-        left = int(remaining)
-        used = max(0, cap - left)
+        left = as_credit(remaining)
+        used = max(0.0, cap - left)
     elif exceeded is True:
         left = 0
         used = cap
@@ -154,14 +171,14 @@ def usage_from_stored(data: dict) -> UsageResponse | None:
 
 def apply_local_used(
     result: UsageResponse,
-    local_used: int,
+    local_used: float,
 ) -> UsageResponse:
     """Raise used to chat-log credits when they exceed API used."""
     if local_used <= 0:
         return result
-    cap = published_credit_cap()
+    cap = float(published_credit_cap())
     if not result.quotas:
-        left = max(0, cap - local_used)
+        left = max(0.0, cap - local_used)
         result.quotas = [QuotaItem(
             name="Credits",
             used=local_used,
@@ -178,7 +195,7 @@ def apply_local_used(
     if used == item.used:
         return result
     total = item.total or cap
-    left = max(0, total - used)
+    left = max(0.0, total - used)
     result.quotas[0] = item.model_copy(update={
         "used": used,
         "remaining": left,
@@ -205,7 +222,7 @@ class QoderUsageHandler(BaseUsageHandler):
     ) -> UsageResponse:
         blob = provider_data or {}
         stored = usage_from_stored(blob)
-        local_used = int(await local_credits(connection_id))
+        local_used = await local_credits(connection_id)
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {access_token}",
@@ -236,11 +253,15 @@ class QoderUsageHandler(BaseUsageHandler):
 
         data = resp.json()
         quota = data.get("userQuota") or {}
-        total = int(quota.get("total", 0)) or published_credit_cap()
-        used = int(quota.get("used", 0))
-        remaining = int(
-            quota.get("remaining", max(0, total - used))
+        total = as_credit(quota.get("total")) or float(
+            published_credit_cap()
         )
+        used = as_credit(quota.get("used"))
+        remaining = quota.get("remaining")
+        if remaining is None:
+            remaining = max(0.0, total - used)
+        else:
+            remaining = as_credit(remaining)
         unit = (quota.get("unit") or "credits").title()
         remaining_pct = self._pct(used, total)
 
@@ -281,7 +302,7 @@ class QoderUsageHandler(BaseUsageHandler):
         """
         from app.models.quota_cache import QuotaCache
 
-        local_used = int(await local_credits(connection_id))
+        local_used = await local_credits(connection_id)
         if local_used <= 0:
             return
         try:
@@ -299,12 +320,14 @@ class QoderUsageHandler(BaseUsageHandler):
                 rows = []
             if isinstance(rows, list) and rows:
                 row0 = rows[0] if isinstance(rows[0], dict) else {}
-                cap = int(row0.get("total") or cap) or cap
+                cap = as_credit(row0.get("total") or cap) or float(
+                    cap
+                )
                 raw_reset = row0.get("reset_at")
                 if isinstance(raw_reset, str):
                     reset_at = raw_reset
             plan = cache.plan
-        left = max(0, cap - local_used)
+        left = max(0.0, float(cap) - local_used)
         result = UsageResponse(
             plan=plan,
             quotas=[QuotaItem(

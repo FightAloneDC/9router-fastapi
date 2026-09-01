@@ -82,8 +82,8 @@ class QuotaItem(BaseModel):
     """A single quota metric for a provider connection."""
 
     name: str
-    used: int
-    total: int
+    used: float
+    total: float
     reset_at: Optional[str] = None
     remaining_percentage: float
 
@@ -150,8 +150,8 @@ def _parse_cached_quotas(raw: str | None) -> list[QuotaItem]:
             items.append(
                 QuotaItem(
                     name=str(q.get("name") or ""),
-                    used=int(q.get("used") or 0),
-                    total=int(q.get("total") or 0),
+                    used=float(q.get("used") or 0),
+                    total=float(q.get("total") or 0),
                     reset_at=q.get("reset_at"),
                     remaining_percentage=float(
                         q.get("remaining_percentage") or 0

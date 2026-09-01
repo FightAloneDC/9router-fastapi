@@ -728,8 +728,8 @@ async def test_qoder_fetch_uses_chat_credits_when_higher():
                 connection_id="fd55d07d-c8f5-401b-9216-59d75060f4a8",
             )
     credits = result.quotas[0]
-    assert credits.used == 5
-    assert credits.remaining == 295
+    assert credits.used == pytest.approx(5.9)
+    assert credits.remaining == pytest.approx(294.1)
 
 
 @pytest.mark.asyncio
@@ -759,8 +759,10 @@ async def test_qoder_observe_complete_writes_quota_cache():
     db.commit.assert_awaited()
     added = db.add.call_args[0][0]
     rows = json.loads(added.quotas)
-    assert rows[0]["used"] == 2
-    assert rows[0]["remaining"] == 298
+    assert rows[0]["used"] == pytest.approx(2.8877612500000005)
+    assert rows[0]["remaining"] == pytest.approx(
+        300 - 2.8877612500000005
+    )
     assert added.limit_reached is False
 
 

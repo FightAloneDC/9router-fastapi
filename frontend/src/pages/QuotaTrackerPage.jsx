@@ -152,7 +152,12 @@ function formatQuotaNum(n) {
     return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
   if (n >= 1_000)
     return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
-  return n.toLocaleString('en-US')
+  // Display only: 2 decimals for non-integers (Qoder credits).
+  // Stored / API / DB values stay full float.
+  if (Number.isInteger(Number(n))) {
+    return Number(n).toLocaleString('en-US')
+  }
+  return Number(n).toFixed(2)
 }
 
 function isUsdQuotaName(name) {

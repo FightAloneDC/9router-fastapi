@@ -13,9 +13,9 @@ class QuotaItem(BaseModel):
     """A single quota metric from a provider."""
 
     name: str
-    used: int = 0
-    total: int = 0
-    remaining: Optional[int] = None
+    used: float = 0
+    total: float = 0
+    remaining: Optional[float] = None
     remaining_percentage: float = 100.0
     reset_at: Optional[str] = None
     unlimited: bool = False
@@ -80,8 +80,8 @@ class BaseUsageHandler(ABC):
     ) -> None:
         """Optional PS hook: after usage_history is written.
 
-        Default: no-op. For providers whose ``used`` is not in
-        that log (Qoder credits), poll the live quota API here.
+        Default: no-op. Qoder applies full-float chat
+        ``credits`` here (never int/round).
         """
         del db, connection_id
 
@@ -100,7 +100,7 @@ class BaseUsageHandler(ABC):
             )
 
     @staticmethod
-    def _pct(used: int, total: int) -> float:
+    def _pct(used: float, total: float) -> float:
         """Calculate remaining percentage."""
         if total <= 0:
             return 100.0

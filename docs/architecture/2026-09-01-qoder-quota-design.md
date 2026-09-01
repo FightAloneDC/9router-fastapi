@@ -117,11 +117,16 @@ The generic “Expiring first” / countdown UI will show the trial
 end date. That is intended. Do not invent a daily reset. Do not
 relabel the bar “RPD”.
 
-### 5. Integers
+### 5. Credits stay full float
 
-Shared `QuotaItem` fields are `int`. Cast with `int()` (truncate
-toward zero). Observed values are `*.0`; do not widen the shared
-schema for Qoder.
+Qoder chat `usage.credits` / `original_credits` and quota API
+`userQuota.used` / `remaining` / `total` MUST stay full floats
+in Python, `quota_cache`, and JSON. Never `int()` or `round()`
+there. Shared `QuotaItem.used` / `total` / `remaining` are
+`float` so Pydantic does not truncate.
+
+Tracker UI may show 2 decimal places (`toFixed(2)`). That is
+display only. `% left` may still floor — percent, not credit.
 
 ### 6. Proxy exhaust vs tracker
 
