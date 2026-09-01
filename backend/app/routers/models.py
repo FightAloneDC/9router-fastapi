@@ -313,6 +313,126 @@ class TestModelRequest(BaseModel):
     kind: str = "chat"
 
 
+_EMPTY_CHOICES = (
+    "Provider returned no completion choices "
+    "(timeout or empty response)"
+)
+
+
+def _completion_error(parsed: dict) -> str | None:
+    """Extract an upstream error message, or None."""
+    err = parsed.get("error")
+    if err:
+        if isinstance(err, dict):
+            return str(err.get("message", err))[:240]
+        return str(err)[:240]
+    evt = parsed.get("type") or ""
+    if evt not in ("error", "response.failed"):
+        return None
+    nested = parsed.get("error") or (
+        parsed.get("response") or {}
+    ).get("error") or {}
+    if isinstance(nested, dict):
+        return str(nested.get("message", nested))[:240]
+    return str(nested)[:240]
+
+
+def _has_completion(parsed: dict) -> bool:
+    """True when a parsed body has a usable completion."""
+    choices = parsed.get("choices")
+    if isinstance(choices, list) and len(choices) > 0:
+        return True
+    candidates = parsed.get("candidates")
+    if isinstance(candidates, list) and len(candidates) > 0:
+        return True
+    evt = parsed.get("type") or ""
+    return evt in (
+        "response.completed",
+        "response.output_text.delta",
+    )
+
+
+def _scan_sse_completion(
+    raw_text: str,
+    *,
+    is_responses: bool,
+) -> tuple[bool, str | None]:
+    """Scan SSE lines for choices / Responses events."""
+    for line in raw_text.split("\n"):
+        if is_responses:
+            stripped = line.strip()
+            if not stripped.startswith("data:"):
+                continue
+            payload = stripped[5:].strip()
+        else:
+            unwrapped = _unwrap_qoder_sse_line(line)
+            if not unwrapped:
+                continue
+            if unwrapped == "data: [DONE]":
+                break
+            payload = unwrapped[5:].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            chunk = json.loads(payload)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(chunk, dict):
+            continue
+        err = _completion_error(chunk)
+        if err:
+            return False, err
+        if _has_completion(chunk):
+            return True, None
+    return False, _EMPTY_CHOICES
+
+
+def parse_test_completion(
+    raw_text: str,
+    *,
+    handler: object | None = None,
+    is_responses: bool = False,
+) -> tuple[bool, str | None]:
+    """Parse a buffered upstream chat body for Test Model.
+
+    JSON completions (Mistral / OpenAI-compat, stream=false) and SSE
+    (Qoder envelope / Responses API) are both accepted. The old path
+    treated any custom ``raw_body`` as Qoder SSE, so a JSON body
+    without a ``data:`` prefix was reported as empty/timeout.
+    """
+    text = (raw_text or "").strip()
+    if not text:
+        return False, _EMPTY_CHOICES
+
+    parsed: object | None
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        parsed = None
+    if isinstance(parsed, dict):
+        err = _completion_error(parsed)
+        if err:
+            return False, err
+        if _has_completion(parsed):
+            return True, None
+
+    if handler is not None:
+        unwrap = getattr(handler, "unwrap_response", None)
+        if callable(unwrap):
+            try:
+                unwrapped = unwrap(text)
+            except Exception:
+                unwrapped = None
+            if isinstance(unwrapped, dict):
+                err = _completion_error(unwrapped)
+                if err:
+                    return False, err
+                if _has_completion(unwrapped):
+                    return True, None
+
+    return _scan_sse_completion(text, is_responses=is_responses)
+
+
 @router.post("/test")
 async def test_model(
     body: TestModelRequest,
@@ -419,80 +539,38 @@ async def test_model(
                     json={"model": target.model, "input": "test"},
                 )
             elif raw_body is not None:
-                # Provider uses custom encoding (e.g. Qoder) — stream-read SSE response
-
-                send_kwargs: dict = {"headers": send_headers, "content": raw_body}
-                provider_ok = False
-                provider_status = 0
-                provider_error = None
-
-                async with client.stream("POST", url, **send_kwargs) as resp:
-                    provider_status = resp.status_code
-                    if resp.status_code >= 400:
-                        error_body = b""
-                        async for chunk in resp.aiter_bytes():
-                            error_body += chunk
-                            if len(error_body) > 2000:
-                                break
-                        latency_ms = int((time.time() - start) * 1000)
-                        return {"ok": False, "latencyMs": latency_ms, "error": f"HTTP {resp.status_code}: {error_body.decode(errors='replace')[:240]}", "status": resp.status_code}
-
-                    line_buf = ""
-                    async for raw_chunk in resp.aiter_text():
-                        line_buf += raw_chunk
-                        while "\n" in line_buf:
-                            line, line_buf = line_buf.split("\n", 1)
-                            if is_responses_upstream:
-                                # Responses API SSE: plain data: events
-                                stripped = line.strip()
-                                if not stripped.startswith("data:"):
-                                    continue
-                                payload = stripped[5:].strip()
-                            else:
-                                unwrapped = _unwrap_qoder_sse_line(line)
-                                if not unwrapped:
-                                    continue
-                                if unwrapped == "data: [DONE]":
-                                    break
-                                payload = unwrapped[5:].strip()
-                            if not payload:
-                                continue
-                            try:
-                                chunk_data = json.loads(payload)
-                            except (json.JSONDecodeError, TypeError):
-                                continue
-                            if chunk_data.get("error"):
-                                err = chunk_data["error"]
-                                provider_error = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-                                break
-                            evt_type = chunk_data.get("type") or ""
-                            if evt_type in ("error", "response.failed"):
-                                err = chunk_data.get("error") or (
-                                    chunk_data.get("response") or {}
-                                ).get("error") or {}
-                                provider_error = (
-                                    err.get("message", str(err))
-                                    if isinstance(err, dict) else str(err)
-                                )
-                                break
-                            if evt_type in (
-                                "response.completed",
-                                "response.output_text.delta",
-                            ):
-                                provider_ok = True
-                            choices = chunk_data.get("choices", [])
-                            if choices:
-                                provider_ok = True
-                        if provider_ok or provider_error:
-                            break
-
+                # Custom body bytes (Qoder WAF, Mistral sanitize, …).
+                # Buffer the response: JSON non-stream (Mistral) and
+                # SSE (Qoder / Responses) are both valid.
+                resp = await client.post(
+                    url,
+                    headers=send_headers,
+                    content=raw_body,
+                )
                 latency_ms = int((time.time() - start) * 1000)
-                if provider_ok:
-                    return {"ok": True, "latencyMs": latency_ms, "error": None, "status": provider_status}
-                elif provider_error:
-                    return {"ok": False, "latencyMs": latency_ms, "status": provider_status, "error": provider_error[:240]}
-                else:
-                    return {"ok": False, "latencyMs": latency_ms, "status": provider_status, "error": "Provider returned no completion choices (timeout or empty response)"}
+                if resp.status_code >= 400:
+                    err_text = (resp.text or "")[:240]
+                    return {
+                        "ok": False,
+                        "latencyMs": latency_ms,
+                        "error": (
+                            f"HTTP {resp.status_code}: {err_text}"
+                            if err_text
+                            else f"HTTP {resp.status_code}"
+                        ),
+                        "status": resp.status_code,
+                    }
+                ok, err = parse_test_completion(
+                    resp.text,
+                    handler=handler,
+                    is_responses=is_responses_upstream,
+                )
+                return {
+                    "ok": ok,
+                    "latencyMs": latency_ms,
+                    "error": None if ok else err,
+                    "status": resp.status_code,
+                }
             else:
                 resp = await client.post(
                     url,
