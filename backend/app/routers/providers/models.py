@@ -13,7 +13,10 @@ from app.models.settings import SettingsModel
 from app.providers.provider import Provider
 from app.routers.auth import get_current_user
 from app.routers.providers._router import router
-from app.routers.providers.constants import normalize_models_list
+from app.routers.providers.constants import (
+    catalog_row_for_persist,
+    normalize_models_list,
+)
 from app.routers.providers.nodes import _build_node_handler
 from app.services.outbound_proxy import proxy_for_connection, use_outbound_proxy
 from app.services.proxy import _resolve_provider_alias
@@ -164,10 +167,11 @@ async def fetch_provider_models(
             models = await _fetch_builtin_models(provider, api_key, data)
 
     # Persist catalog (per provider), not on this connection blob.
-    stored = [
-        {"id": m.get("id"), "type": m.get("type", "llm")}
-        for m in models if m.get("id")
-    ]
+    stored: list[dict] = []
+    for m in models:
+        row = catalog_row_for_persist(m)
+        if row:
+            stored.append(row)
     # Cycle: store → routers.providers package → this module.
     from app.services.provider_models_store import (
         replace_provider_models,

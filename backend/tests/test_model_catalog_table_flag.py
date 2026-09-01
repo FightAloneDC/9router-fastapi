@@ -1,5 +1,6 @@
 """Flag: OpenRouter, Groq, NVIDIA use provider_models catalog."""
 
+from app.routers.providers.constants import catalog_row_for_persist
 from app.services.provider_models_store import (
     parse_history_entry,
     prune_history,
@@ -77,3 +78,26 @@ def test_parse_history_bool_and_object() -> None:
     assert parse_history_entry(
         {"enabled": False, "custom": True},
     ) == (False, True)
+
+
+def test_catalog_row_keeps_name_drops_extra() -> None:
+    row = catalog_row_for_persist({
+        "id": "cmodel",
+        "name": "Cantus",
+        "type": "llm",
+        "contextLength": 200000,
+    })
+    assert row == {
+        "id": "cmodel",
+        "name": "Cantus",
+        "type": "llm",
+    }
+
+
+def test_catalog_row_omits_empty_name() -> None:
+    row = catalog_row_for_persist({"id": "gpt-4", "type": "llm"})
+    assert row == {"id": "gpt-4", "type": "llm"}
+
+
+def test_catalog_row_skips_missing_id() -> None:
+    assert catalog_row_for_persist({"name": "Cantus"}) is None

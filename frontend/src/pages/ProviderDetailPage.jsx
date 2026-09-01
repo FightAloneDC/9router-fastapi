@@ -1172,6 +1172,21 @@ function AddCustomModelModal({ isOpen, providerAlias, providerDisplayAlias, onSa
 /* ════════════════════════════════════════════════════════════════
    ModelRow — single model chip with copy, test, alias, disable
    ════════════════════════════════════════════════════════════════ */
+function modelLabel(model) {
+  if (typeof model === 'string') return model
+  return model?.name || model?.id || ''
+}
+
+function modelMatchesSearch(model, searchQ) {
+  if (!searchQ) return true
+  if (typeof model === 'string') {
+    return model.toLowerCase().includes(searchQ)
+  }
+  const id = String(model?.id || '').toLowerCase()
+  const name = String(model?.name || '').toLowerCase()
+  return id.includes(searchQ) || name.includes(searchQ)
+}
+
 function ModelRow({ model, fullModel, alias, copied, onCopy, onSetAlias, onDeleteAlias, testStatus, onTest, isTesting, isCustom, isFree, onDisable, modelType, onTypeChange }) {
   const [editingAlias, setEditingAlias] = useState(false)
   const [aliasValue, setAliasValue] = useState(alias || '')
@@ -1199,7 +1214,7 @@ function ModelRow({ model, fullModel, alias, copied, onCopy, onSetAlias, onDelet
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
-          <p className="text-xs font-medium text-zinc-200 truncate">{model.id || model.name || model}</p>
+          <p className="text-xs font-medium text-zinc-200 truncate">{modelLabel(model)}</p>
           {modelType && onTypeChange && (
             <div className="relative shrink-0" ref={typeDropdownRef}>
               <button
@@ -2838,19 +2853,22 @@ function ProviderDetailPage() {
 
     // Apply search filter to all lists
     const filteredCustom = searchQ
-      ? customModels.filter((m) => m.id.toLowerCase().includes(searchQ) || m.fullModel.toLowerCase().includes(searchQ))
+      ? customModels.filter((m) => (
+        m.id.toLowerCase().includes(searchQ)
+        || m.fullModel.toLowerCase().includes(searchQ)
+      ))
       : customModels
     const filteredActive = searchQ
-      ? activeModels.filter((m) => (typeof m === 'string' ? m : m.id).toLowerCase().includes(searchQ))
+      ? activeModels.filter((m) => modelMatchesSearch(m, searchQ))
       : activeModels
     const filteredDisabled = searchQ
-      ? disabledDisplayModels.filter((m) => (typeof m === 'string' ? m : m.id).toLowerCase().includes(searchQ))
+      ? disabledDisplayModels.filter((m) => modelMatchesSearch(m, searchQ))
       : disabledDisplayModels
     const filteredSuggestions = searchQ
-      ? suggestionModels.filter((m) => (typeof m === 'string' ? m : m.id).toLowerCase().includes(searchQ))
+      ? suggestionModels.filter((m) => modelMatchesSearch(m, searchQ))
       : suggestionModels
     const filteredApiSuggestions = searchQ
-      ? apiSuggestedModels.filter((m) => (typeof m === 'string' ? m : m.id).toLowerCase().includes(searchQ))
+      ? apiSuggestedModels.filter((m) => modelMatchesSearch(m, searchQ))
       : apiSuggestedModels
     return (
       <div className="flex flex-wrap gap-3">
@@ -2949,7 +2967,7 @@ function ProviderDetailPage() {
                     onClick={() => isDisabled ? handleEnableModel(modelId) : addModel(modelId)}
                     className="inline-flex items-center gap-1 rounded-md border border-dashed border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:border-primary-500/50 hover:text-primary-400 hover:bg-primary-900/10 transition-colors"
                   >
-                    <Plus size={10} /> {modelId}
+                    <Plus size={10} /> {modelLabel(m)}
                   </button>
                 )
               })}
@@ -2972,7 +2990,7 @@ function ProviderDetailPage() {
                     className="inline-flex items-center gap-1 rounded-md border border-dashed border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:border-primary-500/50 hover:text-primary-400 hover:bg-primary-900/10 transition-colors"
                     title={modelObj?.name ? `${modelObj.name}${modelObj.contextLength ? ` · ${(modelObj.contextLength / 1000).toFixed(0)}k ctx` : ''}` : undefined}
                   >
-                    <Plus size={10} /> {modelId}
+                    <Plus size={10} /> {modelLabel(m)}
                   </button>
                 )
               })}

@@ -68,7 +68,8 @@ Two layers — do not conflate them.
 
 `handler.fetch_models` calls `resolve_qoder_models` (COSY GET
 model list) and stores the upstream `key` as the catalog id
-(`auto`, `qmodel`, …). Public `/v1/models` id is `qd/<key>`.
+(`auto`, `qmodel`, …) and `display_name` as catalog `name`
+(`Auto`, `Cantus`, …). Public `/v1/models` id is `qd/<key>`.
 Do not prefix `qoder/` onto the catalog id (that produced the
 broken `qd/qoder/<key>`). With the catalog flag on,
 fetch/set/clear persist **id/name/type** into

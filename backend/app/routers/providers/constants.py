@@ -155,3 +155,18 @@ def normalize_models_list(models) -> list:
             m["type"] = resolve_model_type(mid, m.get("type"))
             result.append(m)
     return result
+
+
+def catalog_row_for_persist(m: dict) -> dict | None:
+    """Keep id, type, and name. Drop other fetch-only fields."""
+    mid = m.get("id")
+    if not mid:
+        return None
+    row: dict = {
+        "id": mid,
+        "type": m.get("type") or "llm",
+    }
+    name = m.get("name")
+    if name:
+        row["name"] = name
+    return row
